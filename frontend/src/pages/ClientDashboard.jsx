@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { C, API_BASE } from "../config";
 import {
   BarChart,
@@ -294,18 +294,24 @@ export default function ClientDashboard({ clientName, onBack, onContextUpdate })
   const [trendLoading, setTrendLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const trendCacheRef = useRef({});
+  const mainAbortRef  = useRef(null);
+  const trendAbortRef = useRef(null);
 
   const fetchMain = useCallback(() => {
+    if (mainAbortRef.current) mainAbortRef.current.abort();
+    const ctrl = new AbortController();
+    mainAbortRef.current = ctrl;
     const p = PERIODS.find((pp) => pp.key === period) ?? PERIODS[2];
     setLoading(true);
-    fetch(`${API}/api/client/${encodeURIComponent(clientName)}/${p.endpoint}`)
+    fetch(`${API}/api/client/${encodeURIComponent(clientName)}/${p.endpoint}`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
-        console.log("Client API response:", d);
+        if (ctrl.signal.aborted) return;
         setData(d);
         setLoading(false);
       })
-      .catch(() => {
+      .catch((err) => {
+        if (err?.name === "AbortError") return;
         setData({ summary: {}, staff: [] });
         setLoading(false);
       });
@@ -319,22 +325,39 @@ export default function ClientDashboard({ clientName, onBack, onContextUpdate })
         setTrendLoading(false);
         return;
       }
+      if (trendAbortRef.current) trendAbortRef.current.abort();
+      const ctrl = new AbortController();
+      trendAbortRef.current = ctrl;
       setTrendLoading(true);
-      fetch(`${API}/api/client/${encodeURIComponent(clientName)}/trend`)
+      fetch(`${API}/api/client/${encodeURIComponent(clientName)}/trend`, { signal: ctrl.signal })
         .then((r) => r.json())
         .then((d) => {
+          if (ctrl.signal.aborted) return;
           const t = d.trend ?? d.monthly ?? [];
           trendCacheRef.current[cacheKey] = t;
           setTrend(t);
           setTrendLoading(false);
         })
-        .catch(() => { setTrendLoading(false); });
+        .catch((err) => {
+          if (err?.name === "AbortError") return;
+          setTrendLoading(false);
+        });
     },
     [clientName]
   );
 
-  useEffect(() => { fetchMain();  }, [fetchMain]);
-  useEffect(() => { fetchTrend(); }, [fetchTrend]);
+  useEffect(() => {
+    fetchMain();
+    return () => {
+      if (mainAbortRef.current) mainAbortRef.current.abort();
+    };
+  }, [fetchMain]);
+  useEffect(() => {
+    fetchTrend();
+    return () => {
+      if (trendAbortRef.current) trendAbortRef.current.abort();
+    };
+  }, [fetchTrend]);
 
   // Push rich context to App so the chatbot can answer accurately
   useEffect(() => {
@@ -379,36 +402,52 @@ ${Object.entries(staffObj).map(([name, v]) => {
   const periodLabel = PERIODS.find((p) => p.key === period)?.label ?? "";
 
   const summary = data?.summary ?? {};
-  const staff = (data?.staff ?? []).map((s) => ({
-    ...s,
-    utilPct: s.committed > 0 ? (s.billable / s.committed) * 100 : 0,
-    gap: (s.billable ?? 0) - (s.committed ?? 0),
-  }));
+
+  const staff = useMemo(
+    () => (data?.staff ?? []).map((s) => ({
+      ...s,
+      utilPct: s.committed > 0 ? (s.billable / s.committed) * 100 : 0,
+      gap: (s.billable ?? 0) - (s.committed ?? 0),
+    })),
+    [data]
+  );
 
   const totalHours = (summary.totalBillable ?? 0) + (summary.totalNonBillable ?? 0);
 
-  const staffHours = staff.map((s) => ({
-    name: (s.staff ?? "").split(" ")[0],
-    Billable: s.billable ?? 0,
-    "Non-Billable": s.nonBillable ?? 0,
-  }));
+  const staffHours = useMemo(
+    () => staff.map((s) => ({
+      name: (s.staff ?? "").split(" ")[0],
+      Billable: s.billable ?? 0,
+      "Non-Billable": s.nonBillable ?? 0,
+    })),
+    [staff]
+  );
 
-  const staffUtil = staff.map((s) => ({
-    name: (s.staff ?? "").split(" ")[0],
-    util: s.utilPct,
-  }));
+  const staffUtil = useMemo(
+    () => staff.map((s) => ({
+      name: (s.staff ?? "").split(" ")[0],
+      util: s.utilPct,
+    })),
+    [staff]
+  );
 
-  const trendChart = trend.map((t) => ({
-    month: t.month ?? t.date ?? "",
-    Hours: t.hours ?? t.totalBillable ?? t.billable ?? 0,
-  }));
+  const trendChart = useMemo(
+    () => trend.map((t) => ({
+      month: t.month ?? t.date ?? "",
+      Hours: t.hours ?? t.totalBillable ?? t.billable ?? 0,
+    })),
+    [trend]
+  );
 
-  const hoursBreakdown = {
-    billable:    summary.totalBillable    ?? 0,
-    nonBillable: summary.totalNonBillable ?? 0,
-    total:       totalHours,
-    committed:   summary.totalCommitted   ?? 0,
-  };
+  const hoursBreakdown = useMemo(
+    () => ({
+      billable:    summary.totalBillable    ?? 0,
+      nonBillable: summary.totalNonBillable ?? 0,
+      total:       totalHours,
+      committed:   summary.totalCommitted   ?? 0,
+    }),
+    [summary.totalBillable, summary.totalNonBillable, summary.totalCommitted, totalHours]
+  );
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg }}>

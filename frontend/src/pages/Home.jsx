@@ -1,7 +1,19 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { TEAMS as STATIC_TEAMS, C, API_BASE } from "../config";
 
 const API = API_BASE;
+const HOVER_PREFETCH_DELAY_MS = 220;
+const _prefetched = new Set();
+
+function prefetch(url) {
+  if (_prefetched.has(url)) return;
+  _prefetched.add(url);
+  // Fire-and-forget; browser will cache the response per Cache-Control headers
+  // and the server's _team_cache / _client cache will be warm.
+  fetch(url).catch(() => {
+    _prefetched.delete(url);
+  });
+}
 
 const GRADIENTS = [
   "linear-gradient(135deg,#4a9eff,#a78bfa)",
@@ -92,6 +104,7 @@ function SkeletonCard() {
 
 function TeamCard({ team, onClick }) {
   const [hovered, setHovered] = useState(false);
+  const hoverTimer = useRef(null);
   const grad = gradientFor(team.id);
   const letter = (team.label ?? "").replace(/^Team\s+/i, "") || team.id?.slice(-1).toUpperCase();
   const leadShort = team.leadName ?? team.lead ?? "";
@@ -99,11 +112,26 @@ function TeamCard({ team, onClick }) {
   const leadCount = team.leadCount ?? 1;
   const execCount = team.execCount ?? Math.max(0, (team.memberCount ?? 0) - leadCount);
 
+  function handleEnter() {
+    setHovered(true);
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => {
+      prefetch(`${API}/api/team/${team.id}/monthly`);
+    }, HOVER_PREFETCH_DELAY_MS);
+  }
+  function handleLeave() {
+    setHovered(false);
+    if (hoverTimer.current) {
+      clearTimeout(hoverTimer.current);
+      hoverTimer.current = null;
+    }
+  }
+
   return (
     <div
       onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      onMouseEnter={handleEnter}
+      onMouseLeave={handleLeave}
       style={{
         position: "relative",
         background: `linear-gradient(180deg, ${C.card} 0%, ${C.surface} 100%)`,
@@ -241,13 +269,29 @@ function TeamCard({ team, onClick }) {
 
 function ClientCard({ client, onClick }) {
   const [hovered, setHovered] = useState(false);
+  const hoverTimer = useRef(null);
   const grad = gradientFor(client.name);
+
+  function handleEnter() {
+    setHovered(true);
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => {
+      prefetch(`${API}/api/client/${encodeURIComponent(client.name)}/monthly`);
+    }, HOVER_PREFETCH_DELAY_MS);
+  }
+  function handleLeave() {
+    setHovered(false);
+    if (hoverTimer.current) {
+      clearTimeout(hoverTimer.current);
+      hoverTimer.current = null;
+    }
+  }
 
   return (
     <div
       onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      onMouseEnter={handleEnter}
+      onMouseLeave={handleLeave}
       style={{
         background: C.card,
         border: `1px solid ${hovered ? C.blue : C.border}`,

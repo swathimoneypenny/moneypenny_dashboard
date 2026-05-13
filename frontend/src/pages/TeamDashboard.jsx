@@ -441,28 +441,354 @@ function ChartCard({ title, children }) {
   );
 }
 
+// ── Setup-needed roster card ───────────────────────────────────────
+function buildSnippet(teamId, members) {
+  // Produces:  "team_a": ["jane doe", "john o'brien", ...],
+  const names = (members ?? []).map((m) => `"${(m.name ?? "").toLowerCase()}"`);
+  return `"${teamId}": [${names.join(", ")}],`;
+}
+
+function MembersList({ members, emptyText = "No staff detected." }) {
+  if (!members || members.length === 0) {
+    return <div style={{ color: C.muted, fontStyle: "italic" }}>{emptyText}</div>;
+  }
+  return members.map((m, i) => (
+    <div
+      key={i}
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        padding: "3px 0",
+        borderBottom: i < members.length - 1 ? `1px solid ${C.border}40` : "none",
+      }}
+    >
+      <span>{m.name}</span>
+      <span style={{ color: C.sec }}>{(m.hours ?? 0).toFixed(1)}h</span>
+    </div>
+  ));
+}
+
+function CopyRow({ teamId, members, label = "Copy roster" }) {
+  const [copied, setCopied] = useState(false);
+  const snippet = useMemo(() => buildSnippet(teamId, members), [teamId, members]);
+
+  function copySnippet() {
+    if (typeof navigator === "undefined" || !navigator.clipboard) return;
+    navigator.clipboard.writeText(snippet).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
+
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
+      <code
+        style={{
+          flex: 1,
+          background: C.surface,
+          border: `1px solid ${C.border}`,
+          borderRadius: 6,
+          padding: "8px 10px",
+          fontSize: 11,
+          color: C.pri,
+          fontFamily: "'DM Mono', monospace",
+          whiteSpace: "nowrap",
+          overflowX: "auto",
+        }}
+      >
+        {snippet}
+      </code>
+      <button
+        onClick={copySnippet}
+        disabled={!members || members.length === 0}
+        style={{
+          background: copied ? C.teal : C.blue,
+          border: "none",
+          color: "#fff",
+          borderRadius: 6,
+          padding: "8px 14px",
+          fontSize: 12,
+          fontWeight: 600,
+          cursor: !members || members.length === 0 ? "not-allowed" : "pointer",
+          opacity: !members || members.length === 0 ? 0.5 : 1,
+          transition: "background 0.15s",
+          fontFamily: "'DM Sans', sans-serif",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {copied ? "✓ Copied" : label}
+      </button>
+    </div>
+  );
+}
+
+function DepartmentAccordion({ dept, teamId }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div
+      style={{
+        background: C.surface,
+        border: `1px solid ${C.border}`,
+        borderRadius: 8,
+        marginBottom: 8,
+        overflow: "hidden",
+      }}
+    >
+      <button
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          width: "100%",
+          background: "transparent",
+          border: "none",
+          padding: "10px 14px",
+          color: C.pri,
+          fontSize: 12,
+          cursor: "pointer",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          fontFamily: "'DM Sans', sans-serif",
+        }}
+      >
+        <span style={{ fontWeight: 600 }}>
+          {open ? "▾ " : "▸ "}{dept.department}
+        </span>
+        <span style={{ color: C.muted, fontSize: 11 }}>
+          {dept.member_count} member{dept.member_count === 1 ? "" : "s"} · {(dept.total_hours ?? 0).toFixed(1)}h
+        </span>
+      </button>
+      {open && (
+        <div style={{ padding: "0 14px 12px" }}>
+          <div
+            style={{
+              background: C.bg,
+              borderRadius: 6,
+              padding: 10,
+              fontSize: 12,
+              fontFamily: "'DM Mono', monospace",
+              color: C.pri,
+              maxHeight: 220,
+              overflowY: "auto",
+            }}
+          >
+            <MembersList members={dept.members} />
+          </div>
+          <CopyRow teamId={teamId} members={dept.members} label="Copy this dept" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RosterSetupCard({ teamId, teamName }) {
+  const [resp, setResp] = useState(null);
+  const [loadingDetect, setLoadingDetect] = useState(false);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    setLoadingDetect(true);
+    fetch(`${API}/api/team/${teamId}/detect-roster`, { signal: ctrl.signal })
+      .then((r) => r.json())
+      .then((d) => {
+        setResp(d ?? {});
+        setLoadingDetect(false);
+      })
+      .catch((err) => {
+        if (err?.name !== "AbortError") {
+          console.error("[detect-roster] fetch failed", err);
+          setResp({});
+          setLoadingDetect(false);
+        }
+      });
+    return () => ctrl.abort();
+  }, [teamId]);
+
+  const bestMatch     = resp?.best_match ?? { department: "", confidence: "low", members: [] };
+  const allDepts      = resp?.all_departments ?? [];
+  const unassigned    = resp?.unassigned ?? [];
+  const totalStaff    = resp?.totalStaff ?? 0;
+  const noData        = !loadingDetect && totalStaff === 0 && allDepts.length === 0;
+  const lowConfidence = bestMatch.confidence === "low" || bestMatch.members.length === 0;
+
+  return (
+    <div
+      style={{
+        background: C.card,
+        border: `1px solid ${C.border}`,
+        borderRadius: 12,
+        padding: "48px 32px 40px",
+        textAlign: "center",
+      }}
+    >
+      <div style={{ fontSize: 40, marginBottom: 16 }}>⚙️</div>
+      <div style={{ fontSize: 16, fontWeight: 700, color: C.pri, marginBottom: 8 }}>
+        Team Roster Not Configured
+      </div>
+      <div style={{ fontSize: 13, color: C.muted, maxWidth: 520, margin: "0 auto", lineHeight: 1.7 }}>
+        To show {teamName} data, add team member names to TEAM_ROSTERS in backend/main.py.
+      </div>
+
+      <div style={{ maxWidth: 720, margin: "24px auto 0", textAlign: "left" }}>
+        {noData ? (
+          <div style={{ color: C.muted, fontStyle: "italic", textAlign: "center", padding: "24px 0" }}>
+            No timesheet data found in the last 30 days.
+          </div>
+        ) : (
+          <>
+            {/* Best-match block */}
+            <div
+              style={{
+                fontSize: 11,
+                color: C.muted,
+                textTransform: "uppercase",
+                letterSpacing: 1,
+                fontWeight: 600,
+                marginBottom: 8,
+              }}
+            >
+              Suggested roster (last 30 days)
+              {bestMatch.department && (
+                <span style={{ marginLeft: 8, color: C.sec, textTransform: "none", letterSpacing: 0 }}>
+                  · matched dept “{bestMatch.department}”
+                  <span
+                    style={{
+                      marginLeft: 6,
+                      fontSize: 10,
+                      padding: "1px 6px",
+                      borderRadius: 4,
+                      background:
+                        bestMatch.confidence === "high"  ? `${C.teal}22`   :
+                        bestMatch.confidence === "medium" ? `${C.orange}22` :
+                        `${C.red}22`,
+                      color:
+                        bestMatch.confidence === "high"  ? C.teal   :
+                        bestMatch.confidence === "medium" ? C.orange :
+                        C.red,
+                    }}
+                  >
+                    {bestMatch.confidence}
+                  </span>
+                </span>
+              )}
+            </div>
+
+            {lowConfidence && !loadingDetect && (
+              <div
+                style={{
+                  background: `${C.orange}14`,
+                  border: `1px solid ${C.orange}40`,
+                  borderRadius: 6,
+                  padding: "8px 12px",
+                  fontSize: 12,
+                  color: C.orange,
+                  marginBottom: 10,
+                }}
+              >
+                ⚠ Could not auto-detect {teamName} members. Pick the correct department below.
+              </div>
+            )}
+
+            <div
+              style={{
+                background: C.surface,
+                border: `1px solid ${C.border}`,
+                borderRadius: 8,
+                padding: 12,
+                maxHeight: 280,
+                overflowY: "auto",
+                fontSize: 12,
+                color: C.pri,
+                fontFamily: "'DM Mono', monospace",
+              }}
+            >
+              {loadingDetect ? (
+                <div style={{ color: C.muted, fontStyle: "italic" }}>Loading…</div>
+              ) : (
+                <MembersList members={bestMatch.members} emptyText="No members in the matched department." />
+              )}
+            </div>
+
+            <CopyRow teamId={teamId} members={bestMatch.members} />
+
+            {/* Other departments */}
+            {allDepts.length > 0 && (
+              <div style={{ marginTop: 24 }}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: C.muted,
+                    textTransform: "uppercase",
+                    letterSpacing: 1,
+                    fontWeight: 600,
+                    marginBottom: 10,
+                  }}
+                >
+                  Other departments ({allDepts.length})
+                </div>
+                {allDepts.map((d, i) => (
+                  <DepartmentAccordion key={d.department + i} dept={d} teamId={teamId} />
+                ))}
+              </div>
+            )}
+
+            {unassigned.length > 0 && (
+              <div style={{ marginTop: 18 }}>
+                <DepartmentAccordion
+                  teamId={teamId}
+                  dept={{
+                    department: "(no department)",
+                    member_count: unassigned.length,
+                    total_hours: unassigned.reduce((s, u) => s + (u.hours ?? 0), 0),
+                    members: unassigned,
+                  }}
+                />
+              </div>
+            )}
+          </>
+        )}
+
+        <div style={{ fontSize: 11, color: C.muted, marginTop: 18 }}>
+          Paste into <code>TEAM_ROSTERS</code> in <code>backend/main.py</code>, then restart uvicorn or POST
+          {" "}<code>/api/clear-cache</code>.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main ───────────────────────────────────────────────────────────
 export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdate }) {
   const [period, setPeriod] = useState("monthly");
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const abortRef = useRef(null);
 
   const fetchData = useCallback(() => {
+    if (abortRef.current) abortRef.current.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
     setLoading(true);
-    fetch(`${API}/api/team/${teamId}/${period}`)
+    fetch(`${API}/api/team/${teamId}/${period}`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
+        if (ctrl.signal.aborted) return;
         setData(d);
         setLoading(false);
       })
       .catch((err) => {
+        if (err?.name === "AbortError") return;
         console.error("[TeamDashboard] fetch failed", err);
         setData({ summary: {}, clients: [], eod: [] });
         setLoading(false);
       });
   }, [teamId, period]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    fetchData();
+    return () => {
+      if (abortRef.current) abortRef.current.abort();
+    };
+  }, [fetchData]);
 
   const clients = useMemo(() => data?.clients ?? [], [data]);
   const summary = data?.summary ?? {};
@@ -485,7 +811,7 @@ ${clients.map((o) => (
   const periodLabel = PERIODS.find((p) => p.key === period)?.label ?? "";
   const totalHours = (summary.totalBillable ?? 0) + (summary.totalNonBillable ?? 0);
 
-  // Chart 1 — EOD aggregated by month (handles M/D/YY and YYYY-MM-DD)
+  // Chart 1 — prefer EOD-by-month when available; else fall back to monthlyTrend (rows-derived)
   const monthlyEod = useMemo(() => {
     const buckets = {};
     eod.forEach((row) => {
@@ -512,7 +838,7 @@ ${clients.map((o) => (
       buckets[monthKey].booked    += Number(row.booked ?? row.billable) || 0;
     });
 
-    return Object.values(buckets)
+    const eodChart = Object.values(buckets)
       .sort((a, b) => a.monthKey.localeCompare(b.monthKey))
       .map((b) => ({
         month:     b.month,
@@ -522,7 +848,29 @@ ${clients.map((o) => (
           ? Math.round((b.booked / b.committed) * 1000) / 10
           : 0,
       }));
-  }, [eod]);
+
+    if (eodChart.length > 0) return eodChart;
+
+    // Fallback: backend-provided monthlyTrend from roster-matched timesheet rows
+    const trend = data?.monthlyTrend ?? [];
+    return trend
+      .slice()
+      .sort((a, b) => (a.monthKey ?? "").localeCompare(b.monthKey ?? ""))
+      .map((b) => {
+        const mk = b.monthKey ?? "";
+        const [y, m] = mk.split("-");
+        const d = y && m ? new Date(Number(y), Number(m) - 1, 1) : null;
+        const month = d ? d.toLocaleString("default", { month: "short" }) : mk;
+        const committed = Number(b.committed) || 0;
+        const utilized  = Number(b.utilized)  || 0;
+        return {
+          month,
+          Committed: Math.round(committed * 10) / 10,
+          Utilized:  Math.round(utilized * 10) / 10,
+          "Util%":   committed > 0 ? Math.round((utilized / committed) * 1000) / 10 : 0,
+        };
+      });
+  }, [eod, data]);
 
   // Chart 2 — Hours by Org, horizontal, sorted by total desc
   const hoursByOrg = useMemo(
@@ -630,16 +978,17 @@ ${clients.map((o) => (
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 4, background: C.card, borderRadius: 8, padding: 3, border: `1px solid ${C.border}` }}>
+        <div style={{ display: "flex", gap: 4, background: C.card, borderRadius: 8, padding: 3, border: `1px solid ${C.border}`, opacity: data?.unconfigured || data?.needsRosterSetup ? 0.5 : 1 }}>
           {PERIODS.map((p) => (
             <button
               key={p.key}
               onClick={() => setPeriod(p.key)}
+              disabled={!!(data?.unconfigured || data?.needsRosterSetup)}
               style={{
                 padding: "6px 14px",
                 borderRadius: 6,
                 border: "none",
-                cursor: "pointer",
+                cursor: data?.unconfigured || data?.needsRosterSetup ? "not-allowed" : "pointer",
                 fontSize: 12,
                 fontWeight: 600,
                 fontFamily: "'DM Sans', sans-serif",
@@ -745,51 +1094,7 @@ ${clients.map((o) => (
 
         {/* Setup-needed message */}
         {!loading && data?.needsRosterSetup && (
-          <div
-            style={{
-              background: C.card,
-              border: `1px solid ${C.border}`,
-              borderRadius: 12,
-              padding: "48px 32px",
-              textAlign: "center",
-            }}
-          >
-            <div style={{ fontSize: 40, marginBottom: 16 }}>⚙️</div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: C.pri, marginBottom: 8 }}>
-              Team Roster Not Configured
-            </div>
-            <div
-              style={{
-                fontSize: 13,
-                color: C.muted,
-                maxWidth: 420,
-                margin: "0 auto",
-                lineHeight: 1.8,
-              }}
-            >
-              To show {displayLabel} data, add team member names to the roster.
-            </div>
-            <div
-              style={{
-                marginTop: 20,
-                background: C.surface,
-                border: `1px solid ${C.border}`,
-                borderRadius: 8,
-                padding: "12px 16px",
-                fontSize: 11,
-                color: C.sec,
-                fontFamily: "'DM Mono', monospace",
-                textAlign: "left",
-                maxWidth: 480,
-                marginLeft: "auto",
-                marginRight: "auto",
-              }}
-            >
-              Visit: /api/team/{teamId}/detect-roster
-              <br />
-              to see all staff names, then add to TEAM_ROSTERS in main.py
-            </div>
-          </div>
+          <RosterSetupCard teamId={teamId} teamName={displayLabel} />
         )}
 
         {/* Empty data (roster configured but no matching rows) */}
@@ -831,7 +1136,7 @@ ${clients.map((o) => (
               <div className="kpi-skeleton" style={{ height: 260 }} />
             ) : monthlyEod.length === 0 ? (
               <div style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic" }}>
-                No EOD data available
+                No data for this period
               </div>
             ) : (
               <ResponsiveContainer width="100%" height={260}>
@@ -911,8 +1216,10 @@ ${clients.map((o) => (
             {loading ? (
               <div className="kpi-skeleton" style={{ height: 260 }} />
             ) : delaysData.length === 0 ? (
-              <div style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic" }}>
-                No EOD data available
+              <div style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic", textAlign: "center", padding: 16 }}>
+                {data?.hasEodSheet === false
+                  ? "No EOD sheet configured for this team."
+                  : "No EOD data available."}
               </div>
             ) : (
               <ResponsiveContainer width="100%" height={260}>
