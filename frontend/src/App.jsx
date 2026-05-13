@@ -4,7 +4,7 @@ import TeamDashboard from "./pages/TeamDashboard";
 import ClientDashboard from "./pages/ClientDashboard";
 import LoginPage from "./pages/LoginPage";
 import Chatbot from "./components/Chatbot";
-import { API_BASE, getToken } from "./config";
+import { API_BASE, getToken, clearToken } from "./config";
 
 export default function App() {
   const [view, setView] = useState({ page: "home" });
@@ -20,12 +20,25 @@ export default function App() {
       setAuthed(false);
       return;
     }
+    // Strictly: only treat the user as authed if the server returns valid: true.
+    // We deliberately do NOT honor d.authDisabled — that would let a misconfigured
+    // server bypass the password gate entirely.
     fetch(`${API_BASE}/api/auth/verify`, {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then((r) => r.json())
-      .then((d) => setAuthed(!!(d && (d.valid || d.authDisabled))))
-      .catch(() => setAuthed(false));
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        if (d && d.valid === true) {
+          setAuthed(true);
+        } else {
+          clearToken();
+          setAuthed(false);
+        }
+      })
+      .catch(() => {
+        clearToken();
+        setAuthed(false);
+      });
   }, [authed]);
 
   if (authed === null) {
