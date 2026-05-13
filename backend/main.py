@@ -1852,6 +1852,326 @@ def debug_raw_row():
     }
 
 
+# ── Employee drill-down ───────────────────────────────────────────
+
+def _team_member_count(team_id: str) -> int:
+    """Count of staff associated with a team — used as the divisor for
+    per-employee committed hours. Prefers the admin-hierarchy count when
+    available, falls back to roster keyword count."""
+    admin_id = TEAM_ADMIN_MAP.get(team_id)
+    if admin_id:
+        # Count from cached users: admin + everyone reporting to them.
+        users = USERS_CACHE.get("data") or []
+        if users:
+            members = sum(
+                1 for u in users
+                if str(u.get("USERID", "")) == admin_id
+                or str(u.get("ADMINUSERID") or "") == admin_id
+            )
+            if members > 0:
+                return members
+    roster = TEAM_ROSTERS.get(team_id, [])
+    if roster:
+        return len(roster)
+    return 1  # Avoid div-by-zero downstream
+
+
+def get_employee_committed_hours(team_id: str, period: str) -> float:
+    """Per-employee target hours for the period.
+    Monthly = (sum of TEAM_CLIENTS[team_id].estHrs) / member_count.
+    Weekly = monthly / 4.33, today = monthly / today.day.
+    Returns 0.0 if the team has no estHrs configured."""
+    clients_cfg = TEAM_CLIENTS.get(team_id) or []
+    total_est = sum(float(c.get("estHrs") or 0) for c in clients_cfg)
+    if total_est <= 0:
+        return 0.0
+    members = max(1, _team_member_count(team_id))
+    monthly = total_est / members
+    if period == "weekly":
+        return round(monthly / 4.33, 1)
+    if period == "today":
+        day = max(1, datetime.now().day)
+        return round(monthly / day, 1)
+    return round(monthly, 1)
+
+
+def _employee_match(row_name: str, query: str) -> bool:
+    """Case-insensitive substring match either direction. Handles 'Buelaangel'
+    matching 'Buelaangel T' (and vice-versa)."""
+    r = (row_name or "").lower().strip()
+    q = (query or "").lower().strip()
+    if not r or not q:
+        return False
+    return q in r or r in q
+
+
+def _build_employee_response(team_id: str, employee_name: str, period: str) -> dict:
+    cfg = TEAM_LETTER_MAP.get(team_id)
+    if not cfg:
+        return {"error": "Team not found", "teamId": team_id}
+
+    start, end, label = date_range_for_period(period)
+    rows = get_cached_rows(start, end)
+
+    # Filter to this employee's rows
+    emp_rows = [r for r in rows if _employee_match(r.get("name", ""), employee_name)]
+    canonical_name = (emp_rows[0].get("name") if emp_rows else employee_name)
+
+    total_h     = sum(float(r.get("hours") or 0) for r in emp_rows)
+    billable_h  = sum(float(r.get("hours") or 0) for r in emp_rows if r.get("billable"))
+    nonbill_h   = total_h - billable_h
+    bill_pct    = round(billable_h / total_h * 100, 1) if total_h > 0 else 0.0
+
+    committed = get_employee_committed_hours(team_id, period)
+    util_pct  = round(billable_h / committed * 100, 1) if committed > 0 else 0.0
+
+    # Top clients (by hours) — resolve via TEAM_CLIENTS where possible, else raw customer name.
+    by_client: dict = {}
+    for r in emp_rows:
+        h = float(r.get("hours") or 0)
+        if h <= 0:
+            continue
+        customer = (r.get("customer") or "").strip() or "Internal / Admin"
+        canonical = _resolve_client_for_team(team_id, customer, r.get("desc") or "") or customer
+        entry = by_client.setdefault(canonical, {"hours": 0.0, "billable": 0.0, "nonBillable": 0.0})
+        entry["hours"] += h
+        if r.get("billable"):
+            entry["billable"] += h
+        else:
+            entry["nonBillable"] += h
+    top_clients = [
+        {
+            "client":      name,
+            "hours":       round(v["hours"], 1),
+            "billable":    round(v["billable"], 1),
+            "nonBillable": round(v["nonBillable"], 1),
+        }
+        for name, v in sorted(by_client.items(), key=lambda kv: -kv[1]["hours"])
+    ][:5]
+
+    # Recent work — top 30 rows sorted by date desc
+    def _row_date_key(r):
+        d = (r.get("date") or "")[:10]
+        return d if d else "0000-00-00"
+    recent = sorted(emp_rows, key=_row_date_key, reverse=True)[:30]
+    recent_out = [
+        {
+            "date":     (r.get("date") or "")[:10],
+            "client":   r.get("customer") or "",
+            "project":  r.get("project") or "",
+            "hours":    round(float(r.get("hours") or 0), 1),
+            "desc":     (r.get("desc") or "").strip(),
+            "billable": bool(r.get("billable")),
+        }
+        for r in recent
+    ]
+
+    # Daily hours — fill every day in the period
+    daily_buckets: dict = {}
+    for r in emp_rows:
+        d = (r.get("date") or "")[:10]
+        if not d or len(d) < 10:
+            continue
+        if "/" in d:
+            parts = d.split("/")
+            if len(parts) < 3:
+                continue
+            yr = parts[2] if len(parts[2]) == 4 else "20" + parts[2][-2:]
+            d = f"{yr}-{parts[0].zfill(2)}-{parts[1].zfill(2)}"
+        bucket = daily_buckets.setdefault(d, {"hours": 0.0, "billable": 0.0, "nonBillable": 0.0})
+        h = float(r.get("hours") or 0)
+        bucket["hours"] += h
+        if r.get("billable"):
+            bucket["billable"] += h
+        else:
+            bucket["nonBillable"] += h
+
+    # Build a continuous date series start..end
+    daily_out = []
+    try:
+        start_d = datetime.strptime(start, "%Y-%m-%d")
+        end_d   = datetime.strptime(end,   "%Y-%m-%d")
+        cur = start_d
+        while cur <= end_d:
+            key = cur.strftime("%Y-%m-%d")
+            b = daily_buckets.get(key, {"hours": 0.0, "billable": 0.0, "nonBillable": 0.0})
+            daily_out.append({
+                "date":        key,
+                "hours":       round(b["hours"], 1),
+                "billable":    round(b["billable"], 1),
+                "nonBillable": round(b["nonBillable"], 1),
+            })
+            cur += timedelta(days=1)
+    except Exception:
+        daily_out = [
+            {
+                "date":        k,
+                "hours":       round(v["hours"], 1),
+                "billable":    round(v["billable"], 1),
+                "nonBillable": round(v["nonBillable"], 1),
+            }
+            for k, v in sorted(daily_buckets.items())
+        ]
+
+    return {
+        "name":             canonical_name,
+        "team_id":          team_id,
+        "team_name":        cfg.get("label", team_id),
+        "period":           label,
+        "totalHours":       round(total_h, 1),
+        "billableHours":    round(billable_h, 1),
+        "nonBillableHours": round(nonbill_h, 1),
+        "billablePct":      bill_pct,
+        "committedHours":   round(committed, 1),
+        "utilizationPct":   util_pct,
+        "topClients":       top_clients,
+        "recentWork":       recent_out,
+        "dailyHours":       daily_out,
+        "rowCount":         len(emp_rows),
+    }
+
+
+@app.get("/api/team/{team_id}/employee/{employee_name}/{period}")
+async def employee_endpoint(team_id: str, employee_name: str, period: str):
+    if period not in ("today", "weekly", "monthly"):
+        return {"error": "Invalid period. Use today | weekly | monthly."}
+    t0 = time.perf_counter()
+    result = await asyncio.to_thread(_build_employee_response, team_id, employee_name, period)
+    print(f"[PERF] employee={employee_name} team={team_id} {period} "
+          f"total={time.perf_counter()-t0:.2f}s rows={result.get('rowCount', 0)}")
+    return result
+
+
+# ── Leaderboard ──────────────────────────────────────────────────
+
+_leaderboard_cache: dict = {}
+LEADERBOARD_CACHE_SECS = 300  # 5 min
+
+
+def _previous_period_range(period: str) -> tuple[str, str] | None:
+    """Same shape as date_range_for_period but for the previous period.
+    Used to compute the trend direction. Returns None for unsupported periods."""
+    today = datetime.now()
+    if period == "today":
+        d = today - timedelta(days=1)
+        s = d.strftime("%Y-%m-%d")
+        return s, s
+    if period == "weekly":
+        cur_start = today - timedelta(days=today.weekday())
+        prev_end  = cur_start - timedelta(days=1)
+        prev_start = prev_end - timedelta(days=6)
+        return prev_start.strftime("%Y-%m-%d"), prev_end.strftime("%Y-%m-%d")
+    if period == "monthly":
+        first_this = today.replace(day=1)
+        last_prev  = first_this - timedelta(days=1)
+        first_prev = last_prev.replace(day=1)
+        return first_prev.strftime("%Y-%m-%d"), last_prev.strftime("%Y-%m-%d")
+    return None
+
+
+def _build_leaderboard(team_id: str, period: str) -> dict:
+    cfg = TEAM_LETTER_MAP.get(team_id)
+    if not cfg:
+        return {"error": "Team not found", "teamId": team_id}
+
+    start, end, label = date_range_for_period(period)
+    rows = get_cached_rows(start, end)
+    team_label = cfg.get("label", team_id)
+    roster     = TEAM_ROSTERS.get(team_id, [])
+    committed  = get_employee_committed_hours(team_id, period)
+
+    # Match the same logic _team_response uses to decide if a row belongs to the team.
+    def _row_matches(row) -> bool:
+        if roster:
+            return staff_in_team((row.get("name") or "").strip(), roster)
+        return (row.get("team") or "").strip().lower() == team_label.strip().lower()
+
+    by_emp: dict = {}
+    for r in rows:
+        if not _row_matches(r):
+            continue
+        name = (r.get("name") or "").strip()
+        if not name:
+            continue
+        h = float(r.get("hours") or 0)
+        entry = by_emp.setdefault(name, {"billable": 0.0, "total": 0.0})
+        entry["total"] += h
+        if r.get("billable"):
+            entry["billable"] += h
+
+    # Previous-period rows for trend (only if already cached — never re-fetch)
+    prev_by_emp: dict = {}
+    prev_range = _previous_period_range(period)
+    if prev_range:
+        prev_key = f"{prev_range[0]}_{prev_range[1]}"
+        prev_entry = _rows_cache.get(prev_key)
+        if prev_entry and isinstance(prev_entry.get("rows"), list):
+            for r in prev_entry["rows"]:
+                if not _row_matches(r):
+                    continue
+                name = (r.get("name") or "").strip()
+                if not name:
+                    continue
+                h = float(r.get("hours") or 0)
+                pe = prev_by_emp.setdefault(name, {"billable": 0.0, "total": 0.0})
+                pe["total"] += h
+                if r.get("billable"):
+                    pe["billable"] += h
+
+    members = []
+    for name, v in by_emp.items():
+        util = round(v["billable"] / committed * 100, 1) if committed > 0 else 0.0
+        prev = prev_by_emp.get(name)
+        if prev and committed > 0:
+            prev_util = prev["billable"] / committed * 100
+            delta = util - prev_util
+            trend = "up" if delta > 5 else ("down" if delta < -5 else "flat")
+        else:
+            trend = "flat"
+        members.append({
+            "name":       name,
+            "billable":   round(v["billable"], 1),
+            "committed":  round(committed, 1),
+            "utilPct":    util,
+            "totalHours": round(v["total"], 1),
+            "trend":      trend,
+        })
+
+    members.sort(key=lambda m: -m["utilPct"])
+    for i, m in enumerate(members):
+        m["rank"] = i + 1
+
+    return {
+        "team_id":  team_id,
+        "team_name": team_label,
+        "period":   label,
+        "members":  members,
+    }
+
+
+@app.get("/api/team/{team_id}/leaderboard/{period}")
+async def leaderboard_endpoint(team_id: str, period: str):
+    if period not in ("today", "weekly", "monthly"):
+        return {"error": "Invalid period. Use today | weekly | monthly."}
+
+    cache_key = f"{team_id}_{period}"
+    now = datetime.now()
+    entry = _leaderboard_cache.get(cache_key)
+    if entry and (now - entry["at"]).total_seconds() < LEADERBOARD_CACHE_SECS:
+        cached = dict(entry["data"])
+        cached["fromCache"] = True
+        return cached
+
+    t0 = time.perf_counter()
+    result = await asyncio.to_thread(_build_leaderboard, team_id, period)
+    print(f"[PERF] leaderboard team={team_id} {period} total={time.perf_counter()-t0:.2f}s "
+          f"members={len(result.get('members', []))}")
+    result["fromCache"] = False
+    if not result.get("error"):
+        _leaderboard_cache[cache_key] = {"data": result, "at": now}
+    return result
+
+
 @app.get("/api/team/{team_id}/{period}")
 async def get_team_data(team_id: str, period: str):
     if period not in ("today", "weekly", "monthly"):
@@ -1971,6 +2291,7 @@ async def clear_cache():
     _team_cache.clear()
     _rows_cache.clear()
     _trend_cache.clear()
+    _leaderboard_cache.clear()
     return {"ok": True, "status": "all caches cleared", "time": datetime.now().isoformat()}
 
 

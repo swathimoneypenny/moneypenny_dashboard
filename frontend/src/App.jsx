@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import Home from "./pages/Home";
 import TeamDashboard from "./pages/TeamDashboard";
 import ClientDashboard from "./pages/ClientDashboard";
+import EmployeeProfile from "./pages/EmployeeProfile";
 import LoginPage from "./pages/LoginPage";
 import Chatbot from "./components/Chatbot";
 import { API_BASE, getToken, clearToken } from "./config";
@@ -50,12 +51,42 @@ export default function App() {
   }
 
   const basicContext = (() => {
-    if (view.page === "client") return `Viewing client: ${view.clientName}`;
-    if (view.page === "team")   return `Viewing team: ${view.teamName}`;
+    if (view.page === "client")   return `Viewing client: ${view.clientName}`;
+    if (view.page === "employee") return `Viewing employee: ${view.employeeName} (${view.teamName})`;
+    if (view.page === "team")     return `Viewing team: ${view.teamName}`;
     return "Viewing MoneyPenny Dashboard home screen";
   })();
 
   const context = richContext || basicContext;
+
+  // Helper passed to TeamDashboard to drill into an individual employee
+  const handleSelectEmployee = ({ teamId, employeeName, teamName }) => {
+    setRichContext("");
+    setView({ page: "employee", teamId, employeeName, teamName, fromTeamId: teamId });
+  };
+
+  if (view.page === "employee") {
+    return (
+      <>
+        <EmployeeProfile
+          teamId={view.teamId}
+          teamName={view.teamName}
+          employeeName={view.employeeName}
+          onBack={() => {
+            setRichContext("");
+            // Return to the team dashboard we came from (if known), else home.
+            if (view.fromTeamId) {
+              setView({ page: "team", teamId: view.fromTeamId, teamName: view.teamName });
+            } else {
+              setView({ page: "home" });
+            }
+          }}
+          onContextUpdate={setRichContext}
+        />
+        <Chatbot context={context} />
+      </>
+    );
+  }
 
   if (view.page === "team") {
     return (
@@ -65,6 +96,7 @@ export default function App() {
           teamName={view.teamName}
           onBack={() => { setRichContext(""); setView({ page: "home" }); }}
           onContextUpdate={setRichContext}
+          onSelectEmployee={handleSelectEmployee}
         />
         <Chatbot context={context} />
       </>

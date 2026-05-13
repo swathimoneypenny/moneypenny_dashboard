@@ -777,8 +777,14 @@ function RosterSetupCard({ teamId, teamName }) {
 }
 
 // ── Main ───────────────────────────────────────────────────────────
-export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdate }) {
+export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdate, onSelectEmployee }) {
   const [period, setPeriod] = useState("monthly");
+  // Leaderboard for the current period (drives "Team Members" table).
+  const [leaderboard, setLeaderboard] = useState(null);
+  // Weekly leaderboard for "Most Underutilized This Week" widget.
+  const [weeklyLeaderboard, setWeeklyLeaderboard] = useState(null);
+  const lbAbortRef     = useRef(null);
+  const weeklyAbortRef = useRef(null);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const abortRef = useRef(null);
@@ -809,6 +815,45 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
       if (abortRef.current) abortRef.current.abort();
     };
   }, [fetchData]);
+
+  // Leaderboard for the active period (drives Team Members table).
+  useEffect(() => {
+    if (lbAbortRef.current) lbAbortRef.current.abort();
+    const ctrl = new AbortController();
+    lbAbortRef.current = ctrl;
+    setLeaderboard(null);
+    authFetch(`/api/team/${teamId}/leaderboard/${period}`, { signal: ctrl.signal })
+      .then((r) => r.json())
+      .then((d) => {
+        if (ctrl.signal.aborted) return;
+        setLeaderboard(d);
+      })
+      .catch((err) => {
+        if (err?.name === "AbortError") return;
+        console.error("[TeamDashboard] leaderboard fetch failed", err);
+        setLeaderboard({ members: [] });
+      });
+    return () => ctrl.abort();
+  }, [teamId, period]);
+
+  // Weekly leaderboard for the "Most Underutilized This Week" widget.
+  useEffect(() => {
+    if (weeklyAbortRef.current) weeklyAbortRef.current.abort();
+    const ctrl = new AbortController();
+    weeklyAbortRef.current = ctrl;
+    setWeeklyLeaderboard(null);
+    authFetch(`/api/team/${teamId}/leaderboard/weekly`, { signal: ctrl.signal })
+      .then((r) => r.json())
+      .then((d) => {
+        if (ctrl.signal.aborted) return;
+        setWeeklyLeaderboard(d);
+      })
+      .catch((err) => {
+        if (err?.name === "AbortError") return;
+        setWeeklyLeaderboard({ members: [] });
+      });
+    return () => ctrl.abort();
+  }, [teamId]);
 
   const clients = useMemo(() => data?.clients ?? [], [data]);
   const summary = data?.summary ?? {};
@@ -1182,6 +1227,14 @@ ${clients.map((o) => (
           </div>
         )}
 
+        {/* Most Underutilized This Week — only shows when team has >= 3 members */}
+        {!data?.needsRosterSetup && weeklyLeaderboard && Array.isArray(weeklyLeaderboard.members) && weeklyLeaderboard.members.length >= 3 && (
+          <UnderutilizedWidget
+            members={weeklyLeaderboard.members}
+            onSelect={(name) => onSelectEmployee && onSelectEmployee({ teamId, employeeName: name, teamName: displayLabel })}
+          />
+        )}
+
         {!data?.needsRosterSetup && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
           <ChartCard title={`Committed vs Utilized Hours by Month (${currentYear})`}>
@@ -1317,7 +1370,260 @@ ${clients.map((o) => (
           )}
         </div>
         )}
+
+        {!data?.needsRosterSetup && (
+          <TeamMembersTable
+            members={leaderboard?.members ?? null}
+            onSelect={(name) => onSelectEmployee && onSelectEmployee({ teamId, employeeName: name, teamName: displayLabel })}
+          />
+        )}
       </div>
+    </div>
+  );
+}
+
+// ── Most Underutilized This Week ───────────────────────────────────
+function UnderutilizedWidget({ members, onSelect }) {
+  // Lowest util%, but exclude truly-zero rows (likely no data, not low usage).
+  const bottom = useMemo(
+    () => [...members]
+      .filter((m) => (m.utilPct ?? 0) > 0 || (m.billable ?? 0) > 0)
+      .sort((a, b) => (a.utilPct ?? 0) - (b.utilPct ?? 0))
+      .slice(0, 3),
+    [members]
+  );
+  if (bottom.length === 0) return null;
+  return (
+    <div
+      style={{
+        background: `${C.orange}10`,
+        border: `1px solid ${C.orange}30`,
+        borderLeft: `3px solid ${C.orange}`,
+        borderRadius: 8,
+        padding: "12px 16px",
+        display: "flex",
+        alignItems: "center",
+        gap: 16,
+        flexWrap: "wrap",
+      }}
+    >
+      <div style={{ fontSize: 11, color: C.orange, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, whiteSpace: "nowrap" }}>
+        ⚠ Most Underutilized This Week
+      </div>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", flex: 1 }}>
+        {bottom.map((m, i) => (
+          <button
+            key={i}
+            onClick={() => onSelect && onSelect(m.name)}
+            style={{
+              background: "transparent",
+              border: `1px solid ${C.border}`,
+              borderRadius: 8,
+              padding: "6px 12px 6px 6px",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              cursor: "pointer",
+              fontFamily: "'DM Sans', sans-serif",
+              color: C.pri,
+              transition: "all 0.15s",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = C.orange; e.currentTarget.style.background = `${C.orange}14`; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = "transparent"; }}
+          >
+            <div
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 6,
+                background: gradientFor(m.name),
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 10,
+                fontWeight: 700,
+                color: "#fff",
+              }}
+            >
+              {initials(m.name)}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 1 }}>
+              <span style={{ fontSize: 12, fontWeight: 600 }}>{m.name}</span>
+              <span style={{ fontSize: 10, color: utilColor(m.utilPct ?? 0), fontFamily: "'DM Mono', monospace" }}>
+                {(m.utilPct ?? 0).toFixed(1)}%
+                {m.trend === "up"   && <span style={{ marginLeft: 6, color: C.green }}>▲</span>}
+                {m.trend === "down" && <span style={{ marginLeft: 6, color: C.red }}>▼</span>}
+                {m.trend === "flat" && <span style={{ marginLeft: 6, color: C.muted }}>–</span>}
+              </span>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Team Members table ────────────────────────────────────────────
+function TeamMembersTable({ members, onSelect }) {
+  const [sort, setSort] = useState({ col: "utilPct", dir: "asc" });
+  const sorted = useMemo(() => {
+    if (!Array.isArray(members)) return [];
+    const arr = [...members];
+    arr.sort((a, b) => {
+      const av = a[sort.col] ?? 0;
+      const bv = b[sort.col] ?? 0;
+      if (sort.col === "name") {
+        return sort.dir === "asc"
+          ? String(a.name).localeCompare(String(b.name))
+          : String(b.name).localeCompare(String(a.name));
+      }
+      return sort.dir === "asc" ? av - bv : bv - av;
+    });
+    return arr;
+  }, [members, sort]);
+
+  function toggle(col) {
+    setSort((s) => ({ col, dir: s.col === col && s.dir === "asc" ? "desc" : "asc" }));
+  }
+
+  const th = {
+    padding: "12px 14px",
+    fontSize: 11,
+    color: C.muted,
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+    cursor: "pointer",
+    userSelect: "none",
+    borderBottom: `1px solid ${C.border}`,
+    whiteSpace: "nowrap",
+    background: C.card,
+  };
+  const td = {
+    padding: "12px 14px",
+    fontSize: 13,
+    color: C.pri,
+    borderBottom: `1px solid ${C.border}40`,
+  };
+
+  // Identify top-3 most underutilized for red accent
+  const lowUtilSet = new Set();
+  if (sorted.length > 0) {
+    [...sorted]
+      .filter((m) => (m.utilPct ?? 0) < 75)
+      .sort((a, b) => (a.utilPct ?? 0) - (b.utilPct ?? 0))
+      .slice(0, 3)
+      .forEach((m) => lowUtilSet.add(m.name));
+  }
+
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: C.sec, marginBottom: 16 }}>
+        Team Members
+      </div>
+      {members === null ? (
+        <div className="kpi-skeleton" style={{ height: 200 }} />
+      ) : sorted.length === 0 ? (
+        <div style={{ color: C.muted, fontSize: 13, fontStyle: "italic", padding: "16px 0" }}>
+          No team members matched timesheet rows for this period.
+        </div>
+      ) : (
+        <div style={{ overflowX: "auto", borderRadius: 8, border: `1px solid ${C.border}` }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th style={{ ...th, textAlign: "left", cursor: "pointer" }} onClick={() => toggle("name")}>
+                  Member {sort.col === "name" && <span style={{ marginLeft: 4, opacity: 0.5, fontSize: 10 }}>{sort.dir === "asc" ? "▲" : "▼"}</span>}
+                </th>
+                {[
+                  ["totalHours", "Total Hours"],
+                  ["billable",   "Billable"],
+                  ["committed",  "Committed"],
+                  ["utilPct",    "Util %"],
+                ].map(([col, lbl]) => (
+                  <th key={col} style={{ ...th, textAlign: "right" }} onClick={() => toggle(col)}>
+                    {lbl}{sort.col === col && <span style={{ marginLeft: 4, opacity: 0.5, fontSize: 10 }}>{sort.dir === "asc" ? "▲" : "▼"}</span>}
+                  </th>
+                ))}
+                <th style={{ ...th, textAlign: "center" }}>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((m, i) => {
+                const util = m.utilPct ?? 0;
+                const st = statusInfo(util);
+                const baseBg = i % 2 === 0 ? "transparent" : C.surface;
+                const isLow = lowUtilSet.has(m.name);
+                return (
+                  <tr
+                    key={i}
+                    onClick={() => onSelect && onSelect(m.name)}
+                    style={{
+                      background: baseBg,
+                      cursor: "pointer",
+                      transition: "background 0.12s",
+                      borderLeft: isLow ? `3px solid ${C.red}` : "3px solid transparent",
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(61,142,240,0.06)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = baseBg; }}
+                  >
+                    <td style={{ ...td, textAlign: "left" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div
+                          style={{
+                            width: 30,
+                            height: 30,
+                            borderRadius: 7,
+                            background: gradientFor(m.name),
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontSize: 11,
+                            fontWeight: 700,
+                            color: "#fff",
+                          }}
+                        >
+                          {initials(m.name)}
+                        </div>
+                        <span style={{ fontWeight: 500 }}>{m.name}</span>
+                        {m.trend === "up"   && <span style={{ color: C.green, marginLeft: 6 }}>▲</span>}
+                        {m.trend === "down" && <span style={{ color: C.red,   marginLeft: 6 }}>▼</span>}
+                      </div>
+                    </td>
+                    <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace" }}>
+                      {(m.totalHours ?? 0).toFixed(1)}
+                    </td>
+                    <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.teal }}>
+                      {(m.billable ?? 0).toFixed(1)}
+                    </td>
+                    <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.blue }}>
+                      {(m.committed ?? 0) > 0 ? (m.committed ?? 0).toFixed(1) : "—"}
+                    </td>
+                    <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: utilColor(util) }}>
+                      {(m.committed ?? 0) > 0 ? `${util.toFixed(1)}%` : "—"}
+                    </td>
+                    <td style={{ ...td, textAlign: "center" }}>
+                      <span
+                        style={{
+                          fontSize: 9,
+                          fontWeight: 700,
+                          color: st.color,
+                          background: st.bg,
+                          padding: "3px 8px",
+                          borderRadius: 20,
+                          borderLeft: `3px solid ${st.color}`,
+                          letterSpacing: 0.5,
+                        }}
+                      >
+                        {st.label}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
