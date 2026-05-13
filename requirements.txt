@@ -9,3 +9,4 @@ python-dotenv
 qdrant-client
 sentence-transformers
 pymupdf
+notepad requirements.txt
