@@ -892,36 +892,69 @@ ${clients.map((o) => (
       });
   }, [eod, data]);
 
+  // Real client rows only — exclude "Internal / Other" from the per-org charts.
+  // Backend marks the bucket with isInternalOther=true; name match is a safety net.
+  const chartClients = useMemo(
+    () => clients.filter(
+      (o) => !o.isInternalOther && (o.name ?? "").toLowerCase() !== "internal / other"
+    ),
+    [clients]
+  );
+
   // Chart 2 — Hours by Org, horizontal, sorted by total desc
   const hoursByOrg = useMemo(
-    () => [...clients]
+    () => [...chartClients]
       .sort((a, b) => (b.total ?? 0) - (a.total ?? 0))
       .map((o) => ({
         name:  o.name,
         Hours: Number((o.total ?? 0).toFixed(1)),
       })),
-    [clients]
+    [chartClients]
   );
 
   // Chart 3 — Utilization rate per org
   const utilByOrg = useMemo(
-    () => clients.map((o) => ({
+    () => chartClients.map((o) => ({
       name: o.name,
       rate: Number((o.efficiency ?? 0).toFixed(1)),
     })),
-    [clients]
+    [chartClients]
   );
 
-  // Chart 4 — Daily delays from EOD sheet (this month)
-  const delaysData = useMemo(
-    () => eod
-      .map((row) => ({
-        date:   row.date ? String(row.date).slice(5, 10) : "",
-        delays: Number(row.delays ?? 0) || 0,
-      }))
-      .filter((d) => d.date),
-    [eod]
-  );
+  // Chart 4 — Daily delays from EOD sheet (this month).
+  // Fill in every day from 1..today so the X-axis shows a continuous date scale.
+  const delaysData = useMemo(() => {
+    const now = new Date();
+    const curYear  = now.getFullYear();
+    const curMonth = now.getMonth();
+    const today    = now.getDate();
+
+    // Build map: day-of-month → delay count from any matching EOD row
+    const byDay = {};
+    (eod || []).forEach((row) => {
+      const dateStr = String(row?.date ?? "");
+      if (!dateStr) return;
+      let d;
+      if (dateStr.includes("/")) {
+        const parts = dateStr.split("/");
+        if (parts.length < 3) return;
+        const yr = parts[2].length === 2 ? "20" + parts[2] : parts[2];
+        d = new Date(`${yr}-${parts[0].padStart(2, "0")}-${parts[1].padStart(2, "0")}`);
+      } else {
+        d = new Date(dateStr);
+      }
+      if (Number.isNaN(d.getTime())) return;
+      if (d.getFullYear() !== curYear || d.getMonth() !== curMonth) return;
+      const day = d.getDate();
+      byDay[day] = (byDay[day] || 0) + (Number(row?.delays ?? 0) || 0);
+    });
+
+    const out = [];
+    for (let day = 1; day <= today; day++) {
+      out.push({ date: String(day), delays: byDay[day] || 0 });
+    }
+    return out;
+  }, [eod]);
 
   const displayLabel = data?.teamLabel ?? data?.team ?? teamName ?? teamId;
   const displayLead  = data?.lead ?? data?.leadName ?? "";
@@ -1235,7 +1268,7 @@ ${clients.map((o) => (
           <ChartCard title="Daily Delays — This Month">
             {loading ? (
               <div className="kpi-skeleton" style={{ height: 260 }} />
-            ) : delaysData.length === 0 ? (
+            ) : (eod ?? []).length === 0 ? (
               <div style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic", textAlign: "center", padding: 16 }}>
                 {data?.hasEodSheet === false
                   ? "No EOD sheet configured for this team."

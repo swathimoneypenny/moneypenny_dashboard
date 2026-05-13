@@ -455,34 +455,39 @@ ${Object.entries(staffObj).map(([name, v]) => {
     [summary.totalBillable, summary.totalNonBillable, summary.totalCommitted, totalHours]
   );
 
-  // Daily Delays from the parent team's EOD sheet — only shows rows for the current month.
+  // Daily Delays from the parent team's EOD sheet — current month, every day filled.
+  // For each day 1..today we render a bar (0 if no entry that day) so the X-axis is continuous.
   const delaysData = useMemo(() => {
     const eod = Array.isArray(data?.eod) ? data.eod : [];
     const now = new Date();
     const curMonth = now.getMonth();
     const curYear  = now.getFullYear();
-    return eod
-      .map((row) => {
-        const dateStr = String(row?.date ?? "");
-        if (!dateStr) return null;
-        let d;
-        if (dateStr.includes("/")) {
-          const parts = dateStr.split("/");
-          if (parts.length < 3) return null;
-          const yr = parts[2].length === 2 ? "20" + parts[2] : parts[2];
-          d = new Date(`${yr}-${parts[0].padStart(2, "0")}-${parts[1].padStart(2, "0")}`);
-        } else {
-          d = new Date(dateStr);
-        }
-        if (Number.isNaN(d.getTime())) return null;
-        if (d.getFullYear() !== curYear || d.getMonth() !== curMonth) return null;
-        return {
-          day:    String(d.getDate()),
-          delays: Number(row?.delays ?? 0) || 0,
-        };
-      })
-      .filter(Boolean)
-      .sort((a, b) => Number(a.day) - Number(b.day));
+    const today    = now.getDate();
+
+    const byDay = {};
+    eod.forEach((row) => {
+      const dateStr = String(row?.date ?? "");
+      if (!dateStr) return;
+      let d;
+      if (dateStr.includes("/")) {
+        const parts = dateStr.split("/");
+        if (parts.length < 3) return;
+        const yr = parts[2].length === 2 ? "20" + parts[2] : parts[2];
+        d = new Date(`${yr}-${parts[0].padStart(2, "0")}-${parts[1].padStart(2, "0")}`);
+      } else {
+        d = new Date(dateStr);
+      }
+      if (Number.isNaN(d.getTime())) return;
+      if (d.getFullYear() !== curYear || d.getMonth() !== curMonth) return;
+      const day = d.getDate();
+      byDay[day] = (byDay[day] || 0) + (Number(row?.delays ?? 0) || 0);
+    });
+
+    const out = [];
+    for (let day = 1; day <= today; day++) {
+      out.push({ day: String(day), delays: byDay[day] || 0 });
+    }
+    return out;
   }, [data]);
 
   return (
@@ -731,7 +736,7 @@ ${Object.entries(staffObj).map(([name, v]) => {
               <div style={{ height: 220, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic", textAlign: "center", padding: 16 }}>
                 No EOD sheet configured for this team.
               </div>
-            ) : delaysData.length === 0 ? (
+            ) : (data?.eod ?? []).length === 0 ? (
               <div style={{ height: 220, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic" }}>
                 No EOD entries this month.
               </div>

@@ -187,6 +187,21 @@ TEAM_ORDER = ["team_a", "team_b", "team_c", "team_d", "team_e", "team_f",
               "team_l", "team_m", "team_n"]
 
 
+# ── Env-var overrides for EOD sheet IDs / gids ───────────────────
+# Lets the manager set SHEET_TEAM_B / GID_TEAM_B etc. on Railway without
+# editing the source. Any env var present here overrides the hardcoded value
+# above. Useful for teams whose sheetId is None in TEAM_LETTER_MAP (e.g. team_b).
+for _tid in list(TEAM_LETTER_MAP.keys()):
+    _env_sid = os.getenv(f"SHEET_{_tid.upper()}")
+    _env_gid = os.getenv(f"GID_{_tid.upper()}")
+    if _env_sid:
+        TEAM_LETTER_MAP[_tid]["sheetId"] = _env_sid
+        print(f"[config] SHEET_{_tid.upper()} env override applied: {_env_sid[:8]}…")
+    if _env_gid:
+        TEAM_LETTER_MAP[_tid]["gid"] = _env_gid
+        print(f"[config] GID_{_tid.upper()} env override applied: {_env_gid}")
+
+
 # ── Team rosters (staff-name keyword filter) ─────────────────────
 # Manually configured per team. Each entry is a list of partial name keywords
 # (case-insensitive substring match against the timesheet FULLNAME).
@@ -276,7 +291,7 @@ TEAM_CLIENTS: dict[str, list[dict]] = {
         {"name": "LAH",                  "tsMatch": ["LAH"],                                   "estHrs": 80,  "tz": "EST", "meeting": "No scheduled meeting"},
     ],
     "team_m": [
-        {"name": "ABS",                  "tsMatch": ["ABS", "SNMP"],                           "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "ABS",                  "tsMatch": ["ABS"],                                   "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
         {"name": "Radicle Science",      "tsMatch": ["Radicle"],                               "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
         {"name": "Oh My ROI",            "tsMatch": ["Oh My ROI"],                             "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
         {"name": "Taxes with Jones",     "tsMatch": ["Taxes with Jones"],                      "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
@@ -1924,10 +1939,12 @@ async def _client_data(client_name: str, period: str):
     eod_rows: list = []
     eod_error: str | None = None
     has_eod_sheet = False
+    sid_present = False
     if parent_team:
         cfg = TEAM_LETTER_MAP.get(parent_team) or {}
         sid = cfg.get("sheetId")
         gid = cfg.get("gid")
+        sid_present = bool(sid)
         if sid:
             has_eod_sheet = True
             try:
@@ -1941,7 +1958,8 @@ async def _client_data(client_name: str, period: str):
     result["eod"]          = eod_rows
     result["eodError"]     = eod_error
 
-    print(f"[PERF] client={client_name} {period} total={time.perf_counter()-t0:.2f}s parent={parent_team}")
+    print(f"[PERF] client={client_name} {period} total={time.perf_counter()-t0:.2f}s "
+          f"parent={parent_team} sidConfigured={sid_present} eodRows={len(eod_rows)} eodError={eod_error}")
     cache_set(cache_key, result)
     return result
 
