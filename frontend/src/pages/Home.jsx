@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { TEAMS as STATIC_TEAMS, C, API_BASE } from "../config";
+import { TEAMS as STATIC_TEAMS, C, API_BASE, authFetch, clearToken } from "../config";
 
 const API = API_BASE;
 const HOVER_PREFETCH_DELAY_MS = 220;
@@ -10,7 +10,7 @@ function prefetch(url) {
   _prefetched.add(url);
   // Fire-and-forget; browser will cache the response per Cache-Control headers
   // and the server's _team_cache / _client cache will be warm.
-  fetch(url).catch(() => {
+  authFetch(url).catch(() => {
     _prefetched.delete(url);
   });
 }
@@ -49,6 +49,10 @@ const today = new Date().toLocaleDateString("en-US", {
 });
 
 function Header() {
+  function signOut() {
+    clearToken();
+    if (typeof window !== "undefined") window.location.reload();
+  }
   return (
     <div
       style={{
@@ -69,9 +73,30 @@ function Header() {
           <div style={{ fontSize: 12, color: C.sec }}>Live Performance Intelligence</div>
         </div>
       </div>
-      <div style={{ textAlign: "right" }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: C.teal }}>MoneyPenny LLC</div>
-        <div style={{ fontSize: 11, color: C.muted }}>{today}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: C.teal }}>MoneyPenny LLC</div>
+          <div style={{ fontSize: 11, color: C.muted }}>{today}</div>
+        </div>
+        <button
+          onClick={signOut}
+          title="Sign out"
+          style={{
+            background: "transparent",
+            border: `1px solid ${C.border}`,
+            color: C.sec,
+            borderRadius: 8,
+            padding: "8px 12px",
+            cursor: "pointer",
+            fontSize: 12,
+            fontFamily: "'DM Sans', sans-serif",
+            transition: "all 0.15s",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.borderColor = C.red; e.currentTarget.style.color = C.red; }}
+          onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.sec; }}
+        >
+          Sign out
+        </button>
       </div>
     </div>
   );
@@ -116,7 +141,7 @@ function TeamCard({ team, onClick }) {
     setHovered(true);
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
     hoverTimer.current = setTimeout(() => {
-      prefetch(`${API}/api/team/${team.id}/monthly`);
+      prefetch(`/api/team/${team.id}/monthly`);
     }, HOVER_PREFETCH_DELAY_MS);
   }
   function handleLeave() {
@@ -276,7 +301,7 @@ function ClientCard({ client, onClick }) {
     setHovered(true);
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
     hoverTimer.current = setTimeout(() => {
-      prefetch(`${API}/api/client/${encodeURIComponent(client.name)}/monthly`);
+      prefetch(`/api/client/${encodeURIComponent(client.name)}/monthly`);
     }, HOVER_PREFETCH_DELAY_MS);
   }
   function handleLeave() {
@@ -404,7 +429,7 @@ function TeamTab({ onSelectTeam }) {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${API}/api/teams`)
+    authFetch(`/api/teams`)
       .then((r) => r.json())
       .then((d) => {
         if (cancelled) return;
@@ -485,7 +510,7 @@ function ClientTab({ onSelectClient }) {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetch(`${API}/api/active-clients`)
+    authFetch(`/api/active-clients`)
       .then((r) => r.json())
       .then((data) => {
         if (!cancelled) {

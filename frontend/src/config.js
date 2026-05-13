@@ -1,5 +1,42 @@
 export const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
+// ── Auth ──────────────────────────────────────────────────────────
+export const TOKEN_KEY = "mp_dashboard_token";
+
+export function getToken() {
+  try { return localStorage.getItem(TOKEN_KEY); } catch { return null; }
+}
+
+export function setToken(t) {
+  try { localStorage.setItem(TOKEN_KEY, t); } catch { /* ignore */ }
+}
+
+export function clearToken() {
+  try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ }
+}
+
+/**
+ * Wrapped fetch that automatically:
+ *   - prefixes API_BASE if the URL is a path (starts with "/")
+ *   - injects Authorization: Bearer <token> from localStorage
+ *   - on 401, clears the token + reloads → falls back to LoginPage
+ */
+export async function authFetch(url, opts = {}) {
+  const fullUrl = url.startsWith("http") ? url : `${API_BASE}${url}`;
+  const headers = new Headers(opts.headers || {});
+  const token = getToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  if (opts.body && !headers.has("Content-Type") && !(opts.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+  }
+  const res = await fetch(fullUrl, { ...opts, headers });
+  if (res.status === 401) {
+    clearToken();
+    if (typeof window !== "undefined") window.location.reload();
+  }
+  return res;
+}
+
 export const TEAMS = [
   { id: "team_a", name: "Team A", lead: "" },
   { id: "team_b", name: "Team B", lead: "" },

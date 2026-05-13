@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { C, API_BASE } from "../config";
+import { C, API_BASE, authFetch } from "../config";
 
 const API = API_BASE;
 
@@ -90,9 +90,8 @@ export default function Chatbot({ context }) {
     setLoading(true);
 
     try {
-      const res = await fetch(`${API}/api/chat`, {
+      const res = await authFetch(`/api/chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: nextMsgs.map((m) => ({ role: m.role, content: m.content })),
           context,

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { C, API_BASE } from "../config";
+import { C, API_BASE, authFetch } from "../config";
 import {
   BarChart,
   Bar,
@@ -34,6 +34,12 @@ function statusInfo(pct) {
   if (pct < 95)  return { label: "ON TARGET",    color: C.green,  bg: C.statusGreen };
   if (pct <= 120) return { label: "OVER TARGET", color: C.green,  bg: C.statusGreen };
   return { label: "CRITICAL", color: C.orange, bg: C.statusOrange };
+}
+
+function delayColor(count) {
+  if (count <= 0) return C.green;
+  if (count <= 3) return C.orange;
+  return C.red;
 }
 
 function initials(name) {
@@ -303,7 +309,7 @@ export default function ClientDashboard({ clientName, onBack, onContextUpdate })
     mainAbortRef.current = ctrl;
     const p = PERIODS.find((pp) => pp.key === period) ?? PERIODS[2];
     setLoading(true);
-    fetch(`${API}/api/client/${encodeURIComponent(clientName)}/${p.endpoint}`, { signal: ctrl.signal })
+    authFetch(`/api/client/${encodeURIComponent(clientName)}/${p.endpoint}`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
         if (ctrl.signal.aborted) return;
@@ -329,7 +335,7 @@ export default function ClientDashboard({ clientName, onBack, onContextUpdate })
       const ctrl = new AbortController();
       trendAbortRef.current = ctrl;
       setTrendLoading(true);
-      fetch(`${API}/api/client/${encodeURIComponent(clientName)}/trend`, { signal: ctrl.signal })
+      authFetch(`/api/client/${encodeURIComponent(clientName)}/trend`, { signal: ctrl.signal })
         .then((r) => r.json())
         .then((d) => {
           if (ctrl.signal.aborted) return;
@@ -391,7 +397,7 @@ ${Object.entries(staffObj).map(([name, v]) => {
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await fetch(`${API}/api/clear-cache`, { method: "POST" });
+      await authFetch(`/api/clear-cache`, { method: "POST" });
     } catch (_) {}
     delete trendCacheRef.current[clientName];
     fetchTrend(true);
@@ -448,6 +454,36 @@ ${Object.entries(staffObj).map(([name, v]) => {
     }),
     [summary.totalBillable, summary.totalNonBillable, summary.totalCommitted, totalHours]
   );
+
+  // Daily Delays from the parent team's EOD sheet — only shows rows for the current month.
+  const delaysData = useMemo(() => {
+    const eod = Array.isArray(data?.eod) ? data.eod : [];
+    const now = new Date();
+    const curMonth = now.getMonth();
+    const curYear  = now.getFullYear();
+    return eod
+      .map((row) => {
+        const dateStr = String(row?.date ?? "");
+        if (!dateStr) return null;
+        let d;
+        if (dateStr.includes("/")) {
+          const parts = dateStr.split("/");
+          if (parts.length < 3) return null;
+          const yr = parts[2].length === 2 ? "20" + parts[2] : parts[2];
+          d = new Date(`${yr}-${parts[0].padStart(2, "0")}-${parts[1].padStart(2, "0")}`);
+        } else {
+          d = new Date(dateStr);
+        }
+        if (Number.isNaN(d.getTime())) return null;
+        if (d.getFullYear() !== curYear || d.getMonth() !== curMonth) return null;
+        return {
+          day:    String(d.getDate()),
+          delays: Number(row?.delays ?? 0) || 0,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => Number(a.day) - Number(b.day));
+  }, [data]);
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg }}>
@@ -677,6 +713,47 @@ ${Object.entries(staffObj).map(([name, v]) => {
                   <Bar dataKey="util" radius={[4, 4, 0, 0]}>
                     {staffUtil.map((entry, i) => (
                       <Cell key={i} fill={utilColor(entry.util)} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+
+          {/* Daily Delays — from parent team's EOD sheet */}
+          <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 16px" }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.sec, marginBottom: 16 }}>
+              Daily Delays — This Month
+            </div>
+            {loading ? (
+              <div style={{ height: 220 }} className="kpi-skeleton" />
+            ) : !data?.hasEodSheet ? (
+              <div style={{ height: 220, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic", textAlign: "center", padding: 16 }}>
+                No EOD sheet configured for this team.
+              </div>
+            ) : delaysData.length === 0 ? (
+              <div style={{ height: 220, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic" }}>
+                No EOD entries this month.
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={delaysData} margin={{ top: 4, right: 8, left: -18, bottom: 36 }}>
+                  <CartesianGrid vertical={false} stroke={C.border} strokeDasharray="3 3" />
+                  <XAxis
+                    dataKey="day"
+                    tick={{ fill: C.sec, fontSize: 10 }}
+                    axisLine={false}
+                    tickLine={false}
+                    interval={0}
+                    angle={-45}
+                    textAnchor="end"
+                    height={50}
+                  />
+                  <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} />
+                  <Tooltip content={<DarkTooltip />} formatter={(v) => [`${v} delays`, "Delays"]} />
+                  <Bar dataKey="delays" name="Delays" radius={[4, 4, 0, 0]}>
+                    {delaysData.map((d, i) => (
+                      <Cell key={i} fill={delayColor(d.delays)} />
                     ))}
                   </Bar>
                 </BarChart>

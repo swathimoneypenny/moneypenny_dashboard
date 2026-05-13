@@ -3,6 +3,11 @@ import sys
 import csv
 import io
 import time
+import json
+import hmac
+import base64
+import hashlib
+import secrets
 import asyncio
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -11,6 +16,7 @@ from datetime import datetime, timedelta
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from groq import Groq
 
@@ -42,10 +48,116 @@ async def add_cache_control(request: Request, call_next):
         response.headers["Cache-Control"] = "private, max-age=60"
     return response
 
+
+@app.middleware("http")
+async def require_auth(request: Request, call_next):
+    """Protect every /api/* route except /api/auth/* and a few exempt prefixes.
+    If DASHBOARD_PASSWORD or DASHBOARD_SESSION_SECRET is unset, auth is disabled
+    so local dev keeps working without env config."""
+    path = request.url.path
+    # Allow CORS preflight + non-API paths
+    if request.method == "OPTIONS" or not path.startswith("/api/") or AUTH_DISABLED:
+        return await call_next(request)
+    if any(path.startswith(p) for p in AUTH_EXEMPT_PREFIXES):
+        return await call_next(request)
+    token = extract_bearer(request)
+    if not verify_token(token or ""):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    return await call_next(request)
+
+
+@app.post("/api/auth/login")
+async def auth_login(req: dict):
+    password = (req or {}).get("password") or ""
+    if not DASHBOARD_PASSWORD or not DASHBOARD_SESSION_SECRET:
+        return JSONResponse(
+            {"error": "auth_disabled", "message": "Server has no DASHBOARD_PASSWORD / DASHBOARD_SESSION_SECRET configured."},
+            status_code=503,
+        )
+    if not hmac.compare_digest(password, DASHBOARD_PASSWORD):
+        return JSONResponse({"error": "invalid_password"}, status_code=401)
+    return {"token": issue_token(), "expiresInSecs": TOKEN_TTL_SECS}
+
+
+@app.get("/api/auth/verify")
+async def auth_verify(request: Request):
+    if AUTH_DISABLED:
+        return {"valid": True, "authDisabled": True}
+    token = extract_bearer(request)
+    payload = verify_token(token or "") if token else None
+    return {"valid": bool(payload), "exp": payload.get("exp") if payload else None}
+
 TIMESHEET_API_KEY   = os.getenv("TIMESHEET_API_KEY")
 TIMESHEET_API_TOKEN = os.getenv("TIMESHEET_API_TOKEN")
 ABS_SHEET_ID        = os.getenv("ABS_SHEET_ID")
 groq_client         = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+
+# ── Auth ──────────────────────────────────────────────────────────
+# Single shared password. The frontend sends it to /api/auth/login, the server
+# returns a 30-day HMAC-signed token. Every protected endpoint requires
+# Authorization: Bearer <token>.
+DASHBOARD_PASSWORD       = os.getenv("DASHBOARD_PASSWORD", "")
+DASHBOARD_SESSION_SECRET = os.getenv("DASHBOARD_SESSION_SECRET", "")
+TOKEN_TTL_SECS           = 30 * 24 * 3600  # 30 days
+AUTH_DISABLED            = not DASHBOARD_PASSWORD or not DASHBOARD_SESSION_SECRET
+
+# Paths that DO NOT require auth.
+AUTH_EXEMPT_PREFIXES = (
+    "/api/auth/",
+    "/docs", "/openapi.json", "/redoc",
+    "/api/health",
+)
+
+
+def _b64url(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(s: str) -> bytes:
+    pad = "=" * (-len(s) % 4)
+    return base64.urlsafe_b64decode((s + pad).encode("ascii"))
+
+
+def issue_token() -> str:
+    """Return a signed token of the form <payload_b64>.<sig_b64>.
+    Payload is JSON {iat, exp, sub}."""
+    secret = DASHBOARD_SESSION_SECRET.encode("utf-8")
+    now    = int(time.time())
+    payload = {
+        "iat": now,
+        "exp": now + TOKEN_TTL_SECS,
+        "sub": "manager",
+        "jti": secrets.token_hex(8),
+    }
+    payload_b = _b64url(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    sig_b = _b64url(hmac.new(secret, payload_b.encode("ascii"), hashlib.sha256).digest())
+    return f"{payload_b}.{sig_b}"
+
+
+def verify_token(token: str) -> dict | None:
+    """Return the decoded payload if valid + unexpired, else None."""
+    if not token or "." not in token:
+        return None
+    try:
+        payload_b, sig_b = token.split(".", 1)
+        secret = DASHBOARD_SESSION_SECRET.encode("utf-8")
+        expected = _b64url(hmac.new(secret, payload_b.encode("ascii"), hashlib.sha256).digest())
+        if not hmac.compare_digest(expected, sig_b):
+            return None
+        payload = json.loads(_b64url_decode(payload_b).decode("utf-8"))
+        if int(payload.get("exp", 0)) < int(time.time()):
+            return None
+        return payload
+    except Exception:
+        return None
+
+
+def extract_bearer(request: Request) -> str | None:
+    auth = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return None
 
 # ── Strict team mapping (Team Letter → Lead first name + EOD sheet) ─
 # This is the authoritative source. Lead names are matched against
@@ -96,6 +208,142 @@ TEAM_ROSTERS: dict[str, list[str]] = {
     "team_n": [],
     "team_t": [],
 }
+
+
+# ── Authoritative team → client mapping ──────────────────────────
+# Per-team list of clients. Used as the SOURCE OF TRUTH for which orgs appear
+# under each team. tsMatch = case-insensitive substring keywords against
+# CUSTOMERNAME (or WORKDESCRIPTION as fallback). estHrs = monthly commitment.
+TEAM_CLIENTS: dict[str, list[dict]] = {
+    "team_a": [
+        {"name": "Bookkeeping Doctor",   "tsMatch": ["BKP Doctor", "Bookkeeping Doctor"],     "estHrs": 80,  "tz": "EST", "meeting": "2nd & 3rd week Thursday 9am IST & every Wednesday 4:30pm IST"},
+        {"name": "Ollin Balance",        "tsMatch": ["Ollin Balance"],                         "estHrs": 160, "tz": "EST", "meeting": "4th week Tuesday 4:30pm IST"},
+        {"name": "24hr Bookkeeper",      "tsMatch": ["24hr Bookkeeper"],                       "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
+    ],
+    "team_b": [
+        {"name": "NisiVoccia",           "tsMatch": ["NisiVoccia"],                            "estHrs": 120, "tz": "EST", "meeting": "3rd week Thursday 6:30pm IST"},
+        {"name": "Katy Advisors",        "tsMatch": ["Katy Advisors"],                         "estHrs": 80,  "tz": "CST", "meeting": "Every Wednesday 5pm IST"},
+        {"name": "CBMS",                 "tsMatch": ["CBMS", "MyProsperityTree"],              "estHrs": 120, "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "Back Office People",   "tsMatch": ["Back Office People"],                    "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
+    ],
+    "team_c": [
+        {"name": "Stay by Rafa",         "tsMatch": ["Stay by Rafa"],                          "estHrs": 80,  "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "Financial Synergy",    "tsMatch": ["Financial Synergy"],                     "estHrs": 120, "tz": "CST", "meeting": "No scheduled meeting"},
+        {"name": "Neve",                 "tsMatch": ["Neve"],                                  "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "Sambrano Services",    "tsMatch": ["Sambrano"],                              "estHrs": 60,  "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "RDG Tax Group",        "tsMatch": ["RDG"],                                   "estHrs": 60,  "tz": "CST", "meeting": "No scheduled meeting"},
+    ],
+    "team_d": [
+        {"name": "Financly",             "tsMatch": ["Financly"],                              "estHrs": 400, "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "AIS Solutions",        "tsMatch": ["AIS Solutions", "AIS"],                  "estHrs": 480, "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "Smith Bookkeeping",    "tsMatch": ["Smith Bookkeeping"],                     "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
+    ],
+    "team_e": [
+        {"name": "ACS",                  "tsMatch": ["ACS"],                                   "estHrs": 320, "tz": "PST", "meeting": "No scheduled meeting"},
+    ],
+    "team_f": [
+        {"name": "Thrive",               "tsMatch": ["Thrive"],                                "estHrs": 320, "tz": "PST", "meeting": "No scheduled meeting"},
+    ],
+    "team_g": [
+        {"name": "Ez Ledger",            "tsMatch": ["Ez Ledger", "EZ Ledger"],                "estHrs": 320, "tz": "EST", "meeting": "Every Friday 5:15pm IST"},
+        {"name": "Proper Trust",         "tsMatch": ["Proper Trust", "Mintage", "Artesani"],   "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "Putman Accountancy",   "tsMatch": ["Putman"],                                "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "Manzelli Consulting",  "tsMatch": ["Manzelli Consulting"],                   "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
+    ],
+    "team_h": [
+        {"name": "JB Advisory",          "tsMatch": ["JB Advisory"],                           "estHrs": 320, "tz": "MST", "meeting": "Every Tuesday and Thursday 9am IST"},
+    ],
+    "team_i": [
+        {"name": "Core 4",               "tsMatch": ["Core 4"],                                "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "Beacon Advisors",      "tsMatch": ["Beacon Advisors"],                       "estHrs": 80,  "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "Pokorny",              "tsMatch": ["Pokorny"],                               "estHrs": 60,  "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "SoCo",                 "tsMatch": ["SoCo", "SoCo Business"],                 "estHrs": 160, "tz": "CST", "meeting": "No scheduled meeting"},
+        {"name": "Redmond",              "tsMatch": ["Redmond"],                               "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
+    ],
+    "team_j": [
+        {"name": "GFA",                  "tsMatch": ["GFA"],                                   "estHrs": 640, "tz": "EST", "meeting": "Monthly 3rd week Thursday 5:30pm IST"},
+    ],
+    "team_k": [
+        {"name": "Portnoy CPA",          "tsMatch": ["Portnoy"],                               "estHrs": 320, "tz": "EST", "meeting": "Monthly"},
+        {"name": "Empower Accounting",   "tsMatch": ["Empower Accounting", "Empower"],         "estHrs": 80,  "tz": "PST", "meeting": "Monthly 2nd Wednesday 9:45am IST"},
+        {"name": "Modern CPAs",          "tsMatch": ["Modern CPAs", "Modern CPA"],             "estHrs": 320, "tz": "PST", "meeting": "Monthly"},
+    ],
+    "team_l": [
+        {"name": "Taxsense",             "tsMatch": ["Taxsense"],                              "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "Officeheads",          "tsMatch": ["Officeheads"],                           "estHrs": 80,  "tz": "CST", "meeting": "No scheduled meeting"},
+        {"name": "Web Books",            "tsMatch": ["Web Books"],                             "estHrs": 80,  "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "Baker Bookkeeps",      "tsMatch": ["Baker Bookkeeps", "Baker"],              "estHrs": 80,  "tz": "CST", "meeting": "No scheduled meeting"},
+        {"name": "LAH",                  "tsMatch": ["LAH"],                                   "estHrs": 80,  "tz": "EST", "meeting": "No scheduled meeting"},
+    ],
+    "team_m": [
+        {"name": "ABS",                  "tsMatch": ["ABS", "SNMP"],                           "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "Radicle Science",      "tsMatch": ["Radicle"],                               "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "Oh My ROI",            "tsMatch": ["Oh My ROI"],                             "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "Taxes with Jones",     "tsMatch": ["Taxes with Jones"],                      "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "Equity Champions",     "tsMatch": ["Equity Champ"],                          "estHrs": 0,   "tz": "EST", "meeting": "Every Thursday 4:30pm IST"},
+        {"name": "DAA CPA",              "tsMatch": ["DAA CPA", "DAA"],                        "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "MC Tax",               "tsMatch": ["MC Tax"],                                "estHrs": 0,   "tz": "CST", "meeting": "No scheduled meeting"},
+        {"name": "SDC Group",            "tsMatch": ["SDC"],                                   "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "Helvetica",            "tsMatch": ["Helvetica"],                             "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "Shane Butler",         "tsMatch": ["Shane Butler"],                          "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "Sybilline Records",    "tsMatch": ["Sybilline"],                             "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
+    ],
+    "team_n": [
+        {"name": "BKP Repair",           "tsMatch": ["BKP Repair"],                            "estHrs": 240, "tz": "PST", "meeting": "Bi-weekly Friday 10am IST"},
+        {"name": "Tim Thompson",         "tsMatch": ["Tim Thompson"],                          "estHrs": 40,  "tz": "CST", "meeting": "No scheduled meeting"},
+        {"name": "FitProfit Solutions",  "tsMatch": ["FitProfit"],                             "estHrs": 0,   "tz": "CST", "meeting": "No scheduled meeting"},
+    ],
+    "team_t": [
+        {"name": "Wiebe Hinton Hambalek","tsMatch": ["Wiebe", "Hinton Hambalek"],              "estHrs": 960, "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "We Add Value",         "tsMatch": ["We Add Value"],                          "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "Financial Synergy TX", "tsMatch": ["Financial Synergy TX"],                  "estHrs": 0,   "tz": "CST", "meeting": "Last day of month 5pm IST"},
+        {"name": "Jim Baltimore",        "tsMatch": ["Jim Baltimore"],                         "estHrs": 0,   "tz": "MST", "meeting": "No scheduled meeting"},
+        {"name": "Tim Thompson TX",      "tsMatch": ["Tim Thompson TX"],                       "estHrs": 0,   "tz": "CST", "meeting": "No scheduled meeting"},
+        {"name": "Joe Manzelli",         "tsMatch": ["Joe Manzelli"],                          "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "Business Fitness",     "tsMatch": ["Business Fitness"],                      "estHrs": 0,   "tz": "AEST","meeting": "No scheduled meeting"},
+        {"name": "David Beck",           "tsMatch": ["David Beck"],                            "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
+    ],
+}
+
+
+def find_team_for_client(client_name: str) -> str | None:
+    """Reverse-lookup: which team owns this client? Returns team_id or None.
+    Uses the same case-insensitive substring match against tsMatch keywords."""
+    cn = (client_name or "").lower()
+    if not cn:
+        return None
+    best: tuple[int, str] | None = None
+    for team_id, clients in TEAM_CLIENTS.items():
+        for c in clients:
+            for kw in c.get("tsMatch", []):
+                kw_lower = (kw or "").lower()
+                if kw_lower and kw_lower in cn:
+                    if best is None or len(kw_lower) > best[0]:
+                        best = (len(kw_lower), team_id)
+    return best[1] if best else None
+
+
+def _resolve_client_for_team(team_id: str, customer: str, desc: str = "") -> str | None:
+    """Return the canonical client name from TEAM_CLIENTS[team_id] that matches
+    `customer` (or `desc` as fallback). None if no match found.
+
+    Picks the longest matching keyword to handle "Tim Thompson" vs "Tim Thompson TX"
+    style overlaps within a single team."""
+    cfg = TEAM_CLIENTS.get(team_id) or []
+    if not cfg:
+        return None
+    cust_lower = (customer or "").lower()
+    desc_lower = (desc or "").lower()
+    best: tuple[int, str] | None = None  # (keyword length, client_name)
+    for client in cfg:
+        for kw in client.get("tsMatch", []):
+            kw_lower = kw.lower()
+            if not kw_lower:
+                continue
+            if kw_lower in cust_lower or kw_lower in desc_lower:
+                if best is None or len(kw_lower) > best[0]:
+                    best = (len(kw_lower), client["name"])
+    return best[1] if best else None
 
 
 # ── Admin-hierarchy → team map ────────────────────────────────────
@@ -916,7 +1164,35 @@ async def _team_response(team_id: str, period: str):
     if fetch_failed:
         print(f"[_team_response] team={team_id} FETCH FAILED — returning fetchError=True (not cached)")
 
+    # ── Authoritative aggregation against TEAM_CLIENTS[team_id] ───
+    # Seed every configured client with zero so they always appear in the table
+    # (even if no time logged yet). Unmatched rows fall into "Internal / Other".
+    EXCLUDE_KEYWORDS = (
+        "internal / admin", "choose customer",
+        "breaks for teams", "zzz",
+    )
+    team_client_cfg = TEAM_CLIENTS.get(team_id) or []
     orgs: dict = {}
+    for cfg_entry in team_client_cfg:
+        orgs[cfg_entry["name"]] = {
+            "billable":    0.0,
+            "nonBillable": 0.0,
+            "staff":       set(),
+            "estHrs":      cfg_entry.get("estHrs", 0),
+            "tz":          cfg_entry.get("tz", ""),
+            "meeting":     cfg_entry.get("meeting", "No scheduled meeting"),
+            "isConfig":    True,
+        }
+    orgs["Internal / Other"] = {
+        "billable":    0.0,
+        "nonBillable": 0.0,
+        "staff":       set(),
+        "estHrs":      0,
+        "tz":          "",
+        "meeting":     "",
+        "isConfig":    False,
+    }
+
     total_rows = 0
     matched_rows = 0
     staff_names_found: set = set()
@@ -937,59 +1213,74 @@ async def _team_response(team_id: str, period: str):
         if not _row_matches(row):
             continue
 
-        matched_rows += 1
-        staff_names_found.add(fullname)
         billable = bool(row.get("billable"))
         customer = (row.get("customer") or "").strip()
-        if not customer or customer == "SNMP":
-            customer = "Internal / Admin"
+        desc     = (row.get("desc") or "").strip()
 
-        r = orgs.setdefault(customer, {
-            "billable":    0.0,
-            "nonBillable": 0.0,
-            "staff":       set(),
-        })
+        # Skip rows whose customer is an admin/break placeholder entirely.
+        cust_lower = customer.lower()
+        if not customer or customer == "SNMP" or any(k in cust_lower for k in EXCLUDE_KEYWORDS):
+            continue
+
+        # Resolve against TEAM_CLIENTS; non-matches go to "Internal / Other".
+        resolved = _resolve_client_for_team(team_id, customer, desc)
+        bucket   = orgs[resolved] if resolved else orgs["Internal / Other"]
+
+        matched_rows += 1
+        staff_names_found.add(fullname)
         if billable:
-            r["billable"] += h
+            bucket["billable"] += h
         else:
-            r["nonBillable"] += h
-        r["staff"].add(fullname)
+            bucket["nonBillable"] += h
+        bucket["staff"].add(fullname)
 
     clients_data = []
     for org_name, h in orgs.items():
-        total = h["billable"] + h["nonBillable"]
-        eff = round(h["billable"] / total * 100, 1) if total > 0 else 0
-        if eff > 95:
-            status = "OVER TARGET"
-        elif eff >= 75:
-            status = "ON TARGET"
-        elif eff < 50:
-            status = "CRITICAL"
+        actual = h["billable"] + h["nonBillable"]
+        committed = h["estHrs"] or 0
+        util = round(actual / committed * 100, 1) if committed > 0 else 0
+        gap  = round(actual - committed, 1) if committed > 0 else 0.0
+        if committed > 0:
+            if util > 95:
+                status = "OVER TARGET"
+            elif util >= 75:
+                status = "ON TARGET"
+            elif util < 50:
+                status = "CRITICAL"
+            else:
+                status = "BELOW TARGET"
         else:
-            status = "BELOW TARGET"
+            status = "PLACEHOLDER" if h["isConfig"] else "OTHER"
         clients_data.append({
             "name":        org_name,
-            "committed":   0,
+            "org":         org_name,
+            "committed":   round(committed, 1),
+            "actual":      round(actual, 1),
             "billable":    round(h["billable"], 1),
             "nonBillable": round(h["nonBillable"], 1),
-            "total":       round(total, 1),
-            "efficiency":  eff,
-            "gap":         0,
+            "total":       round(actual, 1),
+            "efficiency":  util,
+            "utilPct":     util,
+            "gap":         gap,
             "staffCount":  len(h["staff"]),
             "delays":      0,
             "status":      status,
+            "timezone":    h["tz"],
+            "meeting":     h["meeting"],
+            "isPlaceholder": h["isConfig"] and committed == 0 and actual == 0,
+            "isInternalOther": not h["isConfig"],
         })
-    # Strip internal / placeholder / zero-hour client rows
-    EXCLUDE_CLIENTS = {
-        "internal / admin", "choose customer",
-        "breaks for teams", "zzz", "",
-    }
+
+    # Sort: configured clients first (by actual desc), Internal / Other last (only if non-zero).
+    def _sort_key(c):
+        if c["isInternalOther"]:
+            return (1, -c["actual"])
+        return (0, -c["actual"])
     clients_data = [
         c for c in clients_data
-        if not any(exc and exc in c["name"].lower() for exc in EXCLUDE_CLIENTS)
-        and c["total"] > 0
+        if not c["isInternalOther"] or c["actual"] > 0
     ]
-    clients_data.sort(key=lambda x: x["billable"], reverse=True)
+    clients_data.sort(key=_sort_key)
 
     print(f"[DEBUG] team={team_id} roster={roster} staffFound={sorted(staff_names_found)[:10]}")
 
@@ -1626,7 +1917,31 @@ async def _client_data(client_name: str, period: str):
     start, end, label = date_range_for_period(period)
     rows   = await asyncio.to_thread(get_cached_rows, start, end)
     result = build_client_report(rows, client_name, label)
-    print(f"[PERF] client={client_name} {period} total={time.perf_counter()-t0:.2f}s")
+
+    # Attach the parent team's EOD sheet data so ClientDashboard can render
+    # the Daily Delays chart filtered to this client.
+    parent_team = find_team_for_client(client_name)
+    eod_rows: list = []
+    eod_error: str | None = None
+    has_eod_sheet = False
+    if parent_team:
+        cfg = TEAM_LETTER_MAP.get(parent_team) or {}
+        sid = cfg.get("sheetId")
+        gid = cfg.get("gid")
+        if sid:
+            has_eod_sheet = True
+            try:
+                eod_rows = await asyncio.to_thread(get_eod_data, sid, None, gid)
+            except EodSheetError as e:
+                eod_error = e.reason
+            except Exception as e:
+                eod_error = f"EOD fetch failed: {e}"
+    result["parentTeamId"] = parent_team
+    result["hasEodSheet"]  = has_eod_sheet
+    result["eod"]          = eod_rows
+    result["eodError"]     = eod_error
+
+    print(f"[PERF] client={client_name} {period} total={time.perf_counter()-t0:.2f}s parent={parent_team}")
     cache_set(cache_key, result)
     return result
 

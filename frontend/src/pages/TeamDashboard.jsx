@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { C, API_BASE } from "../config";
+import { C, API_BASE, authFetch } from "../config";
 import {
   BarChart,
   Bar,
@@ -333,6 +333,8 @@ function PerfTable({ orgs }) {
                 {sort.col === col && <SortIcon dir={sort.dir} />}
               </th>
             ))}
+            <th style={{ ...th, textAlign: "center" }}>Timezone</th>
+            <th style={{ ...th, textAlign: "left" }}>Next Meeting</th>
             <th style={{ ...th, textAlign: "center" }}>Status</th>
           </tr>
         </thead>
@@ -340,7 +342,14 @@ function PerfTable({ orgs }) {
           {sorted.map((o, i) => {
             const eff = o.efficiency ?? 0;
             const gap = o.gap ?? 0;
-            const st = statusInfo(eff);
+            const committed = o.committed ?? 0;
+            const isPlaceholder = !!o.isPlaceholder;
+            const isInternalOther = !!o.isInternalOther;
+            const st = isPlaceholder
+              ? { label: "PLACEHOLDER", color: C.muted, bg: "transparent" }
+              : isInternalOther
+                ? { label: "OTHER", color: C.muted, bg: "transparent" }
+                : statusInfo(eff);
             const baseBg = i % 2 === 0 ? "transparent" : C.surface;
             const delays = o.delays ?? 0;
             return (
@@ -365,20 +374,31 @@ function PerfTable({ orgs }) {
                         fontWeight: 700,
                         color: "#fff",
                         flexShrink: 0,
+                        opacity: isPlaceholder ? 0.5 : 1,
                       }}
                     >
                       {initials(o.name ?? "?")}
                     </div>
-                    <span style={{ fontWeight: 500, color: C.pri }}>{o.name}</span>
+                    <span style={{ fontWeight: 500, color: isPlaceholder ? C.muted : C.pri }}>{o.name}</span>
                   </div>
                 </td>
-                <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: utilColor(eff) }}>{eff.toFixed(1)}%</td>
-                <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: gap >= 0 ? C.green : C.red }}>
-                  {gap >= 0 ? "+" : ""}{gap.toFixed(1)}
+                <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: committed > 0 ? utilColor(eff) : C.muted }}>
+                  {committed > 0 ? `${eff.toFixed(1)}%` : "—"}
                 </td>
-                <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.blue }}>{(o.committed ?? 0).toFixed(1)}</td>
+                <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: committed > 0 ? (gap >= 0 ? C.green : C.red) : C.muted }}>
+                  {committed > 0 ? `${gap >= 0 ? "+" : ""}${gap.toFixed(1)}` : "—"}
+                </td>
+                <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: committed > 0 ? C.blue : C.muted }}>
+                  {committed > 0 ? committed.toFixed(1) : "—"}
+                </td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.teal }}>{(o.billable ?? 0).toFixed(1)}</td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: delayColor(delays), fontWeight: 600 }}>{delays}</td>
+                <td style={{ ...td, textAlign: "center", fontSize: 11, color: C.sec, fontFamily: "'DM Mono', monospace" }}>
+                  {o.timezone || "—"}
+                </td>
+                <td style={{ ...td, textAlign: "left", fontSize: 11, color: C.sec, maxWidth: 280 }}>
+                  {o.meeting && o.meeting !== "No scheduled meeting" ? o.meeting : <span style={{ color: C.muted }}>—</span>}
+                </td>
                 <td style={{ ...td, textAlign: "center" }}>
                   <span
                     style={{
@@ -407,7 +427,7 @@ function PerfTable({ orgs }) {
             <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.blue, borderTop: `2px solid ${C.border}` }}>{totals.committed.toFixed(1)}</td>
             <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.teal, borderTop: `2px solid ${C.border}` }}>{totals.billable.toFixed(1)}</td>
             <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.orange, borderTop: `2px solid ${C.border}` }}>{totals.delays}</td>
-            <td style={{ ...td, borderTop: `2px solid ${C.border}` }} />
+            <td style={{ ...td, borderTop: `2px solid ${C.border}` }} colSpan={3} />
           </tr>
         </tfoot>
       </table>
@@ -587,7 +607,7 @@ function RosterSetupCard({ teamId, teamName }) {
   useEffect(() => {
     const ctrl = new AbortController();
     setLoadingDetect(true);
-    fetch(`${API}/api/team/${teamId}/detect-roster`, { signal: ctrl.signal })
+    authFetch(`/api/team/${teamId}/detect-roster`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
         setResp(d ?? {});
@@ -768,7 +788,7 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setLoading(true);
-    fetch(`${API}/api/team/${teamId}/${period}`, { signal: ctrl.signal })
+    authFetch(`/api/team/${teamId}/${period}`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
         if (ctrl.signal.aborted) return;
@@ -1223,9 +1243,18 @@ ${clients.map((o) => (
               </div>
             ) : (
               <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={delaysData} margin={{ top: 4, right: 8, left: -18, bottom: 0 }}>
+                <BarChart data={delaysData} margin={{ top: 4, right: 8, left: -18, bottom: 36 }}>
                   <CartesianGrid vertical={false} stroke={C.border} strokeDasharray="3 3" />
-                  <XAxis dataKey="date" tick={{ fill: C.sec, fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fill: C.sec, fontSize: 10 }}
+                    axisLine={false}
+                    tickLine={false}
+                    interval={0}
+                    angle={-45}
+                    textAnchor="end"
+                    height={50}
+                  />
                   <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} />
                   <Tooltip content={<DarkTooltip />} formatter={(v) => [`${v} delays`, "Delays"]} />
                   <Bar dataKey="delays" name="Delays" radius={[4, 4, 0, 0]}>
