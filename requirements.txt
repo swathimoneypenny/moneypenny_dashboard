@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+groq
+slack-bolt
+pandas
+openpyxl
+requests
+python-dotenv
+qdrant-client
+sentence-transformers
+pymupdf

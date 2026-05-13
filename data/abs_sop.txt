@@ -1,0 +1,272 @@
+SECTION: PURPOSE
+To provide a standardized procedure for posting questions in Keeper, handling client communication, performing allocations, reconciliations, and payroll tasks to support accurate and timely month-end close.
+
+SECTION: SCOPE
+This SOP applies to all Moneypenny team members involved in financial review, bookkeeping, and client communication activities in Keeper and related platforms. It ensures efficient workflow, accountability, and consistency in handling client files.
+
+SECTION: PREREQUISITES
+Access to platforms: Keeper, Dropbox, Gusto, Slack, Outlook, Financial Cents.
+Familiarity with client-specific folders and tools, especially for Movement Medical.
+Understand internal conventions for categorizing transactions, vendor naming, and communication protocols.
+Weekly allocations and reconciliations must be completed as scheduled.
+
+SECTION: RESPONSIBILITIES
+TEAM LEADER: Maintains accuracy and updates SOPs during admin hours. Responsible for reviewing the workflow, assigning tasks, ensuring timely completion, and conducting a final review before submission to the client.
+PREPARERS: Review the workflow for new tasks and consult with the Team Leader before starting. Follow up on previous communications and perform a self-review of tasks before submitting them to the Team Leader.
+
+SECTION: POSTING QUESTIONS IN KEEPER
+Always post questions in the comments section of the specific transaction.
+Use the Ask Client feature if clarification is needed from the client.
+Use comments tab for Rebecca.
+Reply to messages from Rebecca or clients immediately, then mark response as Resolved.
+
+SECTION: CLIENT COMMUNICATION
+Do not mark off comments in client communication that require Rebecca's review. Updated 11/19/2024.
+Maintain clear audit trails by using the correct comment location and assignment.
+
+SECTION: REVENUE BY STATE REPORT
+Income must be categorized by the 5th of each month.
+Upload the Revenue by State report for Movement Medical to the Dropbox folder. Updated 07/29/2024.
+
+SECTION: DAILY ACTIVITY CHECKLIST
+Check Slack, Keeper, and Outlook for tasks daily.
+Acknowledge and respond to clients before 10 AM IST which is 9:30 PM PST.
+Prioritize working on files early and post queries in Keeper. Rebecca is online until 12 PM IST.
+
+SECTION: SOURCE DOCUMENT COLLECTION
+Statements are uploaded to Dropbox. Direct access links may be shared.
+Check Client Info/Files and Client Uploads Inbox in Keeper.
+If missing documents, post questions to Rebecca or use Ask Client in Keeper.
+Credit card statements are always from the client. Rebecca does not have access. Updated 07/17/2024.
+
+SECTION: WORKFLOW VIA OUTLOOK
+Rebecca forwards high-priority documents via email.
+Process and respond to Outlook items first.
+
+SECTION: WORKFLOW VIA KEEPER
+Log into Keeper and access assigned files for Moneypenny Team.
+Post queries in the transaction chat.
+Click the notification icon to view client replies.
+
+SECTION: ALLOCATION WEEKLY
+Analyze P&L to determine entry type: Cash vs Accrual.
+For Accrual Basis: Record bill or adjust payment only with supporting documents.
+Check Dropbox for documents.
+Follow category review rules: Meals use Meals vendor. Travel use Travel vendor. Fuel use Fuel vendor. Auto use Auto vendor.
+Do not create new vendor names.
+Add customer names to deposits if available.
+Match payroll transactions before accepting.
+Threshold: Use sub-accounts if expense category is greater than $2,500 or multiple expense types exist.
+
+SECTION: RECONCILIATION PROCESS
+Retrieve statements from Dropbox or request from Rebecca in Keeper.
+Ensure there is no opening balance discrepancy.
+All expenses must have payee names and checks must have numbers.
+Uncleared transactions must be validated or matched.
+Do not void transactions without client confirmation.
+All reconciled transactions must belong to the current period.
+
+SECTION: PAYROLL GUSTO
+Download Payroll Reports from Gusto.
+Manually sync JE if not auto-imported.
+Match Payroll JE with gross pay and taxes in bank feed.
+Match Gusto report balances.
+Payroll clearing account must be zeroed.
+If payroll clearing account is not zeroed: Create a report of pending amounts or deductions per employee.
+Review Uncleared Gusto Transactions monthly in FC.
+Prepare Excel summary for gross wages and taxes such as Movement Medical Payroll 2024 xlsx.
+
+SECTION: REVIEW PROFIT AND LOSS
+Check for abnormal or negative balances.
+Check for capitalizable expenses.
+Check for consistency in recurring transactions.
+Check for proper coding for Bank Charges, Merchant Fees, and Payroll Fees.
+Check that salary and tax matches to payroll reports.
+
+SECTION: REVIEW BALANCE SHEET
+Match bank and CC account balances to statements.
+Verify depreciation JEs.
+Zero out payroll liability accounts or reclassify.
+Confirm loan interest segregation.
+Validate sales tax payments and equity account classification.
+
+SECTION: FINAL FILE HANDLING
+Post queries in Keeper under relevant transactions and accounts.
+Check Client Questions section for responses and adjust entries.
+Review Client Inbox and Client Info/Files before requesting documents.
+Complete all MP Team sub-tasks.
+Once reviewed, set Keeper status to Ready for Rebecca.
+
+SECTION: DEPOSIT HANDLING
+Rebecca does not have access to deposit info. Request directly from client.
+Always ask for deposit slip from client for verification.
+
+SECTION: DROPBOX FILE STRUCTURE
+For all active clients, add documents in the following file structure in Dropbox.
+Everything should go into the 2025 Folder then the month the transaction was in and then the corresponding folder.
+Folders to use: Bank and CC Stmts, Expenses, Misc Backup, Payroll and 401k, Taxes.
+
+SECTION: ENTERING TIME IN KEEPER
+Login to Keeper and go to Time Tracking.
+Click on Add Timer.
+For work process on files, add them under Client Work. For client-related tasks, enter them under Admin Work.
+Mark the checkbox as Billable.
+Under Client Work, select Close for the previous month in Workstream. For example in March the Workstream will be Feb close.
+Under Admin Work, the Workstream is Admin.
+Enter the description in the Notes tab.
+Then click Add.
+
+SECTION: W2 MATCH PROCESS
+Verify W-2s and 1099s between Gusto and QBO.
+Log into Gusto and QBO and download relevant reports.
+Make sure to match Wages and Taxes for 2024 before working on matching W2.
+Select Download W-2 and W3s. Select 2024 and download.
+Download Payroll summary report by Employee for the year.
+Location: Gusto then Switch company then File Name then Gusto home page then Reports then Payroll Journal legacy.
+Choose Summary Only.
+Select all options except Employee Earnings Breakdown and Reimbursements.
+Click Generate Report.
+Steps to match W2:
+Step 1: Create Excel using previous year format. Location: Dropbox then All files then ABS Team folder then select the file then 2025 then W2 Excel.
+Step 2: Compare with Employee order in Gusto Payroll summary report. Delete employees who are no longer active and add new employees for the current year. Ensure employee order in Excel matches Gusto report.
+Step 3: Compare the W2 of each employee with annual Gusto Payroll report to update excel.
+Update Excel W-2 sheet in two sections: Employee Gross Wages split by designation such as Administration, Officers, Sales Commissions, Management and Operations Departments. Employee Taxes: update employee tax amounts excluding insurance amounts while comparing W-2 and Gusto Payroll reports.
+If there is any difference between W-2 and Gusto: clearly mention the reason in the remarks column.
+In the Movement Medical file, an extra column is available for Benefits and 401k amounts Box 12. Update this column only with the employee portion as per the W-2 report. Box 12 in W-2 includes both employee and employer amounts.
+
+SECTION: 1099 CONTRACTOR PAYMENT
+Search each file on the Gusto Home page by switching between files to confirm whether contractor payments are available before proceeding.
+Download the annual Contractor Payment Report from both QBO and Gusto to compare and reconcile contractor payments.
+Contractor Payment Report from Gusto: Log in to Gusto, switch to the required file, click Contractor Payments on the Gusto home page, select the options and generate the report.
+Contractor Payment Report from QBO: Log in to QBO, switch to the required company file, click Reports from left-side menu, select Standard Reports, click Profit and Loss, set the reporting period to Last Year, select Contractor under Cost of Goods sold if applicable, export the Contractor report in CSV format.
+Prepare Contractor Payment Sheet:
+Create the Excel file using the same format as per 2024 reference.
+Add contractor names in accordance with both the QBO Contractor Report and the Gusto Contractor Report.
+Update the 1099 Earnings column using data from the Gusto Contractor Report.
+Update the As per QBO Contractor column by linking it to the corresponding data in the QBO Contractor Sheet.
+Match and validate all details using 2024 Excel reference.
+After completing this report, save the report in ABS TEAM FOLDER in Dropbox.
+Updated 01/31/2026.
+
+SECTION: ABS CLIENT RULES SUMMARY
+Never mention MPLLC or MoneyPenny in client spreadsheets. Use ABS or Accounting Benefit Solutions instead.
+Do not ask bank statement questions before the 8th of the month.
+Always check Dropbox payroll file before raising payroll questions.
+Check credit card statements before posting transactions as bills.
+Always check payroll tabs in workbook carefully before raising payroll questions.
+Rebecca does not have access to credit card statements or deposit info.
+Post queries in Keeper comments section only.
+Reply to Rebecca and clients immediately and mark as Resolved.
+Set file status to Ready for Rebecca only after all sub-tasks are complete.
+
+SECTION: ABS FIRM DETAILS
+Firm Name: ACCOUNTING BENEFIT SOLUTIONS
+Location: Washington
+US Coordinator: Rebecca Inman
+Email US Team: rebecca@accbensolutions.com
+Email India Team: swetha_k@moneypennyllc.com and pavithira_vm@moneypennyllc.com
+Time Zone: PST Pacific Standard Time
+India Team Members: Swetha is Team Lead. Pavithira is Preparer.
+Communication Flow: Slack, Double, Outlook
+Workflow Management: Double, Outlook Mail
+Document Management: Dropbox
+Accounting Software: QBO
+Monthly Hours: 80 hours, 4 hours per day. Daily slack the EOD status to Rebecca.
+Scope of Work: Allocation, Accounts Payable, Accounts Receivable, Reconciliation and Monthly close, Payroll.
+Number of Files: 6
+Time Entry: MPLLC Timesheet. Upload the weekly and monthly timesheets to the Dropbox folder. All files under Bookkeeping team then Team ABS then Hours then Monthly or weekly.
+Client Meeting: Only on client request.
+
+SECTION: COMPLETE ACUPUNCTURE CLIENT DETAILS
+Type of Business: Acupuncture clinic offering expert acupuncture and holistic treatments for better health and wellness.
+Address: 6443 NE 196th St, Kenmore, WA 98028
+Telephone: +15095903708
+Email: chrisbosworth2@gmail.com
+Owner: Chris
+Workflows used: Keeper
+Communication: Outlook, Slack, Keeper. Do not remind Rebecca in Slack. Mail her for any outstanding questions if she has not replied in Keeper.
+Accounting Service: Monthly
+Software: QBO
+Method: Cash
+Banks: Operating account 1754, Savings account 9594
+Credit Cards: Elan CC
+
+SECTION: COMPLETE ACUPUNCTURE SPECIAL RULES
+When a deposit is identified as an insurance payment or is related to a patient, ensure that no check attachments are uploaded to QBO if they contain patient names or any identifiable information as this would violate HIPAA compliance.
+For Square deposits: Whenever you see a deposit with memo Square, segregate it by verifying the Square report. Report will be available in Dropbox under All files then Bookkeeping Team then Complete Acupuncture then Bank then Square.
+
+SECTION: COMPLETE ACUPUNCTURE CONTINUING EDUCATION
+Whenever there is a transaction related to education, training, or any course, do not request or create a new account under Continuing Education. There is already an existing Chart of Account titled Performance Development. Ensure all such transactions are coded there. Rebecca confirmed the account for Con Ed/Training is called Professional Development.
+
+SECTION: COMPLETE ACUPUNCTURE RECONCILIATION
+Savings account: Need to reconcile the account on a Quarterly basis. Rebecca confirmed this is published quarterly.
+
+SECTION: COMPLETE ACUPUNCTURE SEGREGATION OF INCOME
+Need to record a JE month wise to segregate the Product and the Service Income which is Consultation Fees.
+Login to Unified Practice from LastPass or ask Rebecca for the Unified Practice Management Report.
+Go to reports then Sales Tax then Sort the date, Export and Enter the Monthly JE.
+Go to reports then Sales history then sort the date, Export and attach the excel as 2nd tab in that Sales tax excel.
+Upload the report in the Dropbox folder.
+Enter the JE using Net Charged amounts for Services amounts.
+Debit Product Sales.
+Credit Consultation Fees.
+
+SECTION: ALL CLIENTS COMMON RULES
+Need to ask the deposit slip or statement only after 8th of every month. This applies to all files.
+Common vendors for all files: Meals, Travel, Fuel, Auto, Parking.
+Payroll report summary for the month: Request Rebecca in Keeper for Sun Path and East West Interiors.
+Monthly: Upload the excel for payroll clearing account in Dropbox under ALL FILES then ABS TEAM FOLDER.
+On a quarterly basis: Send the distribution report for all files and upload it to Dropbox.
+ABS TEAM FOLDER: Upload reports like uncleared payroll reports etc.
+BOOKKEEPING TEAM folder: Upload reimbursements and statements.
+Accrual basis: If you encounter any Sales Tax payment transaction, first check if you have the excise tax report in Dropbox. If not available request Rebecca. Do not make payment until you receive the excise tax report.
+
+SECTION: COMPLETE ACUPUNCTURE DEPOSIT SLIP RULE
+IMPORTANT: For Complete Acupuncture, deposit slip will be available in QBO directly. Do NOT ask client for deposit slip — check QBO first.
+Square report: Request Rebecca in Keeper comments.
+Segregate the income between Product and Service. Unified Practice report will be available in Dropbox. Record monthly JE.
+Savings account reconciliation: Quarterly statement.
+Inform client about CC bank feed error.
+Inform Rebecca about Operating and Savings bank feed error.
+Request Bank and Savings statement to Rebecca. Check in QBO and Dropbox before asking.
+CC statements: You can get it from QBO directly.
+
+SECTION: WEEKLY TASKS SCHEDULE
+This is the weekly task schedule for all ABS clients showing which days to Categorize and Review Client Communication.
+
+Complete Acupuncture: Monday is Categorize and Review Client Communication. Tuesday is Nil. Wednesday is Categorize and Review Client Communication. Thursday is Nil. Friday is Categorize and Review Client Communication.
+Note: Daily tasks are assigned for Complete Acupuncture and need to be allocated on alternate days.
+
+East West Interiors: Monday is Categorize and Review Client Communication. Tuesday is Review Client Communication. Wednesday is Review Client Communication. Thursday is Review Client Communication. Friday is Review Client Communication.
+
+Inglewood: Monday is Nil. Tuesday is Nil. Wednesday is Nil. Thursday is Nil. Friday is Categorize.
+
+Movement Medical: Monday is Categorize and Review Client Communication. Tuesday is Categorize and Review Client Communication. Wednesday is Categorize and Review Client Communication. Thursday is Categorize and Review Client Communication. Friday is Categorize and Review Client Communication.
+
+NewLife Interiors: Monday is Review Client Communication. Tuesday is Nil. Wednesday is Nil. Thursday is Nil. Friday is Categorize and Review Client Communication.
+
+S3: Monday is Categorize and Review Client Communication. Tuesday is Review Client Communication. Wednesday is Review Client Communication. Thursday is Review Client Communication. Friday is Review Client Communication.
+
+Skyline: Monday is Categorize and Review Client Communication. Tuesday is Review Client Communication. Wednesday is Review Client Communication. Thursday is Review Client Communication. Friday is Review Client Communication.
+
+SunPath: Monday is Categorize and Review Client Communication. Tuesday is Categorize and Review Client Communication. Wednesday is Categorize and Review Client Communication. Thursday is Categorize and Review Client Communication. Friday is Categorize and Review Client Communication.
+
+SECTION: WEEKLY TASKS SCHEDULE
+This is the weekly task schedule for all ABS clients showing which days to do Categorize plus Review Client Communication or Review Client Communication only.
+
+Complete Acupuncture: Monday is Categorize and Review Client Communication. Tuesday is Nil. Wednesday is Categorize and Review Client Communication. Thursday is Nil. Friday is Categorize and Review Client Communication.
+Note: Daily tasks are assigned for Complete Acupuncture and need to be allocated on alternate days.
+
+East West Interiors: Monday is Categorize and Review Client Communication. Tuesday is Review Client Communication. Wednesday is Review Client Communication. Thursday is Review Client Communication. Friday is Review Client Communication.
+
+Inglewood: Monday is Nil. Tuesday is Nil. Wednesday is Nil. Thursday is Nil. Friday is Categorize.
+
+Movement Medical: Monday is Categorize and Review Client Communication. Tuesday is Categorize and Review Client Communication. Wednesday is Categorize and Review Client Communication. Thursday is Categorize and Review Client Communication. Friday is Categorize and Review Client Communication.
+
+NewLife Interiors: Monday is Review Client Communication. Tuesday is Nil. Wednesday is Nil. Thursday is Nil. Friday is Categorize and Review Client Communication.
+
+S3: Monday is Categorize and Review Client Communication. Tuesday is Review Client Communication. Wednesday is Review Client Communication. Thursday is Review Client Communication. Friday is Review Client Communication.
+
+Skyline: Monday is Categorize and Review Client Communication. Tuesday is Review Client Communication. Wednesday is Review Client Communication. Thursday is Review Client Communication. Friday is Review Client Communication.
+
+SunPath: Monday is Categorize and Review Client Communication. Tuesday is Categorize and Review Client Communication. Wednesday is Categorize and Review Client Communication. Thursday is Categorize and Review Client Communication. Friday is Categorize and Review Client Communication.
