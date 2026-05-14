@@ -332,8 +332,10 @@ ${lines.join("\n")}`;
           {loading ? (
             <div className="kpi-skeleton" style={{ height: 260 }} />
           ) : !dailyChartHasData ? (
-            <div style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic" }}>
-              No data for this period.
+            <div style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic", textAlign: "center", padding: 16 }}>
+              {(data?.totalHours ?? 0) > 0
+                ? "Chart unavailable — entries logged this period have no date."
+                : "No data for this period."}
             </div>
           ) : (
             <ResponsiveContainer width="100%" height={260}>

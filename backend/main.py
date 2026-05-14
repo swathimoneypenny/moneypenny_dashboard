@@ -1015,6 +1015,44 @@ def get_date_range(period: str):
     return date_range_for_period(period)
 
 
+def _normalize_date(date_raw) -> str:
+    """Normalize any reasonable date input to 'YYYY-MM-DD'.
+    Handles: 'YYYY-MM-DD', 'YYYY-MM-DDTHH:MM:SS', 'M/D/YYYY', 'M/D/YY',
+    'MM/DD/YYYY'. Returns '' if it can't be parsed (so callers can detect
+    missing dates instead of getting a silently mangled string)."""
+    s = str(date_raw or "").strip()
+    if not s:
+        return ""
+    # ISO first (with or without time component)
+    head = s[:10]
+    if len(head) == 10 and head[4] == "-" and head[7] == "-":
+        try:
+            datetime.strptime(head, "%Y-%m-%d")
+            return head
+        except ValueError:
+            pass
+    # Slash forms — could be M/D/YYYY or M/D/YY
+    if "/" in s:
+        parts = s.split(" ")[0].split("/")
+        if len(parts) >= 3:
+            try:
+                mo = int(parts[0])
+                dy = int(parts[1])
+                yr = int(parts[2])
+                if yr < 100:
+                    yr += 2000
+                return f"{yr:04d}-{mo:02d}-{dy:02d}"
+            except ValueError:
+                pass
+    # Last-resort: try strptime against common variants
+    for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%Y/%m/%d", "%d-%b-%Y", "%d %b %Y"):
+        try:
+            return datetime.strptime(s[:19], fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return ""
+
+
 def parse_rows(data) -> list[dict]:
     rows = []
     if not data or not data.get("report") or not data["report"].get("ReportData"):
@@ -1052,7 +1090,7 @@ def parse_rows(data) -> list[dict]:
                 "project":  row.get("PROJECTNAME", ""),
                 "desc":     row.get("WORKDESCRIPTION", ""),
                 "team":     team,
-                "date":     str(date_raw)[:10],
+                "date":     _normalize_date(date_raw),
             })
     return rows
 
@@ -2284,20 +2322,18 @@ def _build_employee_response(team_id: str, employee_name: str, period: str) -> d
         for r in recent
     ]
 
-    # Daily hours — fill every day in the period
+    # Daily hours — fill every day in the period. Rows whose date can't be
+    # normalized still count toward total hours, but can't be placed on a
+    # specific day — they're tracked in undated_hours for the [employee] log.
     daily_buckets: dict = {}
+    undated_hours = 0.0
     for r in emp_rows:
-        d = (r.get("date") or "")[:10]
-        if not d or len(d) < 10:
-            continue
-        if "/" in d:
-            parts = d.split("/")
-            if len(parts) < 3:
-                continue
-            yr = parts[2] if len(parts[2]) == 4 else "20" + parts[2][-2:]
-            d = f"{yr}-{parts[0].zfill(2)}-{parts[1].zfill(2)}"
-        bucket = daily_buckets.setdefault(d, {"hours": 0.0, "billable": 0.0, "nonBillable": 0.0})
+        d = _normalize_date(r.get("date"))
         h = float(r.get("hours") or 0)
+        if not d:
+            undated_hours += h
+            continue
+        bucket = daily_buckets.setdefault(d, {"hours": 0.0, "billable": 0.0, "nonBillable": 0.0})
         bucket["hours"] += h
         if r.get("billable"):
             bucket["billable"] += h
@@ -2334,9 +2370,12 @@ def _build_employee_response(team_id: str, employee_name: str, period: str) -> d
             for k, v in sorted(daily_buckets.items())
         ]
 
-    print(f"[employee] team={team_id} name={employee_name!r} strategy={strategy} "
-          f"matchedRows={len(emp_rows)} dailyHoursCount={len(daily_out)} "
-          f"totalHours={round(total_h, 1)}")
+    first_date = daily_out[0]["date"]  if daily_out else "—"
+    last_date  = daily_out[-1]["date"] if daily_out else "—"
+    print(f"[employee] name={employee_name!r} team={team_id} strategy={strategy} "
+          f"matchedRows={len(emp_rows)} totalHours={round(total_h, 1)} "
+          f"dailyHoursCount={len(daily_out)} firstDate={first_date} lastDate={last_date} "
+          f"undatedHours={round(undated_hours, 1)}")
 
     return {
         "name":             canonical_name,
