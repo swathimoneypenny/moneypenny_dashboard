@@ -2882,6 +2882,118 @@ def debug_unmapped_clients():
     }
 
 
+@app.get("/api/debug/client-eod")
+def debug_client_eod(name: str, period: str = "monthly"):
+    """Diagnostic dump for the Client view's "No open delays" bug.
+
+    Walks the same flow the client endpoint uses:
+      1. Resolve parent team via find_team_for_client
+      2. Look up sheetId + gid from TEAM_LETTER_MAP
+      3. Try every candidate tab — including the client's tsMatch aliases —
+         and report what each one returned BEFORE _resolve_eod_rows_for_client
+         picks one. This exposes whether the picker is grabbing an empty
+         per-client tab instead of the populated team-wide tab.
+      4. Sample the first 5 rows from the picked tab
+      5. Compute the aging summary from those rows
+
+    No side effects, no state changes.
+    """
+    if period not in ("today", "weekly", "monthly"):
+        return {"error": "Invalid period. Use today | weekly | monthly."}
+
+    parent_team_id = find_team_for_client(name)
+    out: dict = {
+        "client_name":               name,
+        "period":                    period,
+        "parent_team_id":            parent_team_id,
+        "team_sheet_id":             None,
+        "team_sheet_gid":            None,
+        "ts_match_aliases":          [],
+        "candidates_attempted":      [],
+        "tab_matching_strategy_used": None,
+        "matched_tab_label":         None,
+        "raw_eod_rows_in_picked_tab": 0,
+        "first_5_raw_rows":          [],
+        "rows_after_client_filter":  None,
+        "filter_criteria_tried":     "none (current code does not row-filter by client — all team-EOD rows are passed through to compute_delays_aging)",
+        "delaysAgeSummary_computed": None,
+        "delaysByDay_nonempty_days": 0,
+    }
+    if not parent_team_id:
+        out["note"] = ("find_team_for_client returned None — client not "
+                       "resolved to any team. /api/debug/unmapped-clients shows "
+                       "the customer name as it appears in timesheets.")
+        return out
+
+    cfg = TEAM_LETTER_MAP.get(parent_team_id) or {}
+    sid = cfg.get("sheetId")
+    gid = cfg.get("gid")
+    out["team_sheet_id"]  = (sid[:8] + "…") if sid else None
+    out["team_sheet_gid"] = gid
+    if not sid:
+        out["note"] = f"TEAM_LETTER_MAP[{parent_team_id}] has no sheetId — "\
+                       f"set SHEET_{parent_team_id.upper()} env var or hardcode."
+        return out
+
+    # Gather every tab candidate that _resolve_eod_rows_for_client uses, PLUS
+    # the tsMatch aliases for this client (which the picker doesn't currently
+    # try — that's the suspect).
+    aliases: list[str] = []
+    for client_cfg in (TEAM_CLIENTS.get(parent_team_id) or []):
+        if (client_cfg.get("name") or "").strip() == name.strip():
+            aliases = list(client_cfg.get("tsMatch") or [])
+            break
+        # Fuzzy match the canonical client name too
+        if name and fuzzy_contains(client_cfg.get("name") or "", name):
+            aliases = list(client_cfg.get("tsMatch") or [])
+            break
+    out["ts_match_aliases"] = aliases
+
+    candidates: list[tuple[str, dict]] = []
+    candidates.append((f"tab='{name}'",          {"tab": name}))
+    candidates.append((f"tab='{name} Delays'",  {"tab": f"{name} Delays"}))
+    for alias in aliases:
+        candidates.append((f"tab='{alias}'",         {"tab": alias}))
+        candidates.append((f"tab='{alias} Delays'", {"tab": f"{alias} Delays"}))
+    if gid:
+        candidates.append((f"gid={gid}",            {"gid": gid}))
+    candidates.append(("default-first-tab",         {}))
+
+    picked_rows: list[dict] = []
+    picked_label: str | None = None
+    for label, kwargs in candidates:
+        attempt = {"candidate": label, "rows": 0, "error": None}
+        try:
+            rows = get_eod_data(sid, **kwargs)
+            attempt["rows"] = len(rows)
+            if rows and picked_label is None:
+                picked_rows = rows
+                picked_label = label
+        except EodSheetError as e:
+            attempt["error"] = e.reason
+        except Exception as e:
+            attempt["error"] = f"{type(e).__name__}: {e}"
+        out["candidates_attempted"].append(attempt)
+
+    out["tab_matching_strategy_used"] = picked_label or "none"
+    out["matched_tab_label"]          = picked_label
+    out["raw_eod_rows_in_picked_tab"] = len(picked_rows)
+    out["first_5_raw_rows"]           = picked_rows[:5]
+
+    # Now run compute_delays_aging exactly as the live endpoint does
+    start, end, _ = date_range_for_period(period)
+    aging = compute_delays_aging(picked_rows, start, end)
+    summary = aging["delaysAgeSummary"]
+    by_day = aging["delaysByDay"]
+    out["delaysAgeSummary_computed"] = summary
+    out["delaysByDay_nonempty_days"] = sum(
+        1 for d in by_day if d.get("total", 0) > 0
+    )
+    out["period_window"] = {"start": start, "end": end}
+
+    return out
+
+
 @app.get("/api/debug/employee-raw")
 def debug_employee_raw(team_id: str, name: str, period: str = "monthly"):
     """Diagnostic dump for the Daily Hours chart bug. Returns the raw rows the
