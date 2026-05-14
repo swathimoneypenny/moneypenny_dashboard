@@ -209,19 +209,19 @@ for _tid in list(TEAM_LETTER_MAP.keys()):
 # If a team's roster is empty, all timesheet rows pass through ("include all").
 TEAM_ROSTERS: dict[str, list[str]] = {
     "team_a": ["kokila", "uma", "jayashree r", "jayashree b"],
-    "team_b": ["buela", "ivanjalin sofia", "varshini", "pavithra s", "irfhana"],
+    "team_b": ["buela", "ivanjalin", "varshini", "pavithra s"],
     "team_c": ["grace", "mahalakshmi", "jeevtha s"],
-    "team_d": ["chandra", "yamini", "sharmila", "krithiga", "dharani s", "sandhiya", "sirisha", "swetha s"],
-    "team_e": ["shaalini", "kaviya g", "preethi"],
-    "team_f": ["inbamozhi", "monika", "keerthana"],
+    "team_d": ["chandra", "yamini", "sharmila", "krithiga", "dharani s", "sandhiya", "sirisha", "swetha"],
+    "team_e": ["shaalini", "kaviya", "preethi"],
+    "team_f": ["inbamozhi", "monikaa", "keerthana"],
     "team_g": ["hema", "indra", "amala", "nidisha", "pechi"],
     "team_h": ["deepali", "yashika", "madu"],
-    "team_i": ["radhika", "aparna s", "jeevitha", "sakthi s"],
-    "team_j": ["logeswari", "nisha m", "sindhu"],
+    "team_i": ["radhika", "aparna s", "jeevitha", "sakthi"],
+    "team_j": ["logeswari", "nisha m", "dhana", "sindhu"],
     "team_k": ["karthika", "akshaya", "devadharshini", "keerthana", "jani priya", "rohitha", "abinaya"],
-    "team_l": ["nasreen", "krishna", "swathi", "sarika", "razia h"],
+    "team_l": ["nasreen", "krishna", "swathi", "sarika", "razia"],
     "team_m": ["pavithra", "bhuva", "reshma"],
-    "team_n": ["vino"],
+    "team_n": ["vino", "shivani", "snega"],
     "team_t": ["pragathi"],
 }
 
@@ -421,6 +421,22 @@ def get_userid_to_team_map() -> dict[str, str]:
     return _USERID_TEAM_MAP_CACHE["map"]
 
 
+def _kw_matches_name(kw: str, fullname: str) -> bool:
+    """Does roster keyword `kw` match `fullname` using word-token prefix?
+    Every token in kw must be a prefix of some token in fullname; single-char
+    tokens act as initials. Empty kw → no match.
+    """
+    k = (kw or "").lower().strip()
+    n = (fullname or "").lower().strip()
+    if not k or not n:
+        return False
+    n_tokens = [t for t in re.split(r"[\s\-\.,]+", n) if t]
+    k_tokens = [t for t in re.split(r"[\s\-\.,]+", k) if t]
+    if not n_tokens or not k_tokens:
+        return False
+    return all(any(nt.startswith(kt) for nt in n_tokens) for kt in k_tokens)
+
+
 def staff_in_team(fullname: str, roster: list[str]) -> bool:
     """STRICT word-token matcher. Empty roster ⇒ include all.
 
@@ -431,22 +447,70 @@ def staff_in_team(fullname: str, roster: list[str]) -> bool:
     """
     if not roster:
         return True
-    name_lower = (fullname or "").lower().strip()
-    if not name_lower:
+    if not (fullname or "").strip():
         return False
-    name_tokens = [t for t in re.split(r"[\s\-\.,]+", name_lower) if t]
-    if not name_tokens:
-        return False
-    for r in roster:
-        r_lower = (r or "").lower().strip()
-        if not r_lower:
-            continue
-        r_tokens = [t for t in re.split(r"[\s\-\.,]+", r_lower) if t]
-        if not r_tokens:
-            continue
-        if all(any(nt.startswith(rt) for nt in name_tokens) for rt in r_tokens):
-            return True
-    return False
+    return any(_kw_matches_name(r, fullname) for r in roster)
+
+
+def assign_row_to_team(row: dict) -> str | None:
+    """Pick the single best-fit team_id for this timesheet row.
+
+    Multiple teams may have roster keywords that match the same name (e.g.
+    "Pavithra" matches Team M's "pavithra" AND Team B's "pavithra s"). We
+    disambiguate via:
+      1. row["team"] (TEAM_ADMIN_MAP-derived label) — authoritative when set
+      2. Longest matching roster keyword wins
+      3. Alphabetical team_id as last resort, with a [DEBUG ambiguous] log
+
+    Result is cached on the row dict so each row is computed at most once.
+    """
+    if "_assignedTeam" in row:
+        return row["_assignedTeam"]
+    name = (row.get("name") or "").strip()
+    if not name:
+        row["_assignedTeam"] = None
+        return None
+    matches: list[tuple[str, int]] = []
+    for tid, roster in TEAM_ROSTERS.items():
+        best = 0
+        for kw in roster or []:
+            if _kw_matches_name(kw, name) and len(kw) > best:
+                best = len(kw)
+        if best > 0:
+            matches.append((tid, best))
+
+    result: str | None = None
+    if not matches:
+        result = None
+    elif len(matches) == 1:
+        result = matches[0][0]
+    else:
+        row_team_label = (row.get("team") or "").strip().lower()
+        if row_team_label:
+            for tid, _ in matches:
+                label = TEAM_LETTER_MAP.get(tid, {}).get("label", "").strip().lower()
+                if label and label == row_team_label:
+                    result = tid
+                    break
+        if result is None:
+            ms = sorted(matches, key=lambda x: (-x[1], x[0]))
+            if ms[0][1] > ms[1][1]:
+                result = ms[0][0]
+            else:
+                result = ms[0][0]
+                print(f"[DEBUG ambiguous] name='{name}' rowTeam='{row.get('team')}' matches={matches} → {result}")
+    row["_assignedTeam"] = result
+    return result
+
+
+def row_belongs_to_team(row: dict, team_id: str) -> bool:
+    """True iff the row's best-fit team (via assign_row_to_team) is team_id.
+    Teams with no roster fall back to row["team"] label equality."""
+    roster = TEAM_ROSTERS.get(team_id) or []
+    if not roster:
+        label = TEAM_LETTER_MAP.get(team_id, {}).get("label", "")
+        return (row.get("team") or "").strip().lower() == label.strip().lower()
+    return assign_row_to_team(row) == team_id
 
 # ── In-memory cache ───────────────────────────────────────────────
 _cache: dict = {}
@@ -573,6 +637,54 @@ def get_eod_data(sheet_id: str, tab: str | None = None, gid: str | None = None) 
             "delays":     delays,
         })
     return result
+
+
+def _resolve_eod_rows_for_client(team_id: str, client_name: str) -> tuple[list[dict], str]:
+    """Fetch EOD rows for a client with flexible tab matching.
+
+    Tries in order:
+      1. tab name == client name (e.g. "GFA")
+      2. tab name == client name + " Delays" (e.g. "GFA Delays")
+      3. configured gid (the team's default tab)
+      4. sheet's first tab (no tab/gid specified)
+    Returns (rows, matched_label). matched_label is for the [eod] debug log.
+    Skips any candidate that errors or returns no rows.
+    """
+    cfg = TEAM_LETTER_MAP.get(team_id) or {}
+    sid = cfg.get("sheetId")
+    gid = cfg.get("gid")
+    label_safe = (sid or "")[:8] + ("…" if sid else "")
+    if not sid:
+        print(f"[eod] team={team_id} client={client_name} sheetId=None matchedTab=none rows=0")
+        return [], "none"
+
+    candidates: list[tuple[str, dict]] = []
+    if client_name:
+        candidates.append((f"tab={client_name!r}",         {"tab": client_name}))
+        candidates.append((f"tab={client_name!r}+Delays", {"tab": f"{client_name} Delays"}))
+    if gid:
+        candidates.append((f"gid={gid}", {"gid": gid}))
+    candidates.append(("default-first-tab", {}))
+
+    last_error: str | None = None
+    for label, kwargs in candidates:
+        try:
+            rows = get_eod_data(sid, **kwargs)
+        except EodSheetError as e:
+            last_error = e.reason
+            continue
+        except Exception as e:
+            last_error = str(e)
+            continue
+        if rows:
+            print(f"[eod] team={team_id} client={client_name} sheetId={label_safe} "
+                  f"matchedTab={label} rows={len(rows)}")
+            return rows, label
+
+    err_suffix = f" error={last_error}" if last_error else ""
+    print(f"[eod] team={team_id} client={client_name} sheetId={label_safe} "
+          f"matchedTab=none rows=0{err_suffix}")
+    return [], "none"
 
 
 def _parse_eod_date(date_str: str) -> datetime | None:
@@ -1361,11 +1473,10 @@ async def _team_response(team_id: str, period: str):
     matched_rows = 0
     staff_names_found: set = set()
 
-    # Match priority: manual roster (substring) → admin hierarchy (row['team'] equality).
+    # Match priority: assign_row_to_team (handles multi-team name ambiguity)
+    # → falls back to row["team"] label equality when no roster is configured.
     def _row_matches(row) -> bool:
-        if roster:
-            return staff_in_team((row.get("name") or "").strip(), roster)
-        return (row.get("team") or "").strip().lower() == team_label.strip().lower()
+        return row_belongs_to_team(row, team_id)
 
     for row in rows:
         h = float(row.get("hours", 0))
@@ -1716,7 +1827,7 @@ def debug_team(team_id: str):
     rows = get_cached_rows(start, end)
 
     roster = TEAM_ROSTERS.get(team_id, [])
-    team_rows = [r for r in rows if staff_in_team(r.get("name", ""), roster)]
+    team_rows = [r for r in rows if row_belongs_to_team(r, team_id)]
     team_customers: dict = {}
     for row in team_rows:
         c = (row.get("customer") or "").strip()
@@ -2057,6 +2168,61 @@ def _employee_match(row_name: str, query: str) -> bool:
     return q in r or r in q
 
 
+def _match_employee_rows(rows: list, employee_name: str) -> tuple[list, str]:
+    """Pick the rows belonging to `employee_name` using a cascade of strategies.
+
+    Returns (matched_rows, strategy_label). Strategies tried in order:
+      1. exact_full        — full-name token equality (case-insensitive)
+      2. fullname_prefix   — every token in query is a prefix of some name token
+                             (handles "Pavithra S" → "Pavithra Srinivasan")
+      3. first_name_only   — only the first token of the query matches the first
+                             name token (last-resort, only if 1 and 2 found nothing)
+    """
+    q = (employee_name or "").strip()
+    if not q:
+        return [], "empty_query"
+    q_lower = q.lower()
+    q_tokens = [t for t in re.split(r"[\s\-\.,]+", q_lower) if t]
+    if not q_tokens:
+        return [], "empty_query"
+
+    # 1. Exact full-name equality (tokens equal)
+    exact: list = []
+    for r in rows:
+        n = (r.get("name") or "").lower().strip()
+        n_tokens = [t for t in re.split(r"[\s\-\.,]+", n) if t]
+        if n_tokens == q_tokens:
+            exact.append(r)
+    if exact:
+        return exact, "exact_full"
+
+    # 2. Prefix-tokens: every token in query is a prefix of some token in name.
+    prefix: list = []
+    for r in rows:
+        n = (r.get("name") or "").lower().strip()
+        n_tokens = [t for t in re.split(r"[\s\-\.,]+", n) if t]
+        if not n_tokens:
+            continue
+        if all(any(nt.startswith(qt) for nt in n_tokens) for qt in q_tokens):
+            prefix.append(r)
+    if prefix:
+        return prefix, "fullname_prefix"
+
+    # 3. First-name only fallback
+    first = q_tokens[0]
+    if len(first) < 3:
+        return [], "no_match"
+    first_only: list = []
+    for r in rows:
+        n = (r.get("name") or "").lower().strip()
+        n_tokens = [t for t in re.split(r"[\s\-\.,]+", n) if t]
+        if n_tokens and n_tokens[0].startswith(first):
+            first_only.append(r)
+    if first_only:
+        return first_only, "first_name_only"
+    return [], "no_match"
+
+
 def _build_employee_response(team_id: str, employee_name: str, period: str) -> dict:
     cfg = TEAM_LETTER_MAP.get(team_id)
     if not cfg:
@@ -2065,8 +2231,8 @@ def _build_employee_response(team_id: str, employee_name: str, period: str) -> d
     start, end, label = date_range_for_period(period)
     rows = get_cached_rows(start, end)
 
-    # Filter to this employee's rows
-    emp_rows = [r for r in rows if _employee_match(r.get("name", ""), employee_name)]
+    # Cascade name match (exact → prefix → first-name)
+    emp_rows, strategy = _match_employee_rows(rows, employee_name)
     canonical_name = (emp_rows[0].get("name") if emp_rows else employee_name)
 
     total_h     = sum(float(r.get("hours") or 0) for r in emp_rows)
@@ -2138,13 +2304,16 @@ def _build_employee_response(team_id: str, employee_name: str, period: str) -> d
         else:
             bucket["nonBillable"] += h
 
-    # Build a continuous date series start..end
+    # Build a continuous date series start..min(end, today). Future days in the
+    # period don't belong in the chart.
     daily_out = []
     try:
         start_d = datetime.strptime(start, "%Y-%m-%d")
         end_d   = datetime.strptime(end,   "%Y-%m-%d")
+        today_d = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        cap     = min(end_d, today_d)
         cur = start_d
-        while cur <= end_d:
+        while cur <= cap:
             key = cur.strftime("%Y-%m-%d")
             b = daily_buckets.get(key, {"hours": 0.0, "billable": 0.0, "nonBillable": 0.0})
             daily_out.append({
@@ -2164,6 +2333,10 @@ def _build_employee_response(team_id: str, employee_name: str, period: str) -> d
             }
             for k, v in sorted(daily_buckets.items())
         ]
+
+    print(f"[employee] team={team_id} name={employee_name!r} strategy={strategy} "
+          f"matchedRows={len(emp_rows)} dailyHoursCount={len(daily_out)} "
+          f"totalHours={round(total_h, 1)}")
 
     return {
         "name":             canonical_name,
@@ -2232,11 +2405,9 @@ def _build_leaderboard(team_id: str, period: str) -> dict:
     roster     = TEAM_ROSTERS.get(team_id, [])
     committed  = get_employee_committed_hours(team_id, period)
 
-    # Match the same logic _team_response uses to decide if a row belongs to the team.
+    # Same logic _team_response uses: assign_row_to_team handles multi-team ambiguity.
     def _row_matches(row) -> bool:
-        if roster:
-            return staff_in_team((row.get("name") or "").strip(), roster)
-        return (row.get("team") or "").strip().lower() == team_label.strip().lower()
+        return row_belongs_to_team(row, team_id)
 
     by_emp: dict = {}
     for r in rows:
@@ -2415,19 +2586,23 @@ async def _client_data(client_name: str, period: str):
     eod_error: str | None = None
     has_eod_sheet = False
     sid_present = False
+    matched_tab: str = "none"
     if parent_team:
         cfg = TEAM_LETTER_MAP.get(parent_team) or {}
         sid = cfg.get("sheetId")
-        gid = cfg.get("gid")
         sid_present = bool(sid)
         if sid:
             has_eod_sheet = True
             try:
-                eod_rows = await asyncio.to_thread(get_eod_data, sid, None, gid)
+                eod_rows, matched_tab = await asyncio.to_thread(
+                    _resolve_eod_rows_for_client, parent_team, client_name
+                )
             except EodSheetError as e:
                 eod_error = e.reason
             except Exception as e:
                 eod_error = f"EOD fetch failed: {e}"
+            if has_eod_sheet and not eod_rows and not eod_error:
+                eod_error = f"EOD sheet exists but no tab matches client '{client_name}'."
     aging = compute_delays_aging(eod_rows, start, end) if eod_rows else {
         "delaysAgeSummary": {
             "today": 0, "1to2days": 0, "3to7days": 0, "8plusDays": 0,
@@ -2567,9 +2742,8 @@ def _build_chat_rows_block(view_hint: dict | None) -> str:
     matched = []
     if employee_name:
         # Employee scope wins — single person's rows across all clients.
-        for r in rows:
-            if _employee_match(r.get("name", ""), employee_name):
-                matched.append(r)
+        emp_match_rows, _strategy = _match_employee_rows(rows, employee_name)
+        matched.extend(emp_match_rows)
         scope_label = f"employee {employee_name}"
     elif client_name:
         cn = client_name.lower()
@@ -2585,7 +2759,7 @@ def _build_chat_rows_block(view_hint: dict | None) -> str:
         roster     = TEAM_ROSTERS.get(team_id, [])
         for r in rows:
             if roster:
-                if staff_in_team((r.get("name") or "").strip(), roster):
+                if row_belongs_to_team(r, team_id):
                     matched.append(r)
             else:
                 if (r.get("team") or "").strip().lower() == team_label.strip().lower():
@@ -2597,8 +2771,8 @@ def _build_chat_rows_block(view_hint: dict | None) -> str:
     if not matched:
         return ""
 
-    # Sort by date desc, cap at 40, separate billable / non-billable so LLM can
-    # answer "why did X get N non-billable hours" without missing the obscure ones.
+    # Sort by date desc, separate billable / non-billable so LLM can answer
+    # "why did X get N non-billable hours" without missing the obscure ones.
     def _key(r):
         return (r.get("date") or "")[:10]
     matched.sort(key=_key, reverse=True)
@@ -2608,20 +2782,109 @@ def _build_chat_rows_block(view_hint: dict | None) -> str:
 
     def _fmt(r):
         date = (r.get("date") or "unknown")[:10]
+        emp  = (r.get("name") or "—").strip()
         cust = (r.get("customer") or "—").strip()
         hrs  = float(r.get("hours") or 0)
         desc = (r.get("desc") or "").strip().replace("\n", " ")
         bflag = "billable" if r.get("billable") else "non-billable"
-        return f"- {date} | {hrs:.2f}h ({bflag}) | {cust} — {desc[:160]}"
+        return f"- {date}: {emp} | {cust} | {hrs:.2f}h | {bflag} | {desc[:120]}"
 
     blocks = [f"\nRECENT TIMESHEET ENTRIES for {scope_label} ({label}):"]
     if nonbill:
-        blocks.append(f"\nNON-BILLABLE entries ({len(nonbill)} total):")
-        blocks.extend(_fmt(r) for r in nonbill[:25])
+        blocks.append(f"\nNON-BILLABLE entries ({len(nonbill)} total, showing top {min(len(nonbill), 30)}):")
+        blocks.extend(_fmt(r) for r in nonbill[:30])
     if bill:
-        blocks.append(f"\nBILLABLE entries (showing {min(len(bill), 15)} of {len(bill)} most recent):")
-        blocks.extend(_fmt(r) for r in bill[:15])
+        blocks.append(f"\nBILLABLE entries ({len(bill)} total, showing top {min(len(bill), 30)} most recent):")
+        blocks.extend(_fmt(r) for r in bill[:30])
     return "\n".join(blocks)
+
+
+DELAY_KEYWORDS = (
+    "delay", "delays", "question", "queries", "query", "open", "pending",
+    "eod", "awaiting", "blocker", "blocked", "non-billable", "nonbillable",
+    "non billable", "billable hours", "billable hour", " why ", " why?", "why "
+)
+
+
+def _user_query_mentions_delays(messages: list) -> bool:
+    """Look at the most recent user message and decide if we should pull EOD."""
+    last = ""
+    for m in reversed(messages or []):
+        if m.get("role") == "user":
+            last = (m.get("content") or "").lower()
+            break
+    if not last:
+        return False
+    return any(k.strip() in last for k in DELAY_KEYWORDS)
+
+
+def _build_chat_eod_block(view_hint: dict | None) -> str:
+    """When the user asks about delays/questions/etc., surface recent EOD rows
+    for the relevant team (resolved from team_id, client_name's parent team,
+    or employee's roster team) so the LLM can cite EOD Status + date + query."""
+    if not view_hint or not isinstance(view_hint, dict):
+        return ""
+
+    team_id     = (view_hint.get("teamId") or "").strip()
+    client_name = (view_hint.get("clientName") or "").strip()
+
+    # Resolve team
+    if not team_id and client_name:
+        team_id = find_team_for_client(client_name) or ""
+    if not team_id:
+        return ""
+
+    cfg = TEAM_LETTER_MAP.get(team_id)
+    if not cfg or not cfg.get("sheetId"):
+        return ""
+
+    try:
+        eod_rows = get_eod_data(cfg["sheetId"], gid=cfg.get("gid"))
+    except Exception as e:
+        return f"\nEOD SHEET ROWS: (fetch failed: {e})"
+    if not eod_rows:
+        return ""
+
+    # Last 30 days, most recent first
+    today_d = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    cutoff  = (today_d - timedelta(days=30)).strftime("%Y-%m-%d")
+
+    def _key(r):
+        return (r.get("date") or "")[:10]
+    eod_rows.sort(key=_key, reverse=True)
+    recent = [r for r in eod_rows if (r.get("date") or "")[:10] >= cutoff][:30]
+    if not recent:
+        return ""
+
+    # Status label that's clear to the LLM
+    def _status_label(r):
+        sn = (r.get("statusNorm") or "").lower()
+        if sn == "awaiting_response":
+            return "Awaiting Response"
+        if sn == "in_progress":
+            return "In Progress"
+        if sn == "completed":
+            return "Completed"
+        return (r.get("eodStatus") or "—").strip() or "—"
+
+    # For client scope, attribute the EOD row to that specific client; otherwise team label.
+    attribution = client_name or cfg.get("label") or team_id
+
+    def _fmt(r):
+        date  = (r.get("date") or "unknown")[:10]
+        stat  = _status_label(r)
+        book  = float(r.get("booked") or 0)
+        com   = float(r.get("committed") or 0)
+        qtext = (r.get("queryText") or "").strip().replace("\n", " ")
+        if not qtext:
+            qtext = (r.get("notes") or "").strip().replace("\n", " ")
+        return f"- {date} | {attribution} | EOD status: {stat} | booked: {book:.1f}/committed: {com:.1f} | query: {qtext[:120]}"
+
+    header = (
+        f"\nEOD SHEET ROWS for {attribution} "
+        f"(last 30 days, {len(recent)} entries, most recent first):"
+    )
+    return "\n".join([header, *(_fmt(r) for r in recent)])
 
 
 @app.post("/api/chat")
@@ -2629,32 +2892,39 @@ async def chat(request: dict):
     messages   = request.get("messages", [])
     context    = request.get("context", "")
     view_hint  = request.get("viewHint")
-    rows_block = await asyncio.to_thread(_build_chat_rows_block, view_hint)
+    include_eod = _user_query_mentions_delays(messages)
 
-    system_prompt = f"""You are MoneyPenny AI analyzing real timesheet data.
+    rows_block, eod_block = await asyncio.gather(
+        asyncio.to_thread(_build_chat_rows_block, view_hint),
+        asyncio.to_thread(_build_chat_eod_block, view_hint) if include_eod else asyncio.sleep(0, result=""),
+    )
+
+    system_prompt = f"""You are MoneyPenny AI analyzing real timesheet and EOD data.
 
 REAL DATA RIGHT NOW:
 {context}
 {rows_block}
+{eod_block}
 
 Answer questions directly using ONLY this data.
-- When the user asks about a specific entry, ALWAYS cite the exact date and
-  whether the entry was billable or non-billable.
-- If asked "why did X get Y non-billable hours" or "what did X work on",
-  list each matching entry with: date, hours, client, and the description.
-  Quote the description text when relevant.
-- Format dates as "YYYY-MM-DD". Sum hours when there are multiple entries.
-- Use the RECENT TIMESHEET ENTRIES block above — every row there is real data
-  with a real date. Never say "I don't have the date" if the entry is there.
-- Give specific numbers, not generic advice.
-- Keep response under 120 words. Use bullet points when listing multiple entries.
+- When the user asks about delays, questions, non-billable hours, or specific
+  entries, ALWAYS cite the date (YYYY-MM-DD) and the source (timesheet entry
+  vs EOD sheet). Never say "I don't have the date" — the date IS in the data.
+- If asked "why" a person or client has a value, list each contributing entry
+  with date, hours, and a brief description. If there are many, show the top 5
+  by hours or recency.
+- For EOD rows, ALWAYS mention the EOD Status (Completed / In Progress /
+  Awaiting Response) and the query text if present.
+- Format dates as YYYY-MM-DD. Sum hours when there are multiple entries.
+- Give specific numbers, not generic advice. Keep response under 150 words.
+  Use bullet points when listing multiple entries.
 
 Status thresholds: BELOW TARGET <75% | ON TARGET 75-95% | OVER TARGET 95-120% | CRITICAL >120%"""
 
     response = groq_client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[{"role": "system", "content": system_prompt}, *messages],
-        max_tokens=220,
+        max_tokens=260,
         temperature=0.2,
     )
     return {"reply": response.choices[0].message.content}
