@@ -56,23 +56,24 @@ export const TEAMS = [
 ];
 
 export const C = {
-  bg:      "#060d1a",
-  surface: "#0b1929",
-  card:    "#0e2040",
-  border:  "#1a3356",
+  bg:      "#0A1628",
+  surface: "#0C1B33",
+  card:    "#0F1F3A",
+  border:  "#1F2D45",
 
-  teal:   "#00c896",
-  blue:   "#3d8ef0",
-  green:  "#1db954",
-  red:    "#e53e3e",
-  orange: "#ed8936",
-  purple: "#9f7aea",
+  teal:   "#3DC58B",
+  blue:   "#4A8FE7",
+  green:  "#3DC58B",
+  red:    "#E25C5C",
+  orange: "#F2895A",
+  yellow: "#F0B947",
+  purple: "#9B7EE8",
 
-  pri:   "#edf2f7",
-  sec:   "#6b93b8",
-  muted: "#3d6080",
+  pri:   "#E8EDF5",
+  sec:   "#9DB1CC",
+  muted: "#6B7A95",
 
-  statusGreen:  "#0d2a1a",
-  statusRed:    "#2d1010",
-  statusOrange: "#2d1e08",
+  statusGreen:  "rgba(61,197,139,0.12)",
+  statusRed:    "rgba(226,92,92,0.12)",
+  statusOrange: "rgba(242,137,90,0.12)",
 };

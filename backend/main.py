@@ -2284,6 +2284,44 @@ async def _client_data(client_name: str, period: str):
     return result
 
 
+@app.get("/api/debug/unmapped-clients")
+def debug_unmapped_clients():
+    """Aggregate hours from this month's timesheet rows by customer name and
+    flag the ones that don't resolve to any team in TEAM_CLIENTS. Use this to
+    discover clients that need to be added to the per-team config."""
+    start, end, _ = date_range_for_period("monthly")
+    try:
+        rows = get_cached_rows(start, end)
+    except Exception as e:
+        return {"error": str(e), "rows": []}
+
+    agg: dict[str, dict] = {}
+    for r in rows:
+        cust = (r.get("customer") or "").strip()
+        if not cust:
+            continue
+        team_id = find_team_for_client(cust)
+        entry = agg.setdefault(cust, {
+            "clientName": cust,
+            "totalHours": 0.0,
+            "rowCount":   0,
+            "teamId":     team_id,
+        })
+        entry["totalHours"] += float(r.get("hours") or 0)
+        entry["rowCount"]   += 1
+
+    unmapped = [
+        {**v, "totalHours": round(v["totalHours"], 1)}
+        for v in agg.values() if v["teamId"] is None
+    ]
+    unmapped.sort(key=lambda x: -x["totalHours"])
+    return {
+        "range":   {"start": start, "end": end},
+        "count":   len(unmapped),
+        "rows":    unmapped,
+    }
+
+
 @app.get("/api/clear-cache")
 @app.post("/api/clear-cache")
 async def clear_cache():

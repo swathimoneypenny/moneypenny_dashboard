@@ -10,6 +10,7 @@ import {
   Legend,
   ResponsiveContainer,
   Cell,
+  LabelList,
 } from "recharts";
 
 const PERIODS = [
@@ -182,11 +183,23 @@ ${lines.join("\n")}`;
     });
   }, [data]);
 
+  const dailyChartHasData = useMemo(
+    () => dailyChart.some((d) => (d.Billable ?? 0) > 0 || (d.NonBillable ?? 0) > 0),
+    [dailyChart],
+  );
+
   const topClientsChart = useMemo(
-    () => (data?.topClients ?? []).map((c) => ({
-      name:  c.client,
-      Hours: Number(c.hours) || 0,
-    })),
+    () => (data?.topClients ?? [])
+      .slice()
+      .sort((a, b) => (Number(b.hours) || 0) - (Number(a.hours) || 0))
+      .slice(0, 5)
+      .map((c) => {
+        const hours    = Number(c.hours) || 0;
+        const billable = Number(c.billable) || 0;
+        const ratio    = hours > 0 ? billable / hours : 0;
+        const color    = ratio >= 0.95 ? C.green : ratio >= 0.75 ? C.orange : C.red;
+        return { name: c.client, Hours: Number(hours.toFixed(1)), color };
+      }),
     [data],
   );
 
@@ -318,9 +331,9 @@ ${lines.join("\n")}`;
         <ChartCard title="Daily Hours">
           {loading ? (
             <div className="kpi-skeleton" style={{ height: 260 }} />
-          ) : dailyChart.length === 0 ? (
+          ) : !dailyChartHasData ? (
             <div style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic" }}>
-              No hours logged in this period.
+              No data for this period.
             </div>
           ) : (
             <ResponsiveContainer width="100%" height={260}>
@@ -349,19 +362,29 @@ ${lines.join("\n")}`;
         {/* Top Clients chart */}
         <ChartCard title="Top Clients">
           {loading ? (
-            <div className="kpi-skeleton" style={{ height: 220 }} />
+            <div className="kpi-skeleton" style={{ height: 200 }} />
           ) : topClientsChart.length === 0 ? (
-            <div style={{ height: 220, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic" }}>
+            <div style={{ height: 200, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic" }}>
               No client hours yet.
             </div>
           ) : (
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={topClientsChart} layout="vertical" barGap={4} barCategoryGap="25%">
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={topClientsChart} layout="vertical" margin={{ top: 4, right: 56, left: 4, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} horizontal={false} />
                 <XAxis type="number" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
                 <YAxis dataKey="name" type="category" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} width={140} />
                 <Tooltip content={<DarkTooltip />} />
-                <Bar dataKey="Hours" fill={C.blue} radius={[0, 4, 4, 0]} />
+                <Bar dataKey="Hours" radius={[0, 4, 4, 0]} barSize={28}>
+                  {topClientsChart.map((entry, i) => (
+                    <Cell key={i} fill={entry.color} />
+                  ))}
+                  <LabelList
+                    dataKey="Hours"
+                    position="right"
+                    formatter={(v) => `${Number(v).toFixed(1)}h`}
+                    style={{ fill: C.pri, fontSize: 11 }}
+                  />
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           )}

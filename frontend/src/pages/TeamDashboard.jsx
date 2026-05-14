@@ -38,10 +38,72 @@ function statusInfo(pct) {
 }
 
 function delayColor(count) {
-  if (count <= 0) return C.muted;
-  if (count <= 2) return "#f6c343";
-  if (count <= 5) return C.orange;
+  if (count <= 0) return C.green;
+  if (count <= 2) return "#F0B947";
+  if (count <= 5) return "#F2895A";
   return C.red;
+}
+
+function delaySeverity(count) {
+  if (count <= 0) return "clean";
+  if (count <= 2) return "minor";
+  if (count <= 5) return "moderate";
+  return "critical";
+}
+
+function DelayTooltip({ active, payload }) {
+  if (!active || !payload?.length) return null;
+  const p = payload[0]?.payload ?? {};
+  const count = p.delays ?? 0;
+  const sev = delaySeverity(count);
+  const sevColor = delayColor(count);
+  return (
+    <div
+      style={{
+        background: "rgba(11,25,41,0.95)",
+        backdropFilter: "blur(10px)",
+        border: `1px solid ${C.border}`,
+        borderRadius: 8,
+        padding: "10px 14px",
+        fontSize: 12,
+        color: C.pri,
+        boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+        maxWidth: 280,
+      }}
+    >
+      <div style={{ fontWeight: 600, marginBottom: 4, color: C.sec }}>
+        {p.fullDate || `Day ${p.date}`}
+      </div>
+      <div style={{ color: sevColor, marginBottom: p.longest ? 4 : 0, fontFamily: "'DM Mono', monospace" }}>
+        {count} delay{count === 1 ? "" : "s"} · <span style={{ textTransform: "uppercase", letterSpacing: 0.5 }}>{sev}</span>
+      </div>
+      {p.longest && (
+        <div style={{ color: C.muted, fontSize: 11, fontStyle: "italic", lineHeight: 1.4 }}>
+          “{p.longest}”
+        </div>
+      )}
+    </div>
+  );
+}
+
+const DELAY_LEGEND = [
+  { color: "#3DC58B", label: "0 clean" },
+  { color: "#F0B947", label: "1-2 minor" },
+  { color: "#F2895A", label: "3-5 moderate" },
+  { color: "#E25C5C", label: "6+ critical" },
+];
+
+function DelayLegend() {
+  return (
+    <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 10, fontSize: 11, color: C.muted }}>
+      {DELAY_LEGEND.map(({ color, label }) => (
+        <div key={label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ width: 10, height: 10, borderRadius: 2, background: color }} />
+          {label}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function initials(name) {
@@ -974,7 +1036,7 @@ ${clients.map((o) => (
     const curMonth = now.getMonth();
     const today    = now.getDate();
 
-    // Build map: day-of-month → delay count from any matching EOD row
+    // Build map: day-of-month → { count, fullDate, longest delay note }
     const byDay = {};
     (eod || []).forEach((row) => {
       const dateStr = String(row?.date ?? "");
@@ -991,12 +1053,31 @@ ${clients.map((o) => (
       if (Number.isNaN(d.getTime())) return;
       if (d.getFullYear() !== curYear || d.getMonth() !== curMonth) return;
       const day = d.getDate();
-      byDay[day] = (byDay[day] || 0) + (Number(row?.delays ?? 0) || 0);
+      const entry = byDay[day] || { count: 0, notes: [] };
+      entry.count += Number(row?.delays ?? 0) || 0;
+      const notesStr = String(row?.notes ?? "").trim();
+      if (notesStr) {
+        for (const line of notesStr.split("\n")) {
+          const t = line.trim();
+          if (t) entry.notes.push(t);
+        }
+      }
+      byDay[day] = entry;
     });
 
+    const monthLabel = now.toLocaleString("default", { month: "short" });
     const out = [];
     for (let day = 1; day <= today; day++) {
-      out.push({ date: String(day), delays: byDay[day] || 0 });
+      const entry = byDay[day] || { count: 0, notes: [] };
+      const longest = entry.notes.length
+        ? (entry.notes.reduce((a, b) => (b.length > a.length ? b : a), "").slice(0, 60))
+        : "";
+      out.push({
+        date: String(day),
+        fullDate: `${monthLabel} ${day}, ${curYear}`,
+        delays: entry.count,
+        longest,
+      });
     }
     return out;
   }, [eod]);
@@ -1328,31 +1409,37 @@ ${clients.map((o) => (
                   : "No EOD data available."}
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={delaysData} margin={{ top: 4, right: 8, left: -18, bottom: 36 }}>
-                  <CartesianGrid vertical={false} stroke={C.border} strokeDasharray="3 3" />
-                  <XAxis
-                    dataKey="date"
-                    tick={{ fill: C.sec, fontSize: 10 }}
-                    axisLine={false}
-                    tickLine={false}
-                    interval={0}
-                    angle={-45}
-                    textAnchor="end"
-                    height={50}
-                  />
-                  <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} />
-                  <Tooltip content={<DarkTooltip />} formatter={(v) => [`${v} delays`, "Delays"]} />
-                  <Bar dataKey="delays" name="Delays" radius={[4, 4, 0, 0]}>
-                    {delaysData.map((d, i) => (
-                      <Cell
-                        key={i}
-                        fill={d.delays === 0 ? C.green : d.delays <= 3 ? C.orange : C.red}
+              <>
+                <DelayLegend />
+                <ResponsiveContainer width="100%" height={230}>
+                  <BarChart data={delaysData} margin={{ top: 18, right: 8, left: -18, bottom: 36 }}>
+                    <CartesianGrid vertical={false} stroke={C.border} strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fill: C.sec, fontSize: 10 }}
+                      axisLine={false}
+                      tickLine={false}
+                      interval={0}
+                      angle={-45}
+                      textAnchor="end"
+                      height={50}
+                    />
+                    <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} />
+                    <Tooltip content={<DelayTooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
+                    <Bar dataKey="delays" name="Delays" radius={[4, 4, 0, 0]} minPointSize={3}>
+                      {delaysData.map((d, i) => (
+                        <Cell key={i} fill={delayColor(d.delays)} />
+                      ))}
+                      <LabelList
+                        dataKey="delays"
+                        position="top"
+                        formatter={(v) => (v > 0 ? v : "")}
+                        style={{ fill: C.pri, fontSize: 10 }}
                       />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </>
             )}
           </ChartCard>
         </div>
