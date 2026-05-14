@@ -1057,11 +1057,15 @@ ${clients.map((o) => (
       });
   }, [eod, data]);
 
-  // Real client rows only — exclude "Internal / Other" from the per-org charts.
-  // Backend marks the bucket with isInternalOther=true; name match is a safety net.
+  // Real client rows only — exclude "Internal / Other" AND configured clients
+  // with zero actual hours this period (they're still kept in the PerfTable as
+  // "—" rows). Backend marks Internal/Other via isInternalOther=true.
   const chartClients = useMemo(
     () => clients.filter(
-      (o) => !o.isInternalOther && (o.name ?? "").toLowerCase() !== "internal / other"
+      (o) =>
+        !o.isInternalOther &&
+        (o.name ?? "").toLowerCase() !== "internal / other" &&
+        (Number(o.total ?? 0) > 0)
     ),
     [clients]
   );

@@ -324,41 +324,40 @@ TEAM_CLIENTS: dict[str, list[dict]] = {
 
 def find_team_for_client(client_name: str) -> str | None:
     """Reverse-lookup: which team owns this client? Returns team_id or None.
-    Uses the same case-insensitive substring match against tsMatch keywords."""
-    cn = (client_name or "").lower()
-    if not cn:
+    Uses fuzzy_contains so "GFA Inc." matches tsMatch "GFA", "Wiebe-Hinton"
+    matches "Wiebe", etc. Picks the longest normalized keyword on tie."""
+    if not (client_name or "").strip():
         return None
     best: tuple[int, str] | None = None
     for team_id, clients in TEAM_CLIENTS.items():
         for c in clients:
             for kw in c.get("tsMatch", []):
-                kw_lower = (kw or "").lower()
-                if kw_lower and kw_lower in cn:
-                    if best is None or len(kw_lower) > best[0]:
-                        best = (len(kw_lower), team_id)
+                kw_norm_len = len(_normalize_for_match(kw))
+                if kw_norm_len == 0:
+                    continue
+                if fuzzy_contains(client_name, kw):
+                    if best is None or kw_norm_len > best[0]:
+                        best = (kw_norm_len, team_id)
     return best[1] if best else None
 
 
 def _resolve_client_for_team(team_id: str, customer: str, desc: str = "") -> str | None:
     """Return the canonical client name from TEAM_CLIENTS[team_id] that matches
-    `customer` (or `desc` as fallback). None if no match found.
-
-    Picks the longest matching keyword to handle "Tim Thompson" vs "Tim Thompson TX"
-    style overlaps within a single team."""
+    `customer` (or `desc` as fallback) using fuzzy_contains (case + punctuation
+    insensitive). Picks the longest matching keyword to handle "Tim Thompson"
+    vs "Tim Thompson TX" overlaps."""
     cfg = TEAM_CLIENTS.get(team_id) or []
     if not cfg:
         return None
-    cust_lower = (customer or "").lower()
-    desc_lower = (desc or "").lower()
     best: tuple[int, str] | None = None  # (keyword length, client_name)
     for client in cfg:
         for kw in client.get("tsMatch", []):
-            kw_lower = kw.lower()
-            if not kw_lower:
+            kw_norm_len = len(_normalize_for_match(kw))
+            if kw_norm_len == 0:
                 continue
-            if kw_lower in cust_lower or kw_lower in desc_lower:
-                if best is None or len(kw_lower) > best[0]:
-                    best = (len(kw_lower), client["name"])
+            if fuzzy_contains(customer, kw) or fuzzy_contains(desc, kw):
+                if best is None or kw_norm_len > best[0]:
+                    best = (kw_norm_len, client["name"])
     return best[1] if best else None
 
 
@@ -1015,6 +1014,26 @@ def get_date_range(period: str):
     return date_range_for_period(period)
 
 
+_FUZZY_STRIP = re.compile(r"[\s\-\.\(\)/,'_&]+")
+
+
+def _normalize_for_match(s: str) -> str:
+    """Lowercase + strip whitespace, dashes, dots, parens, slashes, commas,
+    apostrophes, underscores, ampersands for fuzzy customer-name comparison.
+    "24Hr Bookkeeper" → "24hrbookkeeper" matches "24hr-bookkeeper" →
+    "24hrbookkeeper"."""
+    return _FUZZY_STRIP.sub("", (s or "").lower())
+
+
+def fuzzy_contains(haystack: str, needle: str) -> bool:
+    """True iff `needle` appears in `haystack` after normalizing both
+    (case-insensitive, punctuation-insensitive, whitespace-insensitive)."""
+    n = _normalize_for_match(needle)
+    if not n:
+        return False
+    return n in _normalize_for_match(haystack)
+
+
 def _normalize_date(date_raw) -> str:
     """Normalize any reasonable date input to 'YYYY-MM-DD'.
     Handles: 'YYYY-MM-DD', 'YYYY-MM-DDTHH:MM:SS', 'M/D/YYYY', 'M/D/YY',
@@ -1495,6 +1514,9 @@ async def _team_response(team_id: str, period: str):
             "estHrs":      cfg_entry.get("estHrs", 0),
             "tz":          cfg_entry.get("tz", ""),
             "meeting":     cfg_entry.get("meeting", "No scheduled meeting"),
+            "tsMatch":     list(cfg_entry.get("tsMatch") or []),
+            "matchedCustomers": set(),
+            "rowsMatched": 0,
             "isConfig":    True,
         }
     orgs["Internal / Other"] = {
@@ -1504,6 +1526,9 @@ async def _team_response(team_id: str, period: str):
         "estHrs":      0,
         "tz":          "",
         "meeting":     "",
+        "tsMatch":     [],
+        "matchedCustomers": set(),
+        "rowsMatched": 0,
         "isConfig":    False,
     }
 
@@ -1546,6 +1571,9 @@ async def _team_response(team_id: str, period: str):
         else:
             bucket["nonBillable"] += h
         bucket["staff"].add(fullname)
+        bucket["rowsMatched"] += 1
+        if customer:
+            bucket["matchedCustomers"].add(customer)
 
     clients_data = []
     for org_name, h in orgs.items():
@@ -1576,6 +1604,8 @@ async def _team_response(team_id: str, period: str):
             "utilPct":     util,
             "gap":         gap,
             "staffCount":  len(h["staff"]),
+            "rowsMatched":     h["rowsMatched"],
+            "matchedCustomers": sorted(h["matchedCustomers"]),
             "delays":      0,
             "status":      status,
             "timezone":    h["tz"],
@@ -1583,6 +1613,11 @@ async def _team_response(team_id: str, period: str):
             "isPlaceholder": h["isConfig"] and committed == 0 and actual == 0,
             "isInternalOther": not h["isConfig"],
         })
+        if h["isConfig"]:
+            print(f"[client-match] team={team_id} client={org_name!r} "
+                  f"tsMatchTried={h['tsMatch']} "
+                  f"customersMatched={sorted(h['matchedCustomers'])} "
+                  f"rowsMatched={h['rowsMatched']} hours={round(actual, 1)}")
 
     # Sort: configured clients first (by actual desc), Internal / Other last (only if non-zero).
     def _sort_key(c):
@@ -1643,6 +1678,10 @@ async def _team_response(team_id: str, period: str):
     print(f"[_team_response] team={team_id} period={period} "
           f"rosterCount={len(roster)} totalRows={total_rows} matchedRows={matched_rows} "
           f"orgs={len(clients_data)} eodRows={len(eod_rows)} months={len(monthly_trend)}")
+
+    if roster and len(roster) == 1 and matched_rows == 0 and total_rows > 0:
+        print(f"[WARN] {team_id} roster has only 1 entry {roster!r} but matched 0 rows. "
+              f"This team may need additional preparers added to TEAM_ROSTERS.")
 
     return {
         "team":             cfg.get("label", team_id),
@@ -2697,6 +2736,85 @@ def debug_unmapped_clients():
         "range":   {"start": start, "end": end},
         "count":   len(unmapped),
         "rows":    unmapped,
+    }
+
+
+@app.get("/api/debug/client-coverage")
+def debug_client_coverage(team_id: str):
+    """Per-configured-client coverage report for one team.
+
+    For every entry in TEAM_CLIENTS[team_id]: list the timesheet customer
+    names that fuzzy-matched its tsMatch, how many rows hit, and total hours.
+    Also lists unmapped customers (rows whose customer didn't fuzzy-match any
+    of this team's configured clients but DO belong to one of the team's
+    members per row_belongs_to_team).
+    """
+    if team_id not in TEAM_LETTER_MAP:
+        return {"error": f"unknown team_id {team_id}"}
+    start, end, _ = date_range_for_period("monthly")
+    try:
+        rows = get_cached_rows(start, end)
+    except Exception as e:
+        return {"error": str(e), "team_id": team_id}
+
+    cfg_list = TEAM_CLIENTS.get(team_id) or []
+    per_client: dict[str, dict] = {
+        c["name"]: {
+            "name":             c["name"],
+            "tsMatch":          list(c.get("tsMatch") or []),
+            "matchedCustomers": set(),
+            "rowsMatched":      0,
+            "hours":            0.0,
+        }
+        for c in cfg_list
+    }
+    unmapped: dict[str, dict] = {}
+
+    for r in rows:
+        if not row_belongs_to_team(r, team_id):
+            continue
+        cust = (r.get("customer") or "").strip()
+        if not cust:
+            continue
+        h = float(r.get("hours") or 0)
+        if h <= 0:
+            continue
+        resolved = _resolve_client_for_team(team_id, cust, r.get("desc") or "")
+        if resolved and resolved in per_client:
+            entry = per_client[resolved]
+            entry["matchedCustomers"].add(cust)
+            entry["rowsMatched"] += 1
+            entry["hours"]       += h
+        else:
+            u = unmapped.setdefault(cust, {
+                "customerName": cust, "hours": 0.0, "rowCount": 0,
+            })
+            u["hours"]    += h
+            u["rowCount"] += 1
+
+    configured_out = []
+    for name, e in per_client.items():
+        configured_out.append({
+            "name":             name,
+            "tsMatch":          e["tsMatch"],
+            "matchedCustomers": sorted(e["matchedCustomers"]),
+            "rowsMatched":      e["rowsMatched"],
+            "hours":            round(e["hours"], 1),
+        })
+    configured_out.sort(key=lambda x: -x["hours"])
+
+    unmapped_out = [
+        {**v, "hours": round(v["hours"], 1)}
+        for v in unmapped.values()
+    ]
+    unmapped_out.sort(key=lambda x: -x["hours"])
+
+    return {
+        "team_id":             team_id,
+        "team_label":          TEAM_LETTER_MAP[team_id].get("label", team_id),
+        "range":               {"start": start, "end": end},
+        "configured_clients":  configured_out,
+        "unmapped_customers":  unmapped_out,
     }
 
 
