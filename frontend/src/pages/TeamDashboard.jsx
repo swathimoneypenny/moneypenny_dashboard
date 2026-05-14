@@ -45,9 +45,10 @@ function delayColor(count) {
 }
 
 const AGING_LEGEND = [
-  { color: C.green,  label: "Completed" },
-  { color: C.yellow, label: "In Progress" },
-  { color: C.orange, label: "Awaiting Response" },
+  { color: "#3DC58B", label: "Completed" },
+  { color: "#F0B947", label: "Fresh (0-2d)" },
+  { color: "#F2895A", label: "Aging (3-7d)" },
+  { color: "#E25C5C", label: "Overdue (8+d)" },
 ];
 
 function AgingLegend() {
@@ -64,23 +65,27 @@ function AgingLegend() {
 }
 
 function AgingCard({ label, value, color, pulse }) {
+  const active = (value ?? 0) > 0;
+  const borderColor = active ? color : C.border;
+  const numberColor = active ? color : C.muted;
   return (
     <div
       style={{
         flex: "1 1 0",
         minWidth: 80,
         background: C.surface,
-        border: `1px solid ${color}55`,
+        border: `2px solid ${borderColor}`,
         borderRadius: 8,
         padding: "10px 12px",
         textAlign: "center",
-        animation: pulse ? "pulseRed 1.6s ease-in-out infinite" : "none",
+        animation: pulse && active ? "pulseRed 1.6s ease-in-out infinite" : "none",
+        transition: "border-color 0.2s",
       }}
     >
       <div style={{ fontSize: 9, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>
         {label}
       </div>
-      <div style={{ fontSize: 22, fontWeight: 700, color, fontFamily: "'DM Mono', monospace", lineHeight: 1 }}>
+      <div style={{ fontSize: 22, fontWeight: 700, color: numberColor, fontFamily: "'DM Mono', monospace", lineHeight: 1 }}>
         {value ?? 0}
       </div>
     </div>
@@ -92,13 +97,13 @@ function AgingSummaryRow({ summary }) {
   const t12    = summary?.["1to2days"] ?? 0;
   const t37    = summary?.["3to7days"] ?? 0;
   const t8plus = summary?.["8plusDays"] ?? 0;
-  const todayColor = today === 0 ? C.green : today <= 3 ? C.yellow : C.orange;
+  const todayColor = today === 0 ? "#3DC58B" : "#F0B947";
   return (
     <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
       <AgingCard label="Today"          value={today}  color={todayColor} />
-      <AgingCard label="1-2 Days"       value={t12}    color={C.yellow} />
-      <AgingCard label="3-7 Days"       value={t37}    color={C.orange} />
-      <AgingCard label="8+ Days Overdue" value={t8plus} color={C.red} pulse={t8plus > 0} />
+      <AgingCard label="1-2 Days"       value={t12}    color="#F0B947" />
+      <AgingCard label="3-7 Days"       value={t37}    color="#F2895A" />
+      <AgingCard label="8+ Days Overdue" value={t8plus} color="#E25C5C" pulse />
     </div>
   );
 }
@@ -106,7 +111,7 @@ function AgingSummaryRow({ summary }) {
 function AgingTooltip({ active, payload }) {
   if (!active || !payload?.length) return null;
   const p = payload[0]?.payload ?? {};
-  const total = (p.Completed ?? 0) + (p["In Progress"] ?? 0) + (p["Awaiting Response"] ?? 0);
+  const total = (p.Completed ?? 0) + (p.Fresh ?? 0) + (p.Aging ?? 0) + (p.Overdue ?? 0);
   return (
     <div
       style={{
@@ -128,13 +133,16 @@ function AgingTooltip({ active, payload }) {
         Total: {total}
       </div>
       {(p.Completed ?? 0) > 0 && (
-        <div style={{ color: C.green, fontSize: 11 }}>Completed: {p.Completed}</div>
+        <div style={{ color: "#3DC58B", fontSize: 11 }}>Completed: {p.Completed}</div>
       )}
-      {(p["In Progress"] ?? 0) > 0 && (
-        <div style={{ color: C.yellow, fontSize: 11 }}>In Progress: {p["In Progress"]}</div>
+      {(p.Fresh ?? 0) > 0 && (
+        <div style={{ color: "#F0B947", fontSize: 11 }}>Fresh (0-2d): {p.Fresh}</div>
       )}
-      {(p["Awaiting Response"] ?? 0) > 0 && (
-        <div style={{ color: C.orange, fontSize: 11 }}>Awaiting Response: {p["Awaiting Response"]}</div>
+      {(p.Aging ?? 0) > 0 && (
+        <div style={{ color: "#F2895A", fontSize: 11 }}>Aging (3-7d): {p.Aging}</div>
+      )}
+      {(p.Overdue ?? 0) > 0 && (
+        <div style={{ color: "#E25C5C", fontSize: 11 }}>Overdue (8+d): {p.Overdue}</div>
       )}
       {p.queryPreview && (
         <div style={{ marginTop: 6, color: C.muted, fontSize: 11, fontStyle: "italic", lineHeight: 1.4 }}>
@@ -157,8 +165,9 @@ function buildAgingChartData(delaysByDay) {
       fullDate: dateStr,
       fullDateLabel: dt ? `${monthLabel} ${day}, ${yr}` : dateStr,
       Completed: Number(d.completed) || 0,
-      "In Progress": Number(d.inProgress) || 0,
-      "Awaiting Response": Number(d.awaitingResponse) || 0,
+      Fresh:     Number(d.fresh)     || 0,
+      Aging:     Number(d.aging)     || 0,
+      Overdue:   Number(d.overdue)   || 0,
       queryPreview: d.queryPreview || "",
     };
   });
@@ -1454,9 +1463,10 @@ ${clients.map((o) => (
                     />
                     <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} />
                     <Tooltip content={<AgingTooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
-                    <Bar dataKey="Completed"         stackId="a" fill={C.green} />
-                    <Bar dataKey="In Progress"       stackId="a" fill={C.yellow} />
-                    <Bar dataKey="Awaiting Response" stackId="a" fill={C.orange} radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="Completed" stackId="a" fill="#3DC58B" />
+                    <Bar dataKey="Fresh"     stackId="a" fill="#F0B947" />
+                    <Bar dataKey="Aging"     stackId="a" fill="#F2895A" />
+                    <Bar dataKey="Overdue"   stackId="a" fill="#E25C5C" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </>

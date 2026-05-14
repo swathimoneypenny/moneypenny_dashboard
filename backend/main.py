@@ -706,12 +706,18 @@ def _parse_eod_date(date_str: str) -> datetime | None:
 def compute_delays_aging(eod_rows: list[dict], period_start: str, period_end: str) -> dict:
     """Build aging-report aggregates from EOD rows for the given period.
 
-    Returns:
-      delaysAgeSummary: {today, 1to2days, 3to7days, 8plusDays, totalOpen,
-                         oldestDays, oldestQuery}
-      delaysByDay:     [{date, totalDelays, completed, inProgress,
-                         awaitingResponse, hasQuery, queryPreview, ageDays}, ...]
-                       one entry per day from day 1 of the month up to today
+    Per-day age tiers on each delaysByDay entry:
+      - completed: rows whose status normalized to "completed" (any age)
+      - fresh:    open rows aged 0-2 days
+      - aging:    open rows aged 3-7 days
+      - overdue:  open rows aged 8+ days
+      - total:    completed + fresh + aging + overdue
+    A row is "open" iff its statusNorm is not "completed" (or fell back to
+    in_progress via the missing-status heuristic below).
+
+    delaysAgeSummary keeps the per-card buckets the cards on the dashboard
+    expect: today (age 0), 1to2days (age 1-2), 3to7days (age 3-7),
+    8plusDays (age 8+), plus totalOpen and the oldest open query.
     """
     now = datetime.now()
     today_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -744,22 +750,33 @@ def compute_delays_aging(eod_rows: list[dict], period_start: str, period_end: st
         day_rows = by_day.get(key, [])
         age_days = max(0, (today_date - cur).days)
 
-        completed_ct = sum(1 for r in day_rows if r.get("statusNorm") == "completed")
-        in_prog_ct   = sum(1 for r in day_rows if r.get("statusNorm") == "in_progress")
-        awaiting_ct  = sum(1 for r in day_rows if r.get("statusNorm") == "awaiting_response")
-        # Rows with no explicit status fall back to "completed" if hours look healthy,
-        # else "in_progress" so they're flagged for review.
+        completed_ct = 0
+        open_ct      = 0
         for r in day_rows:
-            if r.get("statusNorm"):
-                continue
-            committed = float(r.get("committed") or 0)
-            booked    = float(r.get("booked") or 0)
-            if committed > 0 and booked >= committed * 0.75:
+            sn = (r.get("statusNorm") or "").lower()
+            if sn == "completed":
                 completed_ct += 1
+            elif sn in ("in_progress", "awaiting_response"):
+                open_ct += 1
             else:
-                in_prog_ct += 1
+                # Missing status — infer from hours: healthy = completed,
+                # otherwise treat as open so it's flagged for review.
+                committed = float(r.get("committed") or 0)
+                booked    = float(r.get("booked") or 0)
+                if committed > 0 and booked >= committed * 0.75:
+                    completed_ct += 1
+                else:
+                    open_ct += 1
 
-        total_today = completed_ct + in_prog_ct + awaiting_ct
+        # Stack-bar age tiers for OPEN rows only (completed is its own tier
+        # regardless of age — once it's done it's done).
+        if age_days <= 2:
+            fresh_ct, aging_ct, overdue_ct = open_ct, 0, 0
+        elif age_days <= 7:
+            fresh_ct, aging_ct, overdue_ct = 0, open_ct, 0
+        else:
+            fresh_ct, aging_ct, overdue_ct = 0, 0, open_ct
+        total_today = completed_ct + open_ct
 
         # Pick the longest query text on this day as the preview
         queries = [str(r.get("queryText") or "").strip() for r in day_rows]
@@ -770,26 +787,31 @@ def compute_delays_aging(eod_rows: list[dict], period_start: str, period_end: st
 
         delays_by_day.append({
             "date":             key,
-            "totalDelays":      total_today,
+            "total":            total_today,
             "completed":        completed_ct,
-            "inProgress":       in_prog_ct,
-            "awaitingResponse": awaiting_ct,
+            "fresh":            fresh_ct,
+            "aging":            aging_ct,
+            "overdue":          overdue_ct,
+            # Legacy fields, kept for back-compat with the existing
+            # delaysAgeSummary caller and any downstream consumers.
+            "totalDelays":      total_today,
+            "inProgress":       open_ct if age_days <= 7 else 0,
+            "awaitingResponse": open_ct if age_days > 7 else 0,
             "hasQuery":         bool(query_preview),
             "queryPreview":     query_preview[:200],
             "ageDays":          age_days,
         })
 
-        # Open count for this day = anything not "completed"
-        open_today = in_prog_ct + awaiting_ct
-        if open_today > 0:
+        # Open count for the per-card buckets
+        if open_ct > 0:
             if age_days == 0:
-                today_count += open_today
+                today_count += open_ct
             elif age_days <= 2:
-                bucket_1_2 += open_today
+                bucket_1_2 += open_ct
             elif age_days <= 7:
-                bucket_3_7 += open_today
+                bucket_3_7 += open_ct
             else:
-                bucket_8_plus += open_today
+                bucket_8_plus += open_ct
 
             if age_days > oldest_days:
                 oldest_days  = age_days
