@@ -226,6 +226,30 @@ TEAM_ROSTERS: dict[str, list[str]] = {
 }
 
 
+# Customer/project names that should always be treated as internal work,
+# never assigned to a team's client list. Any row whose customer fuzzy-matches
+# one of these gets bucketed into "Internal / Other" for the employee's team.
+INTERNAL_CODES = [
+    "SNMP",
+    "BREAKS FOR TEAMS",
+    "Choose Customer",
+    "Training",
+    "Internal",
+    "Admin",
+]
+
+
+# Customers found in timesheets but not yet assigned to any team's TEAM_CLIENTS.
+# This list is documentation-only — these names still appear in
+# /api/debug/unmapped-clients until they're added to the appropriate team.
+UNCATEGORIZED_CLIENTS = [
+    "ASC Custom Books",      # 135h, 37 rows
+    "Portrai Me",            # 5.7h, 4 rows
+    "Happy Soul",            # 2.8h, 9 rows
+    "Kacey Fitzpatrick",     # 2.4h, 2 rows
+]
+
+
 # ── Authoritative team → client mapping ──────────────────────────
 # Per-team list of clients. Used as the SOURCE OF TRUTH for which orgs appear
 # under each team. tsMatch = case-insensitive substring keywords against
@@ -302,10 +326,10 @@ TEAM_CLIENTS: dict[str, list[dict]] = {
         {"name": "SDC Group",            "tsMatch": ["SDC"],                                   "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
         {"name": "Helvetica",            "tsMatch": ["Helvetica"],                             "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
         {"name": "Shane Butler",         "tsMatch": ["Shane Butler"],                          "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
-        {"name": "Sybilline Records",    "tsMatch": ["Sybilline"],                             "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "Sybilline Records",    "tsMatch": ["Sybilline", "Sybylline"],                "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
     ],
     "team_n": [
-        {"name": "BKP Repair",           "tsMatch": ["BKP Repair"],                            "estHrs": 240, "tz": "PST", "meeting": "Bi-weekly Friday 10am IST"},
+        {"name": "BKP Repair",           "tsMatch": ["BKP Repair", "Bookkeeping Repair", "Bookkeeping Repair LLC"], "estHrs": 240, "tz": "PST", "meeting": "Bi-weekly Friday 10am IST"},
         {"name": "Tim Thompson",         "tsMatch": ["Tim Thompson"],                          "estHrs": 40,  "tz": "CST", "meeting": "No scheduled meeting"},
         {"name": "FitProfit Solutions",  "tsMatch": ["FitProfit"],                             "estHrs": 0,   "tz": "CST", "meeting": "No scheduled meeting"},
     ],
@@ -320,6 +344,24 @@ TEAM_CLIENTS: dict[str, list[dict]] = {
         {"name": "David Beck",           "tsMatch": ["David Beck"],                            "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
     ],
 }
+
+
+def is_internal_code(customer: str) -> bool:
+    """True iff `customer` fuzzy-matches any entry in INTERNAL_CODES. Used to
+    route internal/break/admin/training rows into "Internal / Other" without
+    consulting TEAM_CLIENTS."""
+    if not customer:
+        return True  # empty customer name → treat as internal
+    cust_norm = _normalize_for_match(customer)
+    if not cust_norm:
+        return True
+    for code in INTERNAL_CODES:
+        code_norm = _normalize_for_match(code)
+        if not code_norm:
+            continue
+        if code_norm in cust_norm:
+            return True
+    return False
 
 
 def _reverse_match(customer_norm: str, kw_norm: str, min_short_len: int = 4) -> bool:
@@ -1597,10 +1639,6 @@ async def _team_response(team_id: str, period: str):
     # ── Authoritative aggregation against TEAM_CLIENTS[team_id] ───
     # Seed every configured client with zero so they always appear in the table
     # (even if no time logged yet). Unmatched rows fall into "Internal / Other".
-    EXCLUDE_KEYWORDS = (
-        "internal / admin", "choose customer",
-        "breaks for teams", "zzz",
-    )
     team_client_cfg = TEAM_CLIENTS.get(team_id) or []
     orgs: dict = {}
     for cfg_entry in team_client_cfg:
@@ -1652,14 +1690,17 @@ async def _team_response(team_id: str, period: str):
         customer = (row.get("customer") or "").strip()
         desc     = (row.get("desc") or "").strip()
 
-        # Skip rows whose customer is an admin/break placeholder entirely.
-        cust_lower = customer.lower()
-        if not customer or customer == "SNMP" or any(k in cust_lower for k in EXCLUDE_KEYWORDS):
-            continue
-
-        # Resolve against TEAM_CLIENTS; non-matches go to "Internal / Other".
-        resolved = _resolve_client_for_team(team_id, customer, desc)
-        bucket   = orgs[resolved] if resolved else orgs["Internal / Other"]
+        # INTERNAL_CODES short-circuit: SNMP / breaks / admin / training rows
+        # never get matched against TEAM_CLIENTS — they bucket directly into
+        # "Internal / Other" so the hours are preserved (not silently dropped)
+        # but don't pollute any configured client.
+        if is_internal_code(customer):
+            bucket = orgs["Internal / Other"]
+            resolved = None
+        else:
+            # Resolve against TEAM_CLIENTS; non-matches go to "Internal / Other".
+            resolved = _resolve_client_for_team(team_id, customer, desc)
+            bucket   = orgs[resolved] if resolved else orgs["Internal / Other"]
 
         matched_rows += 1
         staff_names_found.add(fullname)
@@ -2814,6 +2855,10 @@ def debug_unmapped_clients():
     for r in rows:
         cust = (r.get("customer") or "").strip()
         if not cust:
+            continue
+        # Internal/admin/breaks/training rows aren't unmapped — they're
+        # explicitly categorized as internal work. Skip them here.
+        if is_internal_code(cust):
             continue
         team_id = find_team_for_client(cust)
         entry = agg.setdefault(cust, {
