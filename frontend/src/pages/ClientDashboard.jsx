@@ -837,9 +837,13 @@ ${Object.entries(staffObj).map(([name, v]) => {
             </div>
             {loading ? (
               <div style={{ height: 220 }} className="kpi-skeleton" />
+            ) : !data?.parentTeamId ? (
+              <div style={{ height: 220, display: "flex", alignItems: "center", justifyContent: "center", color: C.orange, fontSize: 13, textAlign: "center", padding: 16, lineHeight: 1.5 }}>
+                Client not mapped to any team — contact admin to add it to TEAM_CLIENTS.
+              </div>
             ) : !data?.hasEodSheet ? (
               <div style={{ height: 220, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic", textAlign: "center", padding: 16 }}>
-                No EOD sheet configured for this team.
+                No EOD sheet configured for {data?.parentTeamId}.
               </div>
             ) : agingTotalOpen === 0 && !agingHasAnyData ? (
               <div style={{ height: 220, display: "flex", alignItems: "center", justifyContent: "center", color: C.green, fontSize: 14, fontWeight: 600, textAlign: "center", padding: 16 }}>

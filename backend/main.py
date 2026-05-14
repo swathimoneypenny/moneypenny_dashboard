@@ -322,43 +322,87 @@ TEAM_CLIENTS: dict[str, list[dict]] = {
 }
 
 
+def _reverse_match(customer_norm: str, kw_norm: str, min_short_len: int = 4) -> bool:
+    """True iff the customer name (normalized) is a substring of the keyword.
+    Use this when the config's tsMatch entry is LONGER than the actual
+    Timesheets.com customer name. Length guard prevents short customer names
+    (e.g. "A", "B", 1-3 chars) from reverse-matching arbitrary keywords."""
+    if not customer_norm or not kw_norm:
+        return False
+    if len(customer_norm) < min_short_len:
+        return False
+    if len(customer_norm) >= len(kw_norm):
+        # Equal-length is already handled by forward containment;
+        # longer-customer never reverse-matches a shorter kw.
+        return False
+    return customer_norm in kw_norm
+
+
 def find_team_for_client(client_name: str) -> str | None:
     """Reverse-lookup: which team owns this client? Returns team_id or None.
-    Uses fuzzy_contains so "GFA Inc." matches tsMatch "GFA", "Wiebe-Hinton"
-    matches "Wiebe", etc. Picks the longest normalized keyword on tie."""
+
+    Forward direction (kw inside customer name) always wins over reverse
+    direction (customer name inside kw), so "Tim Thompson" → team_n (forward
+    match on "Tim Thompson") rather than team_t (reverse match on
+    "Tim Thompson TX"). Within each direction, longest matching keyword wins.
+    """
     if not (client_name or "").strip():
         return None
-    best: tuple[int, str] | None = None
+    cn_norm = _normalize_for_match(client_name)
+    if not cn_norm:
+        return None
+
+    forward: tuple[int, str] | None = None
+    reverse: tuple[int, str] | None = None
     for team_id, clients in TEAM_CLIENTS.items():
         for c in clients:
             for kw in c.get("tsMatch", []):
-                kw_norm_len = len(_normalize_for_match(kw))
-                if kw_norm_len == 0:
+                kw_norm = _normalize_for_match(kw)
+                if not kw_norm:
                     continue
-                if fuzzy_contains(client_name, kw):
-                    if best is None or kw_norm_len > best[0]:
-                        best = (kw_norm_len, team_id)
-    return best[1] if best else None
+                if kw_norm in cn_norm:
+                    if forward is None or len(kw_norm) > forward[0]:
+                        forward = (len(kw_norm), team_id)
+                elif _reverse_match(cn_norm, kw_norm):
+                    if reverse is None or len(kw_norm) > reverse[0]:
+                        reverse = (len(kw_norm), team_id)
+    if forward:
+        return forward[1]
+    if reverse:
+        return reverse[1]
+    return None
 
 
 def _resolve_client_for_team(team_id: str, customer: str, desc: str = "") -> str | None:
     """Return the canonical client name from TEAM_CLIENTS[team_id] that matches
-    `customer` (or `desc` as fallback) using fuzzy_contains (case + punctuation
-    insensitive). Picks the longest matching keyword to handle "Tim Thompson"
-    vs "Tim Thompson TX" overlaps."""
+    `customer` (or `desc` as fallback). Same forward-beats-reverse precedence
+    as find_team_for_client."""
     cfg = TEAM_CLIENTS.get(team_id) or []
     if not cfg:
         return None
-    best: tuple[int, str] | None = None  # (keyword length, client_name)
+    cust_norm = _normalize_for_match(customer)
+    desc_norm = _normalize_for_match(desc)
+
+    forward: tuple[int, str] | None = None
+    reverse: tuple[int, str] | None = None
     for client in cfg:
         for kw in client.get("tsMatch", []):
-            kw_norm_len = len(_normalize_for_match(kw))
-            if kw_norm_len == 0:
+            kw_norm = _normalize_for_match(kw)
+            if not kw_norm:
                 continue
-            if fuzzy_contains(customer, kw) or fuzzy_contains(desc, kw):
-                if best is None or kw_norm_len > best[0]:
-                    best = (kw_norm_len, client["name"])
-    return best[1] if best else None
+            fwd = (cust_norm and kw_norm in cust_norm) or (desc_norm and kw_norm in desc_norm)
+            if fwd:
+                if forward is None or len(kw_norm) > forward[0]:
+                    forward = (len(kw_norm), client["name"])
+                continue
+            if _reverse_match(cust_norm, kw_norm) or _reverse_match(desc_norm, kw_norm):
+                if reverse is None or len(kw_norm) > reverse[0]:
+                    reverse = (len(kw_norm), client["name"])
+    if forward:
+        return forward[1]
+    if reverse:
+        return reverse[1]
+    return None
 
 
 # ── Admin-hierarchy → team map ────────────────────────────────────
@@ -2713,6 +2757,7 @@ async def _client_data(client_name: str, period: str):
     # Attach the parent team's EOD sheet data so ClientDashboard can render
     # the Daily Delays chart filtered to this client.
     parent_team = find_team_for_client(client_name)
+    print(f"[findTeam] client={client_name!r} resolved={parent_team}")
     eod_rows: list = []
     eod_error: str | None = None
     has_eod_sheet = False
