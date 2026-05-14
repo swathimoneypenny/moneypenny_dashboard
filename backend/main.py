@@ -772,21 +772,65 @@ def _resolve_eod_rows_for_client(team_id: str, client_name: str) -> tuple[list[d
     return [], "none"
 
 
-def _parse_eod_date(date_str: str) -> datetime | None:
-    """EOD sheet date column has mixed formats: YYYY-MM-DD, M/D/YYYY, M/D/YY."""
-    s = (date_str or "").strip()[:10]
+_EOD_DATE_FORMATS = (
+    "%Y-%m-%d",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y/%m/%d",
+    "%m/%d/%Y",
+    "%m/%d/%Y %H:%M:%S",
+    "%m/%d/%y",                   # 5/14/26 — Google Sheets default
+    "%m/%d/%y %H:%M:%S",          # 5/14/26 00:00:00
+    "%m-%d-%Y",
+    "%m-%d-%y",
+    "%b, %d %Y %H:%M:%S",
+    "%b, %d %Y",
+    "%b %d, %Y",
+    "%B %d, %Y",
+    "%d/%m/%Y",
+    "%d-%m-%Y",
+)
+
+
+def _parse_eod_date(date_str) -> datetime | None:
+    """Parse an EOD-sheet date cell into a datetime.
+
+    Google Sheets exports dates in whatever the cell formatting says, so the
+    same column can hold "5/14/26", "5/14/2026", "5/14/26 00:00:00",
+    "2026-05-14", or "May 14, 2026". This walks a list of strptime patterns
+    and also strips any leading apostrophe (Sheets' text-literal marker)
+    before parsing. Returns None if nothing matches.
+    """
+    s = ("" if date_str is None else str(date_str)).strip()
     if not s:
         return None
-    try:
-        if "/" in s:
-            parts = s.split("/")
-            if len(parts) < 3:
-                return None
-            yr = parts[2] if len(parts[2]) == 4 else "20" + parts[2][-2:]
-            return datetime(int(yr), int(parts[0]), int(parts[1]))
-        return datetime.strptime(s, "%Y-%m-%d")
-    except Exception:
-        return None
+    # Sheets sometimes prefixes text-typed dates with an apostrophe so they
+    # don't auto-format. Strip it.
+    if s.startswith("'"):
+        s = s[1:].strip()
+    # Try the full string first (catches time-of-day variants), then the
+    # whitespace-split first chunk (catches "5/14/26 0:00:00" type values
+    # whose time-of-day format we didn't enumerate).
+    base = s.split()[0] if " " in s else s
+    for candidate in (s, base):
+        for fmt in _EOD_DATE_FORMATS:
+            try:
+                return datetime.strptime(candidate, fmt)
+            except ValueError:
+                continue
+    # Last-ditch manual numeric split for bare slash forms we may have missed
+    if "/" in base:
+        try:
+            parts = base.split("/")
+            if len(parts) >= 3:
+                mo = int(parts[0])
+                dy = int(parts[1])
+                yr = int(parts[2])
+                if yr < 100:
+                    yr += 2000 if yr <= 68 else 1900
+                return datetime(yr, mo, dy)
+        except (ValueError, TypeError):
+            pass
+    return None
 
 
 def compute_delays_aging(eod_rows: list[dict], period_start: str, period_end: str) -> dict:
