@@ -655,10 +655,23 @@ class EodSheetError(Exception):
         self.status = status
 
 
+def _eod_date_iso(date_raw) -> str:
+    """Return the YYYY-MM-DD form of a raw EOD cell value, or '' if unparseable.
+    Wraps _parse_eod_date so callers that need a string (not datetime) get the
+    canonical form directly."""
+    dt = _parse_eod_date(date_raw)
+    return dt.strftime("%Y-%m-%d") if dt else ""
+
+
 def get_eod_data(sheet_id: str, tab: str | None = None, gid: str | None = None) -> list[dict]:
     if not sheet_id:
         return []
-    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv"
+    # Force an explicit range so gviz's auto-detect doesn't stop at the first
+    # blank row in column A — some EOD tabs have a blank separator row between
+    # the old data block (March 2025) and current entries (May 2026), and the
+    # auto-detect was silently truncating to the first chunk.
+    url = (f"https://docs.google.com/spreadsheets/d/{sheet_id}"
+           f"/gviz/tq?tqx=out:csv&range=A1:O10000")
     if gid:
         url += f"&gid={gid}"
     elif tab:
@@ -683,6 +696,11 @@ def get_eod_data(sheet_id: str, tab: str | None = None, gid: str | None = None) 
         date_raw = str(row[0]).strip()
         if not date_raw or date_raw.lower() in ("", "nan", "date"):
             continue
+        # Normalize the date at parse time. Rows whose date won't parse still
+        # ship through downstream (date_iso = ""), and downstream filters drop
+        # them — but stamping the normalized ISO form on every row makes the
+        # debug endpoint show real values and avoids re-parsing per consumer.
+        date_iso = _eod_date_iso(date_raw)
         committed_val = _safe_float(row[1])
         booked_val    = _safe_float(row[2])
         eod_status    = str(row[11]).strip() if len(row) > 11 else ""  # col L
@@ -711,7 +729,8 @@ def get_eod_data(sheet_id: str, tab: str | None = None, gid: str | None = None) 
             delays = note_delays
 
         result.append({
-            "date":       date_raw[:10],
+            "date":       date_iso or date_raw[:10],
+            "dateRaw":    date_raw,
             "committed":  committed_val,
             "booked":     booked_val,
             "utilPct":    util_pct,
@@ -728,12 +747,16 @@ def _resolve_eod_rows_for_client(team_id: str, client_name: str) -> tuple[list[d
     """Fetch EOD rows for a client with flexible tab matching.
 
     Tries in order:
-      1. tab name == client name (e.g. "GFA")
-      2. tab name == client name + " Delays" (e.g. "GFA Delays")
-      3. configured gid (the team's default tab)
-      4. sheet's first tab (no tab/gid specified)
-    Returns (rows, matched_label). matched_label is for the [eod] debug log.
-    Skips any candidate that errors or returns no rows.
+      1. tab name == client name (e.g. "Go Figure Accounting")
+      2. tab name == "{client name} Delays"
+      3. Each tsMatch alias from TEAM_CLIENTS as a tab name + "{alias} Delays"
+         (so "GFA" / "Go Figure" tabs match a client whose canonical name is
+         "Go Figure Accounting")
+      4. configured gid (the team's default tab)
+      5. sheet's first tab (no tab/gid specified)
+    Returns (rows, matched_label). Picks the candidate that returns the MOST
+    rows, not just the first non-empty one — avoids picking a near-empty
+    per-client tab when the populated team-wide tab also exists.
     """
     cfg = TEAM_LETTER_MAP.get(team_id) or {}
     sid = cfg.get("sheetId")
@@ -743,15 +766,44 @@ def _resolve_eod_rows_for_client(team_id: str, client_name: str) -> tuple[list[d
         print(f"[eod] team={team_id} client={client_name} sheetId=None matchedTab=none rows=0")
         return [], "none"
 
+    # Pull tsMatch aliases for this client from TEAM_CLIENTS, so the picker
+    # can try tabs named after the alias (e.g. "GFA") as well as the
+    # canonical client name.
+    aliases: list[str] = []
+    for client_cfg in (TEAM_CLIENTS.get(team_id) or []):
+        if (client_cfg.get("name") or "").strip() == (client_name or "").strip():
+            aliases = list(client_cfg.get("tsMatch") or [])
+            break
+        if client_name and fuzzy_contains(client_cfg.get("name") or "", client_name):
+            aliases = list(client_cfg.get("tsMatch") or [])
+            break
+
     candidates: list[tuple[str, dict]] = []
+    seen: set[str] = set()
+    def _add(label: str, kwargs: dict, key: str):
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append((label, kwargs))
     if client_name:
-        candidates.append((f"tab={client_name!r}",         {"tab": client_name}))
-        candidates.append((f"tab={client_name!r}+Delays", {"tab": f"{client_name} Delays"}))
+        _add(f"tab={client_name!r}",         {"tab": client_name},               f"t:{client_name.lower()}")
+        _add(f"tab={client_name!r}+Delays", {"tab": f"{client_name} Delays"},   f"t:{client_name.lower()} delays")
+    for alias in aliases:
+        if not alias:
+            continue
+        _add(f"tab={alias!r}",          {"tab": alias},                 f"t:{alias.lower()}")
+        _add(f"tab={alias!r}+Delays",  {"tab": f"{alias} Delays"},     f"t:{alias.lower()} delays")
     if gid:
-        candidates.append((f"gid={gid}", {"gid": gid}))
-    candidates.append(("default-first-tab", {}))
+        _add(f"gid={gid}", {"gid": gid}, f"gid:{gid}")
+    _add("default-first-tab", {}, "default")
 
     last_error: str | None = None
+    best_rows: list[dict] = []
+    best_label: str | None = None
+    best_score: tuple[int, int] = (-1, -1)   # (rows_with_recent_dates, total_rows)
+    attempts: list[tuple[str, int, int]] = []  # (label, total, recent) for one summary log
+    today_date = datetime.now()
+    recent_cutoff = today_date - timedelta(days=90)
     for label, kwargs in candidates:
         try:
             rows = get_eod_data(sid, **kwargs)
@@ -761,14 +813,32 @@ def _resolve_eod_rows_for_client(team_id: str, client_name: str) -> tuple[list[d
         except Exception as e:
             last_error = str(e)
             continue
-        if rows:
-            print(f"[eod] team={team_id} client={client_name} sheetId={label_safe} "
-                  f"matchedTab={label} rows={len(rows)}")
-            return rows, label
+        if not rows:
+            continue
+        # Score each candidate by how many rows fall in the last 90 days —
+        # so a tab that returns only March-2025 rows loses to one returning
+        # current-month rows, even if the stale tab is listed first.
+        recent_ct = 0
+        for r in rows:
+            d = _parse_eod_date(r.get("date") or r.get("dateRaw") or "")
+            if d and d >= recent_cutoff:
+                recent_ct += 1
+        attempts.append((label, len(rows), recent_ct))
+        score = (recent_ct, len(rows))
+        if score > best_score:
+            best_score = score
+            best_rows = rows
+            best_label = label
+
+    if best_label:
+        print(f"[eod] team={team_id} client={client_name} sheetId={label_safe} "
+              f"matchedTab={best_label} rows={len(best_rows)} "
+              f"recent90d={best_score[0]} attempts={attempts}")
+        return best_rows, best_label
 
     err_suffix = f" error={last_error}" if last_error else ""
     print(f"[eod] team={team_id} client={client_name} sheetId={label_safe} "
-          f"matchedTab=none rows=0{err_suffix}")
+          f"matchedTab=none rows=0 attempts={attempts}{err_suffix}")
     return [], "none"
 
 
