@@ -39,24 +39,74 @@ function statusInfo(pct) {
 
 function delayColor(count) {
   if (count <= 0) return C.green;
-  if (count <= 2) return "#F0B947";
-  if (count <= 5) return "#F2895A";
+  if (count <= 2) return C.yellow;
+  if (count <= 5) return C.orange;
   return C.red;
 }
 
-function delaySeverity(count) {
-  if (count <= 0) return "clean";
-  if (count <= 2) return "minor";
-  if (count <= 5) return "moderate";
-  return "critical";
+const AGING_LEGEND = [
+  { color: C.green,  label: "Completed" },
+  { color: C.yellow, label: "In Progress" },
+  { color: C.orange, label: "Awaiting Response" },
+];
+
+function AgingLegend() {
+  return (
+    <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 10, fontSize: 11, color: C.muted }}>
+      {AGING_LEGEND.map(({ color, label }) => (
+        <div key={label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ width: 10, height: 10, borderRadius: 2, background: color }} />
+          {label}
+        </div>
+      ))}
+    </div>
+  );
 }
 
-function DelayTooltip({ active, payload }) {
+function AgingCard({ label, value, color, pulse }) {
+  return (
+    <div
+      style={{
+        flex: "1 1 0",
+        minWidth: 80,
+        background: C.surface,
+        border: `1px solid ${color}55`,
+        borderRadius: 8,
+        padding: "10px 12px",
+        textAlign: "center",
+        animation: pulse ? "pulseRed 1.6s ease-in-out infinite" : "none",
+      }}
+    >
+      <div style={{ fontSize: 9, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 22, fontWeight: 700, color, fontFamily: "'DM Mono', monospace", lineHeight: 1 }}>
+        {value ?? 0}
+      </div>
+    </div>
+  );
+}
+
+function AgingSummaryRow({ summary }) {
+  const today  = summary?.today ?? 0;
+  const t12    = summary?.["1to2days"] ?? 0;
+  const t37    = summary?.["3to7days"] ?? 0;
+  const t8plus = summary?.["8plusDays"] ?? 0;
+  const todayColor = today === 0 ? C.green : today <= 3 ? C.yellow : C.orange;
+  return (
+    <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+      <AgingCard label="Today"          value={today}  color={todayColor} />
+      <AgingCard label="1-2 Days"       value={t12}    color={C.yellow} />
+      <AgingCard label="3-7 Days"       value={t37}    color={C.orange} />
+      <AgingCard label="8+ Days Overdue" value={t8plus} color={C.red} pulse={t8plus > 0} />
+    </div>
+  );
+}
+
+function AgingTooltip({ active, payload }) {
   if (!active || !payload?.length) return null;
   const p = payload[0]?.payload ?? {};
-  const count = p.delays ?? 0;
-  const sev = delaySeverity(count);
-  const sevColor = delayColor(count);
+  const total = (p.Completed ?? 0) + (p["In Progress"] ?? 0) + (p["Awaiting Response"] ?? 0);
   return (
     <div
       style={{
@@ -68,42 +118,50 @@ function DelayTooltip({ active, payload }) {
         fontSize: 12,
         color: C.pri,
         boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
-        maxWidth: 280,
+        maxWidth: 300,
       }}
     >
-      <div style={{ fontWeight: 600, marginBottom: 4, color: C.sec }}>
-        {p.fullDate || `Day ${p.date}`}
+      <div style={{ fontWeight: 600, marginBottom: 6, color: C.sec }}>
+        {p.fullDateLabel || p.fullDate || `Day ${p.day}`}
       </div>
-      <div style={{ color: sevColor, marginBottom: p.longest ? 4 : 0, fontFamily: "'DM Mono', monospace" }}>
-        {count} delay{count === 1 ? "" : "s"} · <span style={{ textTransform: "uppercase", letterSpacing: 0.5 }}>{sev}</span>
+      <div style={{ marginBottom: 4, fontFamily: "'DM Mono', monospace" }}>
+        Total: {total}
       </div>
-      {p.longest && (
-        <div style={{ color: C.muted, fontSize: 11, fontStyle: "italic", lineHeight: 1.4 }}>
-          “{p.longest}”
+      {(p.Completed ?? 0) > 0 && (
+        <div style={{ color: C.green, fontSize: 11 }}>Completed: {p.Completed}</div>
+      )}
+      {(p["In Progress"] ?? 0) > 0 && (
+        <div style={{ color: C.yellow, fontSize: 11 }}>In Progress: {p["In Progress"]}</div>
+      )}
+      {(p["Awaiting Response"] ?? 0) > 0 && (
+        <div style={{ color: C.orange, fontSize: 11 }}>Awaiting Response: {p["Awaiting Response"]}</div>
+      )}
+      {p.queryPreview && (
+        <div style={{ marginTop: 6, color: C.muted, fontSize: 11, fontStyle: "italic", lineHeight: 1.4 }}>
+          “{p.queryPreview.slice(0, 60)}{p.queryPreview.length > 60 ? "…" : ""}”
         </div>
       )}
     </div>
   );
 }
 
-const DELAY_LEGEND = [
-  { color: "#3DC58B", label: "0 clean" },
-  { color: "#F0B947", label: "1-2 minor" },
-  { color: "#F2895A", label: "3-5 moderate" },
-  { color: "#E25C5C", label: "6+ critical" },
-];
-
-function DelayLegend() {
-  return (
-    <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 10, fontSize: 11, color: C.muted }}>
-      {DELAY_LEGEND.map(({ color, label }) => (
-        <div key={label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <div style={{ width: 10, height: 10, borderRadius: 2, background: color }} />
-          {label}
-        </div>
-      ))}
-    </div>
-  );
+function buildAgingChartData(delaysByDay) {
+  return (delaysByDay || []).map((d) => {
+    const dateStr = String(d.date ?? "");
+    const dt = dateStr.length >= 10 ? new Date(dateStr) : null;
+    const day  = dt && !Number.isNaN(dt.getTime()) ? dt.getDate() : Number(dateStr.slice(-2));
+    const monthLabel = dt ? dt.toLocaleString("default", { month: "short" }) : "";
+    const yr = dt ? dt.getFullYear() : "";
+    return {
+      day: String(day || dateStr.slice(-2) || ""),
+      fullDate: dateStr,
+      fullDateLabel: dt ? `${monthLabel} ${day}, ${yr}` : dateStr,
+      Completed: Number(d.completed) || 0,
+      "In Progress": Number(d.inProgress) || 0,
+      "Awaiting Response": Number(d.awaitingResponse) || 0,
+      queryPreview: d.queryPreview || "",
+    };
+  });
 }
 
 function initials(name) {
@@ -1028,59 +1086,14 @@ ${clients.map((o) => (
     [chartClients]
   );
 
-  // Chart 4 — Daily delays from EOD sheet (this month).
-  // Fill in every day from 1..today so the X-axis shows a continuous date scale.
-  const delaysData = useMemo(() => {
-    const now = new Date();
-    const curYear  = now.getFullYear();
-    const curMonth = now.getMonth();
-    const today    = now.getDate();
-
-    // Build map: day-of-month → { count, fullDate, longest delay note }
-    const byDay = {};
-    (eod || []).forEach((row) => {
-      const dateStr = String(row?.date ?? "");
-      if (!dateStr) return;
-      let d;
-      if (dateStr.includes("/")) {
-        const parts = dateStr.split("/");
-        if (parts.length < 3) return;
-        const yr = parts[2].length === 2 ? "20" + parts[2] : parts[2];
-        d = new Date(`${yr}-${parts[0].padStart(2, "0")}-${parts[1].padStart(2, "0")}`);
-      } else {
-        d = new Date(dateStr);
-      }
-      if (Number.isNaN(d.getTime())) return;
-      if (d.getFullYear() !== curYear || d.getMonth() !== curMonth) return;
-      const day = d.getDate();
-      const entry = byDay[day] || { count: 0, notes: [] };
-      entry.count += Number(row?.delays ?? 0) || 0;
-      const notesStr = String(row?.notes ?? "").trim();
-      if (notesStr) {
-        for (const line of notesStr.split("\n")) {
-          const t = line.trim();
-          if (t) entry.notes.push(t);
-        }
-      }
-      byDay[day] = entry;
-    });
-
-    const monthLabel = now.toLocaleString("default", { month: "short" });
-    const out = [];
-    for (let day = 1; day <= today; day++) {
-      const entry = byDay[day] || { count: 0, notes: [] };
-      const longest = entry.notes.length
-        ? (entry.notes.reduce((a, b) => (b.length > a.length ? b : a), "").slice(0, 60))
-        : "";
-      out.push({
-        date: String(day),
-        fullDate: `${monthLabel} ${day}, ${curYear}`,
-        delays: entry.count,
-        longest,
-      });
-    }
-    return out;
-  }, [eod]);
+  const agingSummary = data?.delaysAgeSummary ?? null;
+  const delaysByDay  = data?.delaysByDay ?? [];
+  const agingChart   = useMemo(() => buildAgingChartData(delaysByDay), [delaysByDay]);
+  const agingTotalOpen = (agingSummary?.totalOpen ?? 0);
+  const agingHasAnyData = useMemo(
+    () => agingChart.some((d) => (d.Completed + d["In Progress"] + d["Awaiting Response"]) > 0),
+    [agingChart],
+  );
 
   const displayLabel = data?.teamLabel ?? data?.team ?? teamName ?? teamId;
   const displayLead  = data?.lead ?? data?.leadName ?? "";
@@ -1399,23 +1412,34 @@ ${clients.map((o) => (
             )}
           </ChartCard>
 
-          <ChartCard title="Daily Delays — This Month">
+          <ChartCard title="Open Questions & Delays — Aging Report">
             {loading ? (
               <div className="kpi-skeleton" style={{ height: 260 }} />
-            ) : (eod ?? []).length === 0 ? (
+            ) : data?.hasEodSheet === false ? (
               <div style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic", textAlign: "center", padding: 16 }}>
-                {data?.hasEodSheet === false
-                  ? "No EOD sheet configured for this team."
-                  : "No EOD data available."}
+                No EOD sheet configured for this team.
+              </div>
+            ) : agingTotalOpen === 0 && !agingHasAnyData ? (
+              <div style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", color: C.green, fontSize: 14, fontWeight: 600, textAlign: "center", padding: 16 }}>
+                ✓ No open delays in this period
               </div>
             ) : (
               <>
-                <DelayLegend />
-                <ResponsiveContainer width="100%" height={230}>
-                  <BarChart data={delaysData} margin={{ top: 18, right: 8, left: -18, bottom: 36 }}>
+                <AgingSummaryRow summary={agingSummary} />
+                {agingSummary?.oldestDays > 0 && (
+                  <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, lineHeight: 1.5 }}>
+                    Oldest open query: <span style={{ color: C.red, fontWeight: 600 }}>{agingSummary.oldestDays} day{agingSummary.oldestDays === 1 ? "" : "s"}</span>
+                    {agingSummary.oldestQuery && (
+                      <span style={{ fontStyle: "italic" }}> — “{agingSummary.oldestQuery.slice(0, 80)}{agingSummary.oldestQuery.length > 80 ? "…" : ""}”</span>
+                    )}
+                  </div>
+                )}
+                <AgingLegend />
+                <ResponsiveContainer width="100%" height={210}>
+                  <BarChart data={agingChart} margin={{ top: 4, right: 8, left: -18, bottom: 36 }}>
                     <CartesianGrid vertical={false} stroke={C.border} strokeDasharray="3 3" />
                     <XAxis
-                      dataKey="date"
+                      dataKey="day"
                       tick={{ fill: C.sec, fontSize: 10 }}
                       axisLine={false}
                       tickLine={false}
@@ -1425,18 +1449,10 @@ ${clients.map((o) => (
                       height={50}
                     />
                     <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} />
-                    <Tooltip content={<DelayTooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
-                    <Bar dataKey="delays" name="Delays" radius={[4, 4, 0, 0]} minPointSize={3}>
-                      {delaysData.map((d, i) => (
-                        <Cell key={i} fill={delayColor(d.delays)} />
-                      ))}
-                      <LabelList
-                        dataKey="delays"
-                        position="top"
-                        formatter={(v) => (v > 0 ? v : "")}
-                        style={{ fill: C.pri, fontSize: 10 }}
-                      />
-                    </Bar>
+                    <Tooltip content={<AgingTooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
+                    <Bar dataKey="Completed"         stackId="a" fill={C.green} />
+                    <Bar dataKey="In Progress"       stackId="a" fill={C.yellow} />
+                    <Bar dataKey="Awaiting Response" stackId="a" fill={C.orange} radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </>

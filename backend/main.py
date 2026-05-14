@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import csv
 import io
@@ -421,22 +422,29 @@ def get_userid_to_team_map() -> dict[str, str]:
 
 
 def staff_in_team(fullname: str, roster: list[str]) -> bool:
-    """Bidirectional fuzzy match. Empty roster ⇒ include all."""
+    """STRICT word-token matcher. Empty roster ⇒ include all.
+
+    A roster keyword matches a full name iff every token in the keyword is a
+    prefix of some token in the full name (case-insensitive). Single-char
+    tokens act as initials. This prevents cross-team leakage where short
+    keywords like "uma" used to substring-match every "*kumar" surname.
+    """
     if not roster:
         return True
     name_lower = (fullname or "").lower().strip()
     if not name_lower:
         return False
-    name_parts = [p for p in name_lower.split() if len(p) > 2]
+    name_tokens = [t for t in re.split(r"[\s\-\.,]+", name_lower) if t]
+    if not name_tokens:
+        return False
     for r in roster:
         r_lower = (r or "").lower().strip()
         if not r_lower:
             continue
-        # Roster keyword anywhere in fullname
-        if r_lower in name_lower:
-            return True
-        # Any fullname part appears inside the roster keyword (reverse)
-        if any(p in r_lower for p in name_parts):
+        r_tokens = [t for t in re.split(r"[\s\-\.,]+", r_lower) if t]
+        if not r_tokens:
+            continue
+        if all(any(nt.startswith(rt) for nt in name_tokens) for rt in r_tokens):
             return True
     return False
 
@@ -521,16 +529,28 @@ def get_eod_data(sheet_id: str, tab: str | None = None, gid: str | None = None) 
     result = []
     start = 1 if rows and not _safe_float(rows[0][0] if rows[0] else "") else 0
     for row in rows[start:]:
-        while len(row) < 13:
+        while len(row) < 15:
             row.append("")
         date_raw = str(row[0]).strip()
         if not date_raw or date_raw.lower() in ("", "nan", "date"):
             continue
         committed_val = _safe_float(row[1])
         booked_val    = _safe_float(row[2])
-        eod_status    = str(row[11]).strip() if len(row) > 11 else ""
-        eod_notes     = str(row[12]).strip() if len(row) > 12 else ""
+        eod_status    = str(row[11]).strip() if len(row) > 11 else ""  # col L
+        eod_notes     = str(row[12]).strip() if len(row) > 12 else ""  # col M (Status Details)
+        posted_query  = str(row[13]).strip() if len(row) > 13 else ""  # col N (Posted Query Details)
         util_pct      = round(booked_val / committed_val * 100, 1) if committed_val > 0 else 0.0
+
+        # Normalize column L into one of: completed | in_progress | awaiting_response | ""
+        sl = eod_status.lower()
+        if "awaiting" in sl:
+            status_norm = "awaiting_response"
+        elif "in progress" in sl or "inprogress" in sl:
+            status_norm = "in_progress"
+        elif "complet" in sl:
+            status_norm = "completed"
+        else:
+            status_norm = ""
 
         note_delays = (
             len([x for x in eod_notes.split("\n") if x.strip()])
@@ -542,15 +562,144 @@ def get_eod_data(sheet_id: str, tab: str | None = None, gid: str | None = None) 
             delays = note_delays
 
         result.append({
-            "date":      date_raw[:10],
-            "committed": committed_val,
-            "booked":    booked_val,
-            "utilPct":   util_pct,
-            "eodStatus": eod_status,
-            "notes":     eod_notes,
-            "delays":    delays,
+            "date":       date_raw[:10],
+            "committed":  committed_val,
+            "booked":     booked_val,
+            "utilPct":    util_pct,
+            "eodStatus":  eod_status,
+            "statusNorm": status_norm,
+            "notes":      eod_notes,
+            "queryText":  posted_query,
+            "delays":     delays,
         })
     return result
+
+
+def _parse_eod_date(date_str: str) -> datetime | None:
+    """EOD sheet date column has mixed formats: YYYY-MM-DD, M/D/YYYY, M/D/YY."""
+    s = (date_str or "").strip()[:10]
+    if not s:
+        return None
+    try:
+        if "/" in s:
+            parts = s.split("/")
+            if len(parts) < 3:
+                return None
+            yr = parts[2] if len(parts[2]) == 4 else "20" + parts[2][-2:]
+            return datetime(int(yr), int(parts[0]), int(parts[1]))
+        return datetime.strptime(s, "%Y-%m-%d")
+    except Exception:
+        return None
+
+
+def compute_delays_aging(eod_rows: list[dict], period_start: str, period_end: str) -> dict:
+    """Build aging-report aggregates from EOD rows for the given period.
+
+    Returns:
+      delaysAgeSummary: {today, 1to2days, 3to7days, 8plusDays, totalOpen,
+                         oldestDays, oldestQuery}
+      delaysByDay:     [{date, totalDelays, completed, inProgress,
+                         awaitingResponse, hasQuery, queryPreview, ageDays}, ...]
+                       one entry per day from day 1 of the month up to today
+    """
+    now = datetime.now()
+    today_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    start_d = _parse_eod_date(period_start) or today_date.replace(day=1)
+    end_d   = _parse_eod_date(period_end)   or today_date
+
+    # Bucket EOD rows by their date string (YYYY-MM-DD)
+    by_day: dict[str, list[dict]] = {}
+    for r in eod_rows or []:
+        d = _parse_eod_date(str(r.get("date") or ""))
+        if not d:
+            continue
+        if d < start_d or d > end_d:
+            continue
+        key = d.strftime("%Y-%m-%d")
+        by_day.setdefault(key, []).append(r)
+
+    today_count   = 0
+    bucket_1_2    = 0
+    bucket_3_7    = 0
+    bucket_8_plus = 0
+    oldest_days   = 0
+    oldest_query  = ""
+
+    delays_by_day: list[dict] = []
+    cur = start_d
+    cap = min(end_d, today_date)
+    while cur <= cap:
+        key = cur.strftime("%Y-%m-%d")
+        day_rows = by_day.get(key, [])
+        age_days = max(0, (today_date - cur).days)
+
+        completed_ct = sum(1 for r in day_rows if r.get("statusNorm") == "completed")
+        in_prog_ct   = sum(1 for r in day_rows if r.get("statusNorm") == "in_progress")
+        awaiting_ct  = sum(1 for r in day_rows if r.get("statusNorm") == "awaiting_response")
+        # Rows with no explicit status fall back to "completed" if hours look healthy,
+        # else "in_progress" so they're flagged for review.
+        for r in day_rows:
+            if r.get("statusNorm"):
+                continue
+            committed = float(r.get("committed") or 0)
+            booked    = float(r.get("booked") or 0)
+            if committed > 0 and booked >= committed * 0.75:
+                completed_ct += 1
+            else:
+                in_prog_ct += 1
+
+        total_today = completed_ct + in_prog_ct + awaiting_ct
+
+        # Pick the longest query text on this day as the preview
+        queries = [str(r.get("queryText") or "").strip() for r in day_rows]
+        queries = [q for q in queries if q]
+        query_preview = ""
+        if queries:
+            query_preview = max(queries, key=len)
+
+        delays_by_day.append({
+            "date":             key,
+            "totalDelays":      total_today,
+            "completed":        completed_ct,
+            "inProgress":       in_prog_ct,
+            "awaitingResponse": awaiting_ct,
+            "hasQuery":         bool(query_preview),
+            "queryPreview":     query_preview[:200],
+            "ageDays":          age_days,
+        })
+
+        # Open count for this day = anything not "completed"
+        open_today = in_prog_ct + awaiting_ct
+        if open_today > 0:
+            if age_days == 0:
+                today_count += open_today
+            elif age_days <= 2:
+                bucket_1_2 += open_today
+            elif age_days <= 7:
+                bucket_3_7 += open_today
+            else:
+                bucket_8_plus += open_today
+
+            if age_days > oldest_days:
+                oldest_days  = age_days
+                oldest_query = query_preview[:200] if query_preview else ""
+
+        cur += timedelta(days=1)
+
+    total_open = today_count + bucket_1_2 + bucket_3_7 + bucket_8_plus
+
+    return {
+        "delaysAgeSummary": {
+            "today":       today_count,
+            "1to2days":    bucket_1_2,
+            "3to7days":    bucket_3_7,
+            "8plusDays":   bucket_8_plus,
+            "totalOpen":   total_open,
+            "oldestDays":  oldest_days,
+            "oldestQuery": oldest_query,
+        },
+        "delaysByDay": delays_by_day,
+    }
 
 
 def get_committed_from_eod(sheet_id: str, start: str, end: str, gid: str | None = None) -> float:
@@ -1305,6 +1454,7 @@ async def _team_response(team_id: str, period: str):
 
     # EOD values came from the parallel asyncio.gather above; just count delays.
     total_delays = sum(int(e.get("delays") or 0) for e in eod_rows)
+    delays_aging = compute_delays_aging(eod_rows, start, end)
 
     # ── Monthly trend from timesheet rows (team-matched) ──────────
     # Always populate this so Chart 1 has data even when no EOD sheet is configured.
@@ -1371,9 +1521,11 @@ async def _team_response(team_id: str, period: str):
         "monthlyTrendSource": "timesheet",
         "matchSource":        "roster" if roster else "admin_hierarchy",
         "adminUserId":        admin_id,
-        "eod":         eod_rows,
-        "eodError":    eod_error,
-        "hasEodSheet": bool(sheet_id),
+        "eod":              eod_rows,
+        "eodError":         eod_error,
+        "hasEodSheet":      bool(sheet_id),
+        "delaysAgeSummary": delays_aging["delaysAgeSummary"],
+        "delaysByDay":      delays_aging["delaysByDay"],
         "lastUpdated": datetime.now().strftime("%Y-%m-%d %H:%M IST"),
         "filter": {
             "teamId":      team_id,
@@ -2141,6 +2293,9 @@ def _build_leaderboard(team_id: str, period: str) -> dict:
     for i, m in enumerate(members):
         m["rank"] = i + 1
 
+    print(f"[teamMembers] team={team_id} rosterCount={len(roster)} foundEmployees={len(members)} "
+          f"names={[m['name'] for m in members]}")
+
     return {
         "team_id":  team_id,
         "team_name": team_label,
@@ -2273,10 +2428,19 @@ async def _client_data(client_name: str, period: str):
                 eod_error = e.reason
             except Exception as e:
                 eod_error = f"EOD fetch failed: {e}"
-    result["parentTeamId"] = parent_team
-    result["hasEodSheet"]  = has_eod_sheet
-    result["eod"]          = eod_rows
-    result["eodError"]     = eod_error
+    aging = compute_delays_aging(eod_rows, start, end) if eod_rows else {
+        "delaysAgeSummary": {
+            "today": 0, "1to2days": 0, "3to7days": 0, "8plusDays": 0,
+            "totalOpen": 0, "oldestDays": 0, "oldestQuery": "",
+        },
+        "delaysByDay": [],
+    }
+    result["parentTeamId"]     = parent_team
+    result["hasEodSheet"]      = has_eod_sheet
+    result["eod"]              = eod_rows
+    result["eodError"]         = eod_error
+    result["delaysAgeSummary"] = aging["delaysAgeSummary"]
+    result["delaysByDay"]      = aging["delaysByDay"]
 
     print(f"[PERF] client={client_name} {period} total={time.perf_counter()-t0:.2f}s "
           f"parent={parent_team} sidConfigured={sid_present} eodRows={len(eod_rows)} eodError={eod_error}")

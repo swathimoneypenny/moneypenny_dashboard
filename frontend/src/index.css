@@ -2,8 +2,8 @@
 
 body {
   font-family: 'DM Sans', sans-serif;
-  background: #060d1a;
-  color: #edf2f7;
+  background: #0A1628;
+  color: #E8EDF5;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
 }
@@ -70,4 +70,9 @@ code, .mono {
   50%  { width: 70%; }
   90%  { width: 90%; }
   100% { width: 95%; }
+}
+
+@keyframes pulseRed {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(226,92,92,0.45); }
+  50%      { box-shadow: 0 0 0 6px rgba(226,92,92,0); }
 }
