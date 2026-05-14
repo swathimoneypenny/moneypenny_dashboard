@@ -59,6 +59,22 @@ export default function App() {
 
   const context = richContext || basicContext;
 
+  // Tells the chat endpoint which entity is on screen so it can pull and
+  // format real per-row timesheet entries (with date + billable flag) into
+  // the prompt. Without this hint the chatbot only sees aggregated context.
+  const viewHint = (() => {
+    if (view.page === "employee") {
+      return { teamId: view.teamId, employeeName: view.employeeName, period: "monthly" };
+    }
+    if (view.page === "team") {
+      return { teamId: view.teamId, period: "monthly" };
+    }
+    if (view.page === "client") {
+      return { clientName: view.clientName, period: "monthly" };
+    }
+    return null;
+  })();
+
   // Helper passed to TeamDashboard to drill into an individual employee
   const handleSelectEmployee = ({ teamId, employeeName, teamName }) => {
     setRichContext("");
@@ -83,7 +99,7 @@ export default function App() {
           }}
           onContextUpdate={setRichContext}
         />
-        <Chatbot context={context} />
+        <Chatbot context={context} viewHint={viewHint} />
       </>
     );
   }
@@ -98,7 +114,7 @@ export default function App() {
           onContextUpdate={setRichContext}
           onSelectEmployee={handleSelectEmployee}
         />
-        <Chatbot context={context} />
+        <Chatbot context={context} viewHint={viewHint} />
       </>
     );
   }
@@ -111,7 +127,7 @@ export default function App() {
           onBack={() => { setRichContext(""); setView({ page: "home" }); }}
           onContextUpdate={setRichContext}
         />
-        <Chatbot context={context} />
+        <Chatbot context={context} viewHint={viewHint} />
       </>
     );
   }
@@ -128,7 +144,7 @@ export default function App() {
           setView({ page: "client", clientName: client.name });
         }}
       />
-      <Chatbot context={context} />
+      <Chatbot context={context} viewHint={viewHint} />
     </>
   );
 }

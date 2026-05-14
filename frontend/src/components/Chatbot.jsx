@@ -61,7 +61,7 @@ function Message({ msg }) {
   );
 }
 
-export default function Chatbot({ context }) {
+export default function Chatbot({ context, viewHint }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -95,6 +95,7 @@ export default function Chatbot({ context }) {
         body: JSON.stringify({
           messages: nextMsgs.map((m) => ({ role: m.role, content: m.content })),
           context,
+          viewHint: viewHint || null,
         }),
       });
       const data = await res.json();

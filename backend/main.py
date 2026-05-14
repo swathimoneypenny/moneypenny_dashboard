@@ -207,21 +207,21 @@ for _tid in list(TEAM_LETTER_MAP.keys()):
 # (case-insensitive substring match against the timesheet FULLNAME).
 # If a team's roster is empty, all timesheet rows pass through ("include all").
 TEAM_ROSTERS: dict[str, list[str]] = {
-    "team_a": [],
-    "team_b": ["Buelaangel", "Akshaya Devi", "Ivanjalin", "Varshini", "Yamini"],
-    "team_c": [],
-    "team_d": [],
-    "team_e": [],
-    "team_f": [],
-    "team_g": ["Hema", "Deepali", "Holly", "Uma", "Jayashree", "Kokila"],
-    "team_h": [],
-    "team_i": [],
-    "team_j": [],
-    "team_k": [],
-    "team_l": [],
-    "team_m": ["Pavithira", "Bhuvaneshwari", "Reshma"],
-    "team_n": [],
-    "team_t": [],
+    "team_a": ["kokila", "uma", "jayashree r", "jayashree b"],
+    "team_b": ["buela", "ivanjalin sofia", "varshini", "pavithra s", "irfhana"],
+    "team_c": ["grace", "mahalakshmi", "jeevtha s"],
+    "team_d": ["chandra", "yamini", "sharmila", "krithiga", "dharani s", "sandhiya", "sirisha", "swetha s"],
+    "team_e": ["shaalini", "kaviya g", "preethi"],
+    "team_f": ["inbamozhi", "monika", "keerthana"],
+    "team_g": ["hema", "indra", "amala", "nidisha", "pechi"],
+    "team_h": ["deepali", "yashika", "madu"],
+    "team_i": ["radhika", "aparna s", "jeevitha", "sakthi s"],
+    "team_j": ["logeswari", "nisha m", "sindhu"],
+    "team_k": ["karthika", "akshaya", "devadharshini", "keerthana", "jani priya", "rohitha", "abinaya"],
+    "team_l": ["nasreen", "krishna", "swathi", "sarika", "razia h"],
+    "team_m": ["pavithra", "bhuva", "reshma"],
+    "team_n": ["vino"],
+    "team_t": ["pragathi"],
 }
 
 
@@ -2335,31 +2335,125 @@ def eod_data(team_id: str):
 
 # ── AI Chat ───────────────────────────────────────────────────────
 
+def _build_chat_rows_block(view_hint: dict | None) -> str:
+    """If the user is viewing a specific team / client / employee, pull cached
+    rows for the current month and emit a date-stamped, per-row listing the LLM
+    can cite. Returns "" if no hint is provided or no rows match."""
+    if not view_hint or not isinstance(view_hint, dict):
+        return ""
+
+    team_id        = (view_hint.get("teamId") or "").strip()
+    client_name    = (view_hint.get("clientName") or "").strip()
+    employee_name  = (view_hint.get("employeeName") or "").strip()
+    period         = view_hint.get("period") or "monthly"
+    if period not in ("today", "weekly", "monthly"):
+        period = "monthly"
+
+    if not (team_id or client_name or employee_name):
+        return ""
+
+    try:
+        start, end, label = date_range_for_period(period)
+        rows = _rows_cache.get(f"{start}_{end}", {}).get("rows")
+        if rows is None:
+            # Don't block the chat on an upstream fetch — only use cached rows.
+            return ""
+    except Exception:
+        return ""
+
+    # Decide which rows to keep based on the hint precedence.
+    matched = []
+    if employee_name:
+        # Employee scope wins — single person's rows across all clients.
+        for r in rows:
+            if _employee_match(r.get("name", ""), employee_name):
+                matched.append(r)
+        scope_label = f"employee {employee_name}"
+    elif client_name:
+        cn = client_name.lower()
+        for r in rows:
+            cust = (r.get("customer") or "").lower()
+            desc = (r.get("desc") or "").lower()
+            if cn in cust or cn in desc:
+                matched.append(r)
+        scope_label = f"client {client_name}"
+    elif team_id:
+        cfg        = TEAM_LETTER_MAP.get(team_id) or {}
+        team_label = cfg.get("label", team_id)
+        roster     = TEAM_ROSTERS.get(team_id, [])
+        for r in rows:
+            if roster:
+                if staff_in_team((r.get("name") or "").strip(), roster):
+                    matched.append(r)
+            else:
+                if (r.get("team") or "").strip().lower() == team_label.strip().lower():
+                    matched.append(r)
+        scope_label = f"team {team_label}"
+    else:
+        return ""
+
+    if not matched:
+        return ""
+
+    # Sort by date desc, cap at 40, separate billable / non-billable so LLM can
+    # answer "why did X get N non-billable hours" without missing the obscure ones.
+    def _key(r):
+        return (r.get("date") or "")[:10]
+    matched.sort(key=_key, reverse=True)
+
+    nonbill = [r for r in matched if not r.get("billable")]
+    bill    = [r for r in matched if r.get("billable")]
+
+    def _fmt(r):
+        date = (r.get("date") or "unknown")[:10]
+        cust = (r.get("customer") or "—").strip()
+        hrs  = float(r.get("hours") or 0)
+        desc = (r.get("desc") or "").strip().replace("\n", " ")
+        bflag = "billable" if r.get("billable") else "non-billable"
+        return f"- {date} | {hrs:.2f}h ({bflag}) | {cust} — {desc[:160]}"
+
+    blocks = [f"\nRECENT TIMESHEET ENTRIES for {scope_label} ({label}):"]
+    if nonbill:
+        blocks.append(f"\nNON-BILLABLE entries ({len(nonbill)} total):")
+        blocks.extend(_fmt(r) for r in nonbill[:25])
+    if bill:
+        blocks.append(f"\nBILLABLE entries (showing {min(len(bill), 15)} of {len(bill)} most recent):")
+        blocks.extend(_fmt(r) for r in bill[:15])
+    return "\n".join(blocks)
+
+
 @app.post("/api/chat")
 async def chat(request: dict):
-    messages = request.get("messages", [])
-    context  = request.get("context", "")
+    messages   = request.get("messages", [])
+    context    = request.get("context", "")
+    view_hint  = request.get("viewHint")
+    rows_block = await asyncio.to_thread(_build_chat_rows_block, view_hint)
 
     system_prompt = f"""You are MoneyPenny AI analyzing real timesheet data.
 
 REAL DATA RIGHT NOW:
 {context}
+{rows_block}
 
 Answer questions directly using ONLY this data.
-- If asked "why does X have low hours" → look at their numbers and notes
-- If notes say what they worked on → mention it specifically
-- Give specific numbers, not generic advice
-- Format: 1-2 sentences with the actual numbers, then brief reason
-- Never say "I don't have information" — everything is in the data above
-- Keep response under 100 words, bullet points if listing multiple things
+- When the user asks about a specific entry, ALWAYS cite the exact date and
+  whether the entry was billable or non-billable.
+- If asked "why did X get Y non-billable hours" or "what did X work on",
+  list each matching entry with: date, hours, client, and the description.
+  Quote the description text when relevant.
+- Format dates as "YYYY-MM-DD". Sum hours when there are multiple entries.
+- Use the RECENT TIMESHEET ENTRIES block above — every row there is real data
+  with a real date. Never say "I don't have the date" if the entry is there.
+- Give specific numbers, not generic advice.
+- Keep response under 120 words. Use bullet points when listing multiple entries.
 
 Status thresholds: BELOW TARGET <75% | ON TARGET 75-95% | OVER TARGET 95-120% | CRITICAL >120%"""
 
     response = groq_client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[{"role": "system", "content": system_prompt}, *messages],
-        max_tokens=150,
-        temperature=0.3,
+        max_tokens=220,
+        temperature=0.2,
     )
     return {"reply": response.choices[0].message.content}
 
