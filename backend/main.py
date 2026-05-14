@@ -2739,6 +2739,118 @@ def debug_unmapped_clients():
     }
 
 
+@app.get("/api/debug/employee-raw")
+def debug_employee_raw(team_id: str, name: str, period: str = "monthly"):
+    """Diagnostic dump for the Daily Hours chart bug. Returns the raw rows the
+    employee endpoint sees, what format their `date` field is in, which match
+    strategy fired, and what dailyHours[] would compute to. Read-only — does
+    not change any state. Hit this when totals show real hours but Daily Hours
+    renders empty."""
+    if period not in ("today", "weekly", "monthly"):
+        return {"error": "Invalid period. Use today | weekly | monthly."}
+    if team_id not in TEAM_LETTER_MAP:
+        return {"error": f"unknown team_id {team_id}"}
+
+    start, end, label = date_range_for_period(period)
+    try:
+        rows = get_cached_rows(start, end)
+    except Exception as e:
+        return {"error": f"get_cached_rows failed: {e}", "team_id": team_id}
+
+    emp_rows, strategy = _match_employee_rows(rows, name)
+
+    # Sample the first 5 matched rows verbatim (everything parse_rows produced).
+    # Strip the cached `_assignedTeam` helper field if present, but keep
+    # everything else so the user can see what the upstream returned.
+    def _sanitize(r: dict) -> dict:
+        return {k: v for k, v in r.items() if not k.startswith("_")}
+
+    sample = [_sanitize(r) for r in emp_rows[:5]]
+
+    # Distinct date values seen, capped at 10
+    seen_dates: list = []
+    seen_set: set = set()
+    empty_count = 0
+    for r in emp_rows:
+        d = r.get("date")
+        if not d:
+            empty_count += 1
+            continue
+        if d in seen_set:
+            continue
+        seen_set.add(d)
+        if len(seen_dates) < 10:
+            seen_dates.append(d)
+
+    date_field_present = any(("date" in r) for r in emp_rows)
+
+    # Re-run the daily-buckets logic from _build_employee_response so we can
+    # report dailyHours_returned without round-tripping through the endpoint.
+    daily_buckets: dict = {}
+    undated_hours = 0.0
+    for r in emp_rows:
+        d = _normalize_date(r.get("date"))
+        h = float(r.get("hours") or 0)
+        if not d:
+            undated_hours += h
+            continue
+        bucket = daily_buckets.setdefault(d, {"hours": 0.0, "billable": 0.0, "nonBillable": 0.0})
+        bucket["hours"] += h
+        if r.get("billable"):
+            bucket["billable"] += h
+        else:
+            bucket["nonBillable"] += h
+
+    daily_out: list = []
+    try:
+        start_d = datetime.strptime(start, "%Y-%m-%d")
+        end_d   = datetime.strptime(end,   "%Y-%m-%d")
+        today_d = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        cap     = min(end_d, today_d)
+        cur = start_d
+        while cur <= cap:
+            key = cur.strftime("%Y-%m-%d")
+            b = daily_buckets.get(key, {"hours": 0.0, "billable": 0.0, "nonBillable": 0.0})
+            daily_out.append({
+                "date":        key,
+                "hours":       round(b["hours"], 1),
+                "billable":    round(b["billable"], 1),
+                "nonBillable": round(b["nonBillable"], 1),
+            })
+            cur += timedelta(days=1)
+    except Exception as e:
+        daily_out = [{"error": f"date loop failed: {e}"}]
+
+    nonzero_count = sum(1 for d in daily_out if d.get("hours", 0) > 0)
+    total_h = round(sum(float(r.get("hours") or 0) for r in emp_rows), 1)
+
+    # Also probe _normalize_date on each unique date string so the user can see
+    # which raw formats survive normalization and which collapse to "".
+    norm_probe = []
+    for d in seen_dates:
+        norm_probe.append({"raw": d, "normalized": _normalize_date(d)})
+
+    return {
+        "name_searched":                name,
+        "name_matching_strategy_used":  strategy,
+        "matched_rows_count":           len(emp_rows),
+        "first_5_matched_rows":         sample,
+        "date_field_values_sample":     seen_dates,
+        "date_field_present_in_rows":   date_field_present,
+        "date_field_empty_count":       empty_count,
+        "normalize_date_probe":         norm_probe,
+        "period_start":                 start,
+        "period_end":                   end,
+        "period_label":                 label,
+        "today":                        datetime.now().strftime("%Y-%m-%d"),
+        "dailyHours_returned":          daily_out,
+        "dailyHours_nonzero_count":     nonzero_count,
+        "totalHours_computed":          total_h,
+        "undated_hours":                round(undated_hours, 1),
+        "total_rows_in_period":         len(rows),
+    }
+
+
 @app.get("/api/debug/client-coverage")
 def debug_client_coverage(team_id: str):
     """Per-configured-client coverage report for one team.
