@@ -277,7 +277,7 @@ TEAM_CLIENTS: dict[str, list[dict]] = {
         {"name": "Redmond",              "tsMatch": ["Redmond"],                               "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
     ],
     "team_j": [
-        {"name": "GFA",                  "tsMatch": ["GFA"],                                   "estHrs": 640, "tz": "EST", "meeting": "Monthly 3rd week Thursday 5:30pm IST"},
+        {"name": "GFA",                  "tsMatch": ["GFA", "Go Figure", "Go Figure Accounting"], "estHrs": 640, "tz": "EST", "meeting": "Monthly 3rd week Thursday 5:30pm IST"},
     ],
     "team_k": [
         {"name": "Portnoy CPA",          "tsMatch": ["Portnoy"],                               "estHrs": 320, "tz": "EST", "meeting": "Monthly"},
