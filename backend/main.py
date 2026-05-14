@@ -1036,13 +1036,16 @@ def fuzzy_contains(haystack: str, needle: str) -> bool:
 
 def _normalize_date(date_raw) -> str:
     """Normalize any reasonable date input to 'YYYY-MM-DD'.
-    Handles: 'YYYY-MM-DD', 'YYYY-MM-DDTHH:MM:SS', 'M/D/YYYY', 'M/D/YY',
-    'MM/DD/YYYY'. Returns '' if it can't be parsed (so callers can detect
-    missing dates instead of getting a silently mangled string)."""
+
+    The Timesheets.com upstream returns WORKDATE as 'May, 06 2026 00:00:00'
+    (abbreviated month, comma, day, year, optional HH:MM:SS). We accept that
+    plus ISO, slash, and dash variants. Returns '' if nothing parses, so
+    callers can distinguish a missing date from a silently mangled one.
+    """
     s = str(date_raw or "").strip()
     if not s:
         return ""
-    # ISO first (with or without time component)
+    # ISO first (with or without time component) — fast path
     head = s[:10]
     if len(head) == 10 and head[4] == "-" and head[7] == "-":
         try:
@@ -1050,7 +1053,7 @@ def _normalize_date(date_raw) -> str:
             return head
         except ValueError:
             pass
-    # Slash forms — could be M/D/YYYY or M/D/YY
+    # Numeric slash forms — could be M/D/YYYY or M/D/YY
     if "/" in s:
         parts = s.split(" ")[0].split("/")
         if len(parts) >= 3:
@@ -1063,12 +1066,40 @@ def _normalize_date(date_raw) -> str:
                 return f"{yr:04d}-{mo:02d}-{dy:02d}"
             except ValueError:
                 pass
-    # Last-resort: try strptime against common variants
-    for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%Y/%m/%d", "%d-%b-%Y", "%d %b %Y"):
-        try:
-            return datetime.strptime(s[:19], fmt).strftime("%Y-%m-%d")
-        except ValueError:
-            continue
+    # Try strptime against common variants. Most-specific (with time) first.
+    # Stripping any trailing time-of-day variant we don't recognize gives the
+    # date-only variants a second chance.
+    base = s.split(" ", 1)[0] if " " in s and "," not in s.split(" ", 1)[0] else s
+    # If there's a comma after the month abbrev (e.g. "May, 06 2026 00:00:00")
+    # the date piece runs up to the second space after the comma.
+    date_only = s
+    if "," in s:
+        # "May, 06 2026 00:00:00" → split off the time-of-day if present
+        parts = s.split(" ")
+        if len(parts) >= 3:
+            date_only = " ".join(parts[:3])  # "May, 06 2026"
+    for fmt in (
+        "%b, %d %Y %H:%M:%S",  # Timesheets.com WORKDATE
+        "%b, %d %Y",
+        "%b %d, %Y %H:%M:%S",
+        "%b %d, %Y",
+        "%B %d, %Y %H:%M:%S",
+        "%B %d, %Y",
+        "%b %d %Y",
+        "%B %d %Y",
+        "%d-%b-%Y",
+        "%d %b %Y",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+        "%m/%d/%Y",
+        "%m-%d-%Y",
+        "%Y/%m/%d",
+    ):
+        for candidate in (s, date_only, base):
+            try:
+                return datetime.strptime(candidate, fmt).strftime("%Y-%m-%d")
+            except ValueError:
+                continue
     return ""
 
 
