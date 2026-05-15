@@ -700,6 +700,60 @@ def _fetch_eod_csv(sheet_id: str, tab: str | None = None, gid: str | None = None
     return resp.text, url
 
 
+def _normalize_eod_status(raw: str) -> str:
+    """Map free-text column-L into one of:
+       awaiting_response | in_progress | completed | ""
+
+    Strips every non-letter (so "Awaiting REstponse" → "awaitingrestponse"
+    still matches the "awaiting" substring; "In-Process" / "In Process" /
+    "WIP" / "On-going" all collapse into a single check).
+    """
+    if not raw:
+        return ""
+    s = re.sub(r"[^a-z]", "", raw.lower())
+    if not s:
+        return ""
+    # Awaiting Response — also catches the "Awaiting REstponse" typo seen in
+    # the Team J sheet and any "awaitingreply"-style variant.
+    if "awaiting" in s:
+        return "awaiting_response"
+    # In-Progress family
+    if "inprogress" in s or "inprocess" in s or "wip" in s or "ongoing" in s:
+        return "in_progress"
+    # Completed family — "Delay Resolved" and similar map here.
+    if ("completed" in s or "complete" in s or "done" in s
+            or "resolved" in s or "closed" in s):
+        return "completed"
+    return ""
+
+
+# Notes-column heuristic patterns. Kept as lowercase substrings so the caller
+# only has to lowercase once.
+_NOTES_PENDING_SIGNALS = (
+    "awaiting", "in process", "in progress", "pending", "query",
+    "queries", "blocked", "blocker", "open issue",
+)
+_NOTES_COMPLETED_SIGNALS = (
+    "completed", "resolved", "closed", "done", "no issues",
+)
+
+
+def _infer_status_from_notes(notes: str) -> str:
+    """When column L is blank, scan column M (status details) for delay
+    keywords. Returns awaiting_response if any pending signal fires,
+    completed if ONLY completed signals fire, "" if neither side fires."""
+    if not notes:
+        return ""
+    t = notes.lower()
+    has_pending   = any(sig in t for sig in _NOTES_PENDING_SIGNALS)
+    has_completed = any(sig in t for sig in _NOTES_COMPLETED_SIGNALS)
+    if has_pending:
+        return "awaiting_response"
+    if has_completed:
+        return "completed"
+    return ""
+
+
 def get_eod_data(sheet_id: str, tab: str | None = None, gid: str | None = None) -> list[dict]:
     csv_text, _url = _fetch_eod_csv(sheet_id, tab=tab, gid=gid)
     if not csv_text:
@@ -726,16 +780,17 @@ def get_eod_data(sheet_id: str, tab: str | None = None, gid: str | None = None) 
         posted_query  = str(row[13]).strip() if len(row) > 13 else ""  # col N (Posted Query Details)
         util_pct      = round(booked_val / committed_val * 100, 1) if committed_val > 0 else 0.0
 
-        # Normalize column L into one of: completed | in_progress | awaiting_response | ""
-        sl = eod_status.lower()
-        if "awaiting" in sl:
-            status_norm = "awaiting_response"
-        elif "in progress" in sl or "inprogress" in sl:
-            status_norm = "in_progress"
-        elif "complet" in sl:
-            status_norm = "completed"
-        else:
-            status_norm = ""
+        # Status: prefer the explicit column-L value. When blank, infer from
+        # the notes column ("WORKPAPER Awaiting - 1" → awaiting_response).
+        status_norm   = _normalize_eod_status(eod_status)
+        status_source = "explicit_column_L" if status_norm else ""
+        if not status_norm:
+            inferred = _infer_status_from_notes(eod_notes)
+            if inferred:
+                status_norm   = inferred
+                status_source = "notes_heuristic"
+            else:
+                status_source = "blank"
 
         note_delays = (
             len([x for x in eod_notes.split("\n") if x.strip()])
@@ -747,16 +802,17 @@ def get_eod_data(sheet_id: str, tab: str | None = None, gid: str | None = None) 
             delays = note_delays
 
         result.append({
-            "date":       date_iso or date_raw[:10],
-            "dateRaw":    date_raw,
-            "committed":  committed_val,
-            "booked":     booked_val,
-            "utilPct":    util_pct,
-            "eodStatus":  eod_status,
-            "statusNorm": status_norm,
-            "notes":      eod_notes,
-            "queryText":  posted_query,
-            "delays":     delays,
+            "date":             date_iso or date_raw[:10],
+            "dateRaw":          date_raw,
+            "committed":        committed_val,
+            "booked":           booked_val,
+            "utilPct":          util_pct,
+            "eodStatus":        eod_status,
+            "statusNorm":       status_norm,
+            "statusNormSource": status_source,
+            "notes":            eod_notes,
+            "queryText":        posted_query,
+            "delays":           delays,
         })
     return result
 
@@ -3163,12 +3219,11 @@ def debug_client_eod(name: str, period: str = "monthly"):
     out["period_window"] = {"start": start, "end": end}
 
     # ── Diagnostic counters ────────────────────────────────────────
-    # The aging summary being all zeros while delaysByDay_nonempty_days > 0
-    # means every row is being classified as "completed". The counters below
-    # explain WHY by reporting the raw status distribution + period-window
-    # filter behavior + a sample of any rows that DO look open.
+    # Reports how every row was classified so we can see which path fired
+    # (explicit column-L, notes heuristic, or blank).
     status_dist: dict[str, int] = {}
     status_norm_dist: dict[str, int] = {}
+    status_source_dist: dict[str, int] = {}
     raw_status_sample: list[str] = []
     period_start_d = _parse_eod_date(start)
     period_end_d   = _parse_eod_date(end)
@@ -3181,8 +3236,10 @@ def debug_client_eod(name: str, period: str = "monthly"):
     for r in picked_rows:
         raw = (r.get("eodStatus") or "").strip()
         norm = (r.get("statusNorm") or "")
+        src  = (r.get("statusNormSource") or "blank")
         status_dist[raw or "<blank>"] = status_dist.get(raw or "<blank>", 0) + 1
         status_norm_dist[norm or "<blank>"] = status_norm_dist.get(norm or "<blank>", 0) + 1
+        status_source_dist[src] = status_source_dist.get(src, 0) + 1
         if raw and len(raw_status_sample) < 10 and raw not in raw_status_sample:
             raw_status_sample.append(raw)
         # Period filter
@@ -3203,17 +3260,30 @@ def debug_client_eod(name: str, period: str = "monthly"):
         else:
             blank_status_in_period += 1
 
-    out["status_distribution"]       = status_dist
-    out["statusNorm_distribution"]   = status_norm_dist
+    total_rows  = len(picked_rows)
+    blank_count = status_dist.get("<blank>", 0)
+    data_quality_warning: str | None = None
+    if total_rows and blank_count / total_rows >= 0.20:
+        pct = round(blank_count * 100 / total_rows)
+        data_quality_warning = (
+            f"{blank_count} of {total_rows} rows ({pct}%) have blank EOD "
+            f"Status (column L). Classifying via notes heuristic. Recommend "
+            f"{parent_team_id or 'the team'} fill column L for accurate aging."
+        )
+
+    out["status_distribution"]        = status_dist
+    out["statusNorm_distribution"]    = status_norm_dist
+    out["statusNormSource_distribution"] = status_source_dist
     out["raw_status_distinct_sample"] = raw_status_sample
-    out["period_filtered_row_count"] = len(period_filtered)
-    out["period_filter_breakdown"]   = {
+    out["data_quality_warning"]       = data_quality_warning
+    out["period_filtered_row_count"]  = len(period_filtered)
+    out["period_filter_breakdown"]    = {
         "completed":             completed_in_period,
         "in_progress":           in_progress_in_period,
         "awaiting_response":     awaiting_in_period,
         "blank_status":          blank_status_in_period,
     }
-    out["open_rows_in_period"]       = len(open_in_period)
+    out["open_rows_in_period"]        = len(open_in_period)
     out["first_3_open_rows_in_period"] = open_in_period[:3]
     out["first_3_in_period_rows_full"] = period_filtered[:3]
 
