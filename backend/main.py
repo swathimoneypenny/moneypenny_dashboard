@@ -663,21 +663,33 @@ def _eod_date_iso(date_raw) -> str:
     return dt.strftime("%Y-%m-%d") if dt else ""
 
 
-def get_eod_data(sheet_id: str, tab: str | None = None, gid: str | None = None) -> list[dict]:
+def _fetch_eod_csv(sheet_id: str, tab: str | None = None, gid: str | None = None) -> tuple[str, str]:
+    """Fetch the raw CSV for an EOD tab. Returns (csv_text, url_used).
+
+    Prefers the /export endpoint (which exports the entire sheet including
+    blank rows) when gid is known. Falls back to /gviz/tq with an explicit
+    range when only a tab name is available. Raises EodSheetError on permission
+    / not-found errors so the picker can move on to the next candidate.
+    """
     if not sheet_id:
-        return []
-    # Force an explicit range so gviz's auto-detect doesn't stop at the first
-    # blank row in column A — some EOD tabs have a blank separator row between
-    # the old data block (March 2025) and current entries (May 2026), and the
-    # auto-detect was silently truncating to the first chunk.
-    url = (f"https://docs.google.com/spreadsheets/d/{sheet_id}"
-           f"/gviz/tq?tqx=out:csv&range=A1:O10000")
+        return "", ""
     if gid:
-        url += f"&gid={gid}"
+        # /export?format=csv returns the full sheet content for that gid,
+        # blank rows included — bypasses gviz's auto-truncate-at-first-blank.
+        url = (f"https://docs.google.com/spreadsheets/d/{sheet_id}"
+               f"/export?format=csv&gid={gid}")
     elif tab:
-        url += f"&sheet={requests.utils.quote(tab)}"
+        url = (f"https://docs.google.com/spreadsheets/d/{sheet_id}"
+               f"/gviz/tq?tqx=out:csv&range=A1:O10000"
+               f"&sheet={requests.utils.quote(tab)}")
+    else:
+        # No tab/gid → default first tab via gviz
+        url = (f"https://docs.google.com/spreadsheets/d/{sheet_id}"
+               f"/gviz/tq?tqx=out:csv&range=A1:O10000")
+
+    print(f"[eod-fetch] url={url}")
     resp = requests.get(url, timeout=15)
-    if resp.status_code == 401 or resp.status_code == 403:
+    if resp.status_code in (401, 403):
         raise EodSheetError(
             "EOD source not accessible. Share the sheet as 'Anyone with the link can view'.",
             resp.status_code,
@@ -685,8 +697,14 @@ def get_eod_data(sheet_id: str, tab: str | None = None, gid: str | None = None) 
     if resp.status_code == 404:
         raise EodSheetError("EOD source not found (404). Verify the sheet URL.", 404)
     resp.raise_for_status()
+    return resp.text, url
 
-    reader = csv.reader(io.StringIO(resp.text))
+
+def get_eod_data(sheet_id: str, tab: str | None = None, gid: str | None = None) -> list[dict]:
+    csv_text, _url = _fetch_eod_csv(sheet_id, tab=tab, gid=gid)
+    if not csv_text:
+        return []
+    reader = csv.reader(io.StringIO(csv_text))
     rows = list(reader)
     result = []
     start = 1 if rows and not _safe_float(rows[0][0] if rows[0] else "") else 0
@@ -3073,26 +3091,65 @@ def debug_client_eod(name: str, period: str = "monthly"):
         candidates.append((f"gid={gid}",            {"gid": gid}))
     candidates.append(("default-first-tab",         {}))
 
+    # Walk every candidate. Capture raw CSV + parsed-row counts + URL used,
+    # so the response shows whether truncation is happening at the gviz/export
+    # layer (raw CSV is short) or further down in our parser (raw CSV is long
+    # but parsed rows aren't).
+    today_d = datetime.now()
+    recent_cutoff = today_d - timedelta(days=90)
+    attempts: list[dict] = []
+    picked: dict | None = None
     picked_rows: list[dict] = []
     picked_label: str | None = None
+    picked_csv: str = ""
+    best_score: tuple[int, int] = (-1, -1)
+
     for label, kwargs in candidates:
-        attempt = {"candidate": label, "rows": 0, "error": None}
+        attempt: dict = {
+            "candidate":  label,
+            "url":        None,
+            "csv_bytes":  0,
+            "csv_lines":  0,
+            "totalRows":  0,
+            "recentRows": 0,
+            "error":      None,
+        }
         try:
-            rows = get_eod_data(sid, **kwargs)
-            attempt["rows"] = len(rows)
-            if rows and picked_label is None:
+            csv_text, url_used = _fetch_eod_csv(sid, **kwargs)
+            attempt["url"]       = url_used
+            attempt["csv_bytes"] = len(csv_text)
+            attempt["csv_lines"] = csv_text.count("\n") + (1 if csv_text else 0)
+            # Parse via the same logic get_eod_data uses, so attempts mirror live behavior
+            rows = get_eod_data(sid, **kwargs) if csv_text else []
+            attempt["totalRows"] = len(rows)
+            for r in rows:
+                d = _parse_eod_date(r.get("date") or r.get("dateRaw") or "")
+                if d and d >= recent_cutoff:
+                    attempt["recentRows"] += 1
+            score = (attempt["recentRows"], attempt["totalRows"])
+            if score > best_score:
+                best_score = score
+                picked = attempt
                 picked_rows = rows
                 picked_label = label
+                picked_csv = csv_text
         except EodSheetError as e:
             attempt["error"] = e.reason
         except Exception as e:
             attempt["error"] = f"{type(e).__name__}: {e}"
-        out["candidates_attempted"].append(attempt)
+        attempts.append(attempt)
 
+    out["candidates_attempted"]      = attempts
+    out["attempts"]                  = attempts  # alias the user asked for
     out["tab_matching_strategy_used"] = picked_label or "none"
     out["matched_tab_label"]          = picked_label
+    out["picked_url"]                 = picked.get("url") if picked else None
     out["raw_eod_rows_in_picked_tab"] = len(picked_rows)
     out["first_5_raw_rows"]           = picked_rows[:5]
+    out["last_5_raw_rows"]            = picked_rows[-5:] if len(picked_rows) > 5 else []
+    out["raw_csv_total_bytes"]        = len(picked_csv)
+    out["raw_csv_first_500_chars"]    = picked_csv[:500]
+    out["raw_csv_last_500_chars"]     = picked_csv[-500:] if len(picked_csv) > 500 else picked_csv
 
     # Now run compute_delays_aging exactly as the live endpoint does
     start, end, _ = date_range_for_period(period)
