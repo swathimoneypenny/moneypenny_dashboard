@@ -10,6 +10,7 @@ import base64
 import hashlib
 import secrets
 import asyncio
+from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(__file__))
 
 from contextlib import asynccontextmanager
@@ -1427,18 +1428,72 @@ def parse_rows(data) -> list[dict]:
                 or row.get("GROUPNAME")
                 or ""
             )
+            # LASTCHANGEDATE is the only upstream field that carries real
+            # HH:MM:SS precision (verified via /api/debug/upstream-time-fields).
+            # We store the parsed datetime as a naive ISO string in IST since
+            # that's where Timesheets.com data originates.
+            last_changed_at = _parse_change_timestamp(row.get("LASTCHANGEDATE", ""))
             rows.append({
-                "userId":   userid,
-                "name":     row.get("FULLNAME", "Unknown"),
-                "hours":    hours,
-                "billable": str(row.get("BILLABLE", "0")) == "1",
-                "customer": row.get("CUSTOMERNAME", ""),
-                "project":  row.get("PROJECTNAME", ""),
-                "desc":     row.get("WORKDESCRIPTION", ""),
-                "team":     team,
-                "date":     _normalize_date(date_raw),
+                "userId":         userid,
+                "name":           row.get("FULLNAME", "Unknown"),
+                "hours":          hours,
+                "billable":       str(row.get("BILLABLE", "0")) == "1",
+                "customer":       row.get("CUSTOMERNAME", ""),
+                "project":        row.get("PROJECTNAME", ""),
+                "desc":           row.get("WORKDESCRIPTION", ""),
+                "team":           team,
+                "date":           _normalize_date(date_raw),
+                "lastChangedAt":  last_changed_at,
             })
     return rows
+
+
+_IST = ZoneInfo("Asia/Kolkata")
+ACTIVE_WINDOW_MINUTES = 90
+
+
+def _now_ist_naive() -> datetime:
+    """Current time in Asia/Kolkata as a naive datetime, matching the naive
+    ISO strings stored in row['lastChangedAt']."""
+    return datetime.now(_IST).replace(tzinfo=None)
+
+
+def _is_active_now(last_changed_iso: str) -> bool:
+    """True iff the (naive-IST) ISO timestamp is within ACTIVE_WINDOW_MINUTES
+    of current IST time."""
+    if not last_changed_iso:
+        return False
+    try:
+        then = datetime.fromisoformat(last_changed_iso)
+    except (ValueError, TypeError):
+        return False
+    diff = (_now_ist_naive() - then).total_seconds() / 60
+    return 0 <= diff <= ACTIVE_WINDOW_MINUTES
+
+
+def _parse_change_timestamp(raw) -> str:
+    """Parse a Timesheets.com LASTCHANGEDATE value into a naive ISO string.
+
+    Upstream format observed: 'May, 08 2026 12:43:23'. Returns '' if blank
+    or unparseable. The returned string omits the timezone suffix — callers
+    treat it as Asia/Kolkata-local (where Timesheets.com data originates).
+    """
+    s = ("" if raw is None else str(raw)).strip()
+    if not s:
+        return ""
+    for fmt in (
+        "%b, %d %Y %H:%M:%S",
+        "%b %d, %Y %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+        "%m/%d/%Y %H:%M:%S",
+        "%m/%d/%y %H:%M:%S",
+    ):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%dT%H:%M:%S")
+        except ValueError:
+            continue
+    return ""
 
 
 def iter_rows(data) -> list[dict]:
@@ -2826,21 +2881,38 @@ def _build_employee_response(team_id: str, employee_name: str, period: str) -> d
           f"dailyHoursCount={len(daily_out)} firstDate={first_date} lastDate={last_date} "
           f"undatedHours={round(undated_hours, 1)}")
 
+    # Last-activity fields — pulled from the row with the latest LASTCHANGEDATE
+    last_row = None
+    last_lc  = ""
+    for r in emp_rows:
+        lc = r.get("lastChangedAt") or ""
+        if lc and lc > last_lc:
+            last_lc  = lc
+            last_row = r
+    last_desc = (last_row.get("desc") if last_row else "") or ""
+    last_desc = last_desc.strip().replace("\n", " ")
+
     return {
-        "name":             canonical_name,
-        "team_id":          team_id,
-        "team_name":        cfg.get("label", team_id),
-        "period":           label,
-        "totalHours":       round(total_h, 1),
-        "billableHours":    round(billable_h, 1),
-        "nonBillableHours": round(nonbill_h, 1),
-        "billablePct":      bill_pct,
-        "committedHours":   round(committed, 1),
-        "utilizationPct":   util_pct,
-        "topClients":       top_clients,
-        "recentWork":       recent_out,
-        "dailyHours":       daily_out,
-        "rowCount":         len(emp_rows),
+        "name":              canonical_name,
+        "team_id":           team_id,
+        "team_name":         cfg.get("label", team_id),
+        "period":            label,
+        "totalHours":        round(total_h, 1),
+        "billableHours":     round(billable_h, 1),
+        "nonBillableHours":  round(nonbill_h, 1),
+        "billablePct":       bill_pct,
+        "committedHours":    round(committed, 1),
+        "utilizationPct":    util_pct,
+        "topClients":        top_clients,
+        "recentWork":        recent_out,
+        "dailyHours":        daily_out,
+        "rowCount":          len(emp_rows),
+        "lastLoggedAt":      last_lc,
+        "lastLoggedClient":  (last_row.get("customer") if last_row else "") or "",
+        "lastLoggedProject": (last_row.get("project")  if last_row else "") or "",
+        "lastLoggedDesc":    last_desc[:80],
+        "lastLoggedHours":   round(float(last_row.get("hours") or 0), 1) if last_row else 0,
+        "activeNow":         _is_active_now(last_lc),
     }
 
 
@@ -2858,7 +2930,7 @@ async def employee_endpoint(team_id: str, employee_name: str, period: str):
 # ── Leaderboard ──────────────────────────────────────────────────
 
 _leaderboard_cache: dict = {}
-LEADERBOARD_CACHE_SECS = 300  # 5 min
+LEADERBOARD_CACHE_SECS = 60  # 1 min — short enough for auto-refresh to feel live
 
 
 def _previous_period_range(period: str) -> tuple[str, str] | None:
@@ -2905,10 +2977,20 @@ def _build_leaderboard(team_id: str, period: str) -> dict:
         if not name:
             continue
         h = float(r.get("hours") or 0)
-        entry = by_emp.setdefault(name, {"billable": 0.0, "total": 0.0})
+        entry = by_emp.setdefault(name, {
+            "billable":      0.0,
+            "total":         0.0,
+            "lastChangedAt": "",
+            "lastRow":       None,
+        })
         entry["total"] += h
         if r.get("billable"):
             entry["billable"] += h
+        # Track the row with the latest LASTCHANGEDATE for this employee
+        lc = r.get("lastChangedAt") or ""
+        if lc and lc > entry["lastChangedAt"]:
+            entry["lastChangedAt"] = lc
+            entry["lastRow"]       = r
 
     # Previous-period rows for trend (only if already cached — never re-fetch)
     prev_by_emp: dict = {}
@@ -2939,13 +3021,25 @@ def _build_leaderboard(team_id: str, period: str) -> dict:
             trend = "up" if delta > 5 else ("down" if delta < -5 else "flat")
         else:
             trend = "flat"
+        # Last-activity fields, pulled from the row with the latest
+        # LASTCHANGEDATE for this employee.
+        last_changed   = v["lastChangedAt"]
+        last_row       = v["lastRow"] or {}
+        last_desc      = (last_row.get("desc") or "").strip().replace("\n", " ")
+        active_now     = _is_active_now(last_changed)
         members.append({
-            "name":       name,
-            "billable":   round(v["billable"], 1),
-            "committed":  round(committed, 1),
-            "utilPct":    util,
-            "totalHours": round(v["total"], 1),
-            "trend":      trend,
+            "name":             name,
+            "billable":         round(v["billable"], 1),
+            "committed":        round(committed, 1),
+            "utilPct":          util,
+            "totalHours":       round(v["total"], 1),
+            "trend":            trend,
+            "lastLoggedAt":     last_changed,
+            "lastLoggedClient": (last_row.get("customer") or "").strip(),
+            "lastLoggedProject": (last_row.get("project") or "").strip(),
+            "lastLoggedDesc":   last_desc[:80],
+            "lastLoggedHours":  round(float(last_row.get("hours") or 0), 1) if last_row else 0,
+            "activeNow":        active_now,
         })
 
     members.sort(key=lambda m: -m["utilPct"])

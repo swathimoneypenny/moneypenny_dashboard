@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { C, authFetch } from "../config";
-import { LiveIndicator, useAutoRefresh } from "../components/LiveIndicator";
+import { LiveIndicator, useAutoRefresh, timeAgo, formatTimeIST } from "../components/LiveIndicator";
 import {
   BarChart,
   Bar,
@@ -103,6 +103,51 @@ function KpiCard({ label, value, color, suffix = "h", decimals = 1 }) {
     </div>
   );
 }
+
+function LastActivityCard({ activeNow, lastLoggedAt, lastLoggedClient, lastLoggedProject, lastLoggedDesc }) {
+  const accent = activeNow ? "#3DC58B" : C.muted;
+  const dot    = activeNow ? "🟢" : "⚫";
+  const badge  = activeNow ? "ACTIVE" : "IDLE";
+  return (
+    <div
+      style={{
+        background: activeNow
+          ? `linear-gradient(180deg, ${C.card} 0%, rgba(61,197,139,0.10) 100%)`
+          : `linear-gradient(180deg, ${C.card} 0%, ${C.surface} 100%)`,
+        border: `1px solid ${activeNow ? "rgba(61,197,139,0.35)" : C.border}`,
+        borderTop: `3px solid ${accent}`,
+        borderRadius: 12,
+        padding: "16px 20px 14px",
+        flex: "1 1 240px",
+        minWidth: 220,
+        boxShadow: `0 2px 8px rgba(0,0,0,0.25)`,
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+      }}
+      title={lastLoggedAt ? `LASTCHANGEDATE: ${formatTimeIST(lastLoggedAt)}` : "No activity recorded"}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: accent, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>
+        <span style={{ fontSize: 8 }}>{dot}</span>
+        <span>Last activity · {badge}</span>
+      </div>
+      <div style={{ fontSize: 20, fontWeight: 700, color: accent, fontFamily: "'DM Mono', monospace", lineHeight: 1.1 }}>
+        {timeAgo(lastLoggedAt)}
+      </div>
+      <div style={{ fontSize: 12, color: C.sec, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {lastLoggedClient
+          ? `${lastLoggedClient}${lastLoggedProject ? ` / ${lastLoggedProject}` : ""}`
+          : "—"}
+      </div>
+      {lastLoggedDesc && (
+        <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          “{lastLoggedDesc}{lastLoggedDesc.length >= 80 ? "…" : ""}”
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 function ChartCard({ title, children }) {
   return (
@@ -268,7 +313,7 @@ ${lines.join("\n")}`;
             <div style={{ fontSize: 18, fontWeight: 700, color: C.pri, letterSpacing: -0.3 }}>
               {name}
             </div>
-            <div style={{ fontSize: 12, color: C.sec, marginTop: 2 }}>
+            <div style={{ fontSize: 12, color: C.sec, marginTop: 2, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <span
                 style={{
                   background: `${C.blue}22`,
@@ -282,6 +327,31 @@ ${lines.join("\n")}`;
               >
                 {teamLabel}
               </span>
+              {data?.activeNow && data?.lastLoggedClient && (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    fontSize: 11,
+                    color: "#3DC58B",
+                    fontWeight: 500,
+                  }}
+                  title={formatTimeIST(data.lastLoggedAt)}
+                >
+                  <span
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: "50%",
+                      background: "#3DC58B",
+                      animation: "pulse-dot 2s infinite",
+                    }}
+                  />
+                  Working on <strong style={{ color: C.pri }}>{data.lastLoggedClient}</strong>
+                  <span style={{ color: C.muted }}>· last update {timeAgo(data.lastLoggedAt)}</span>
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -339,6 +409,13 @@ ${lines.join("\n")}`;
             <KpiCard label="Billable Hours"  value={data?.billableHours}  color={C.teal} />
             <KpiCard label="Billable %"      value={data?.billablePct}    color={C.green} suffix="%" />
             <KpiCard label="Utilization %"   value={data?.utilizationPct} color={utilColor(data?.utilizationPct ?? 0)} suffix="%" />
+            <LastActivityCard
+              activeNow={!!data?.activeNow}
+              lastLoggedAt={data?.lastLoggedAt}
+              lastLoggedClient={data?.lastLoggedClient}
+              lastLoggedProject={data?.lastLoggedProject}
+              lastLoggedDesc={data?.lastLoggedDesc}
+            />
           </div>
         )}
 

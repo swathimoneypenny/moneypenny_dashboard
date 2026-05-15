@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { C, API_BASE, authFetch } from "../config";
-import { LiveIndicator, useAutoRefresh } from "../components/LiveIndicator";
+import { LiveIndicator, useAutoRefresh, timeAgo, formatTimeIST } from "../components/LiveIndicator";
 import {
   BarChart,
   Bar,
@@ -1344,6 +1344,14 @@ ${clients.map((o) => (
           />
         )}
 
+        {/* Currently Active — drives off lastLoggedAt / activeNow from the leaderboard */}
+        {!data?.needsRosterSetup && leaderboard && Array.isArray(leaderboard.members) && leaderboard.members.length > 0 && (
+          <CurrentlyActiveWidget
+            members={leaderboard.members}
+            onSelect={(name) => onSelectEmployee && onSelectEmployee({ teamId, employeeName: name, teamName: displayLabel })}
+          />
+        )}
+
         {!data?.needsRosterSetup && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
           <ChartCard title={`Committed vs Utilized Hours by Month (${currentYear})`}>
@@ -1582,6 +1590,136 @@ function UnderutilizedWidget({ members, onSelect }) {
   );
 }
 
+// ── Currently Active widget ──────────────────────────────────────
+function _isBusinessHoursIST(date = new Date()) {
+  // Convert local time to Asia/Kolkata using Intl. Day-of-week from IST.
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Kolkata",
+    hour: "numeric", hour12: false, weekday: "short",
+  });
+  const parts = fmt.formatToParts(date);
+  const wk = parts.find((p) => p.type === "weekday")?.value || "";
+  const hh = Number(parts.find((p) => p.type === "hour")?.value || 0);
+  const weekday = !["Sat", "Sun"].includes(wk);
+  const inHours = hh >= 9 && hh < 19;
+  return weekday && inHours;
+}
+
+function CurrentlyActiveWidget({ members, onSelect }) {
+  const active = useMemo(
+    () => members
+      .filter((m) => m.activeNow && m.lastLoggedAt)
+      .slice()
+      .sort((a, b) => String(b.lastLoggedAt).localeCompare(String(a.lastLoggedAt))),
+    [members],
+  );
+  const inactive = useMemo(
+    () => members.filter((m) => !m.activeNow),
+    [members],
+  );
+  const total = members.length;
+  const businessHours = _isBusinessHoursIST();
+
+  if (active.length === 0) {
+    const msg = businessHours
+      ? "⚠ No active members during business hours."
+      : "No active members. Outside business hours.";
+    const color = businessHours ? C.orange : C.muted;
+    return (
+      <div
+        style={{
+          background: businessHours ? `${C.orange}10` : `${C.muted}10`,
+          border: `1px solid ${businessHours ? `${C.orange}30` : C.border}`,
+          borderLeft: `3px solid ${color}`,
+          borderRadius: 8,
+          padding: "10px 16px",
+          fontSize: 12,
+          color,
+          fontWeight: 500,
+        }}
+      >
+        {msg}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        background: "rgba(61,197,139,0.05)",
+        border: "1px solid rgba(61,197,139,0.20)",
+        borderLeft: "3px solid #3DC58B",
+        borderRadius: 8,
+        padding: "12px 16px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "#3DC58B", fontWeight: 700, textTransform: "uppercase", letterSpacing: 1 }}>
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#3DC58B", animation: "pulse-dot 2s infinite" }} />
+        Currently Active ({active.length} of {total} team members)
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {active.map((m, i) => (
+          <button
+            key={i}
+            onClick={() => onSelect && onSelect(m.name)}
+            style={{
+              background: "transparent",
+              border: `1px solid ${C.border}`,
+              borderRadius: 6,
+              padding: "6px 10px 6px 6px",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              cursor: "pointer",
+              fontFamily: "'DM Sans', sans-serif",
+              color: C.pri,
+              transition: "all 0.15s",
+              textAlign: "left",
+            }}
+            title={formatTimeIST(m.lastLoggedAt)}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#3DC58B"; e.currentTarget.style.background = "rgba(61,197,139,0.08)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = "transparent"; }}
+          >
+            <div
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 6,
+                background: gradientFor(m.name),
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 10,
+                fontWeight: 700,
+                color: "#fff",
+                flexShrink: 0,
+              }}
+            >
+              {initials(m.name)}
+            </div>
+            <span style={{ fontSize: 12, fontWeight: 600, minWidth: 160 }}>{m.name}</span>
+            <span style={{ fontSize: 12, color: C.sec, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              · {m.lastLoggedClient || "—"}
+            </span>
+            <span style={{ fontSize: 11, color: "#3DC58B", fontFamily: "'DM Mono', monospace", whiteSpace: "nowrap" }}>
+              {timeAgo(m.lastLoggedAt)}
+            </span>
+          </button>
+        ))}
+      </div>
+      {inactive.length > 0 && (
+        <div style={{ fontSize: 11, color: C.muted, marginTop: 2, lineHeight: 1.5 }}>
+          Inactive ({inactive.length}): {inactive.map((m) => m.name).join(", ")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 // ── Team Members table ────────────────────────────────────────────
 function TeamMembersTable({ members, onSelect }) {
   const [sort, setSort] = useState({ col: "utilPct", dir: "asc" });
@@ -1663,6 +1801,7 @@ function TeamMembersTable({ members, onSelect }) {
                     {lbl}{sort.col === col && <span style={{ marginLeft: 4, opacity: 0.5, fontSize: 10 }}>{sort.dir === "asc" ? "▲" : "▼"}</span>}
                   </th>
                 ))}
+                <th style={{ ...th, textAlign: "left" }}>Last Logged</th>
                 <th style={{ ...th, textAlign: "center" }}>Status</th>
               </tr>
             </thead>
@@ -1672,6 +1811,10 @@ function TeamMembersTable({ members, onSelect }) {
                 const st = statusInfo(util);
                 const baseBg = i % 2 === 0 ? "transparent" : C.surface;
                 const isLow = lowUtilSet.has(m.name);
+                const lastDotColor = m.activeNow ? "#3DC58B" : C.muted;
+                const lastTooltip = m.lastLoggedAt
+                  ? `${m.lastLoggedClient || "—"} · ${formatTimeIST(m.lastLoggedAt)}`
+                  : "No activity recorded";
                 return (
                   <tr
                     key={i}
@@ -1719,6 +1862,28 @@ function TeamMembersTable({ members, onSelect }) {
                     </td>
                     <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: utilColor(util) }}>
                       {(m.committed ?? 0) > 0 ? `${util.toFixed(1)}%` : "—"}
+                    </td>
+                    <td
+                      style={{ ...td, fontSize: 12 }}
+                      title={lastTooltip}
+                    >
+                      {m.lastLoggedAt ? (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                          <span style={{
+                            width: 7,
+                            height: 7,
+                            borderRadius: "50%",
+                            background: lastDotColor,
+                            flexShrink: 0,
+                            animation: m.activeNow ? "pulse-dot 2s infinite" : "none",
+                          }} />
+                          <span style={{ color: m.activeNow ? "#3DC58B" : C.sec }}>
+                            {timeAgo(m.lastLoggedAt)}
+                          </span>
+                        </span>
+                      ) : (
+                        <span style={{ color: C.muted }}>—</span>
+                      )}
                     </td>
                     <td style={{ ...td, textAlign: "center" }}>
                       <span

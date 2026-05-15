@@ -3,6 +3,46 @@ import { C } from "../config";
 
 const REFRESH_INTERVAL_SECS = 30;
 
+/**
+ * Relative time string for an ISO timestamp. Returns "—" if blank/invalid.
+ *
+ * The backend stores LASTCHANGEDATE as a naive ISO string in Asia/Kolkata
+ * local time. Viewers in IST (Penny's deployment) will see correct values
+ * because JS parses naive-ISO as local time. Viewers in other zones will
+ * see a skew equal to their UTC offset minus 5:30.
+ */
+export function timeAgo(isoString) {
+  if (!isoString) return "—";
+  const then = new Date(isoString);
+  if (Number.isNaN(then.getTime())) return "—";
+  const diffMin = Math.floor((Date.now() - then.getTime()) / 60000);
+  if (diffMin < 0)  return "in the future";
+  if (diffMin < 1)  return "just now";
+  if (diffMin < 60) return `${diffMin} min ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24)  return `${diffHr} hour${diffHr === 1 ? "" : "s"} ago`;
+  if (diffHr < 48)  return "yesterday";
+  const diffDay = Math.floor(diffHr / 24);
+  return `${diffDay} days ago`;
+}
+
+/** "18:42 IST today" / "18:42 IST yesterday" / "May 8 18:42 IST". */
+export function formatTimeIST(isoString) {
+  if (!isoString) return "—";
+  const then = new Date(isoString);
+  if (Number.isNaN(then.getTime())) return "—";
+  const hh = String(then.getHours()).padStart(2, "0");
+  const mm = String(then.getMinutes()).padStart(2, "0");
+  const now = new Date();
+  const sameDay = then.toDateString() === now.toDateString();
+  const yest = new Date(now);
+  yest.setDate(yest.getDate() - 1);
+  const isYesterday = then.toDateString() === yest.toDateString();
+  if (sameDay)    return `${hh}:${mm} IST today`;
+  if (isYesterday) return `${hh}:${mm} IST yesterday`;
+  return `${then.toLocaleString("en-US", { month: "short", day: "numeric" })} ${hh}:${mm} IST`;
+}
+
 function formatSecsAgo(s) {
   if (s < 0) s = 0;
   if (s < 60) return `${s}s ago`;
