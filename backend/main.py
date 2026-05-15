@@ -3162,6 +3162,61 @@ def debug_client_eod(name: str, period: str = "monthly"):
     )
     out["period_window"] = {"start": start, "end": end}
 
+    # ── Diagnostic counters ────────────────────────────────────────
+    # The aging summary being all zeros while delaysByDay_nonempty_days > 0
+    # means every row is being classified as "completed". The counters below
+    # explain WHY by reporting the raw status distribution + period-window
+    # filter behavior + a sample of any rows that DO look open.
+    status_dist: dict[str, int] = {}
+    status_norm_dist: dict[str, int] = {}
+    raw_status_sample: list[str] = []
+    period_start_d = _parse_eod_date(start)
+    period_end_d   = _parse_eod_date(end)
+    period_filtered: list[dict] = []
+    open_in_period: list[dict] = []
+    completed_in_period = 0
+    in_progress_in_period = 0
+    awaiting_in_period = 0
+    blank_status_in_period = 0
+    for r in picked_rows:
+        raw = (r.get("eodStatus") or "").strip()
+        norm = (r.get("statusNorm") or "")
+        status_dist[raw or "<blank>"] = status_dist.get(raw or "<blank>", 0) + 1
+        status_norm_dist[norm or "<blank>"] = status_norm_dist.get(norm or "<blank>", 0) + 1
+        if raw and len(raw_status_sample) < 10 and raw not in raw_status_sample:
+            raw_status_sample.append(raw)
+        # Period filter
+        d = _parse_eod_date(r.get("date") or r.get("dateRaw") or "")
+        if not d or not period_start_d or not period_end_d:
+            continue
+        if d < period_start_d or d > period_end_d:
+            continue
+        period_filtered.append(r)
+        if norm == "completed":
+            completed_in_period += 1
+        elif norm == "in_progress":
+            in_progress_in_period += 1
+            open_in_period.append(r)
+        elif norm == "awaiting_response":
+            awaiting_in_period += 1
+            open_in_period.append(r)
+        else:
+            blank_status_in_period += 1
+
+    out["status_distribution"]       = status_dist
+    out["statusNorm_distribution"]   = status_norm_dist
+    out["raw_status_distinct_sample"] = raw_status_sample
+    out["period_filtered_row_count"] = len(period_filtered)
+    out["period_filter_breakdown"]   = {
+        "completed":             completed_in_period,
+        "in_progress":           in_progress_in_period,
+        "awaiting_response":     awaiting_in_period,
+        "blank_status":          blank_status_in_period,
+    }
+    out["open_rows_in_period"]       = len(open_in_period)
+    out["first_3_open_rows_in_period"] = open_in_period[:3]
+    out["first_3_in_period_rows_full"] = period_filtered[:3]
+
     return out
 
 
