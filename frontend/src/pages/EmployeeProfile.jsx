@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { C, authFetch } from "../config";
+import { LiveIndicator, useAutoRefresh } from "../components/LiveIndicator";
 import {
   BarChart,
   Bar,
@@ -125,11 +126,13 @@ export default function EmployeeProfile({ teamId, teamName, employeeName, onBack
   const [expandedRow, setExpandedRow] = useState(null);
   const abortRef = useRef(null);
 
-  const fetchData = useCallback(() => {
+  const [lastRefreshed, setLastRefreshed] = useState(null);
+
+  const fetchData = useCallback((silent = false) => {
     if (abortRef.current) abortRef.current.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    setLoading(true);
+    if (!silent) setLoading(true);
     authFetch(
       `/api/team/${teamId}/employee/${encodeURIComponent(employeeName)}/${period}`,
       { signal: ctrl.signal },
@@ -138,15 +141,20 @@ export default function EmployeeProfile({ teamId, teamName, employeeName, onBack
       .then((d) => {
         if (ctrl.signal.aborted) return;
         setData(d);
-        setLoading(false);
+        setLastRefreshed(new Date());
+        if (!silent) setLoading(false);
       })
       .catch((err) => {
         if (err?.name === "AbortError") return;
         console.error("[EmployeeProfile] fetch failed", err);
         setData({});
-        setLoading(false);
+        if (!silent) setLoading(false);
       });
   }, [teamId, employeeName, period]);
+
+  const isLive = period === "today";
+  const refreshSilent = useCallback(() => fetchData(true), [fetchData]);
+  const tickNow = useAutoRefresh(refreshSilent, isLive, lastRefreshed);
 
   useEffect(() => {
     fetchData();
@@ -300,6 +308,13 @@ ${lines.join("\n")}`;
             </button>
           ))}
         </div>
+
+        <LiveIndicator
+          lastRefreshed={lastRefreshed}
+          now={tickNow}
+          isLive={isLive}
+          onRefresh={() => fetchData(false)}
+        />
 
         <div style={{ textAlign: "right", marginLeft: "auto" }}>
           <div style={{ fontSize: 13, fontWeight: 700, background: "linear-gradient(135deg,#00c896,#3d8ef0)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>

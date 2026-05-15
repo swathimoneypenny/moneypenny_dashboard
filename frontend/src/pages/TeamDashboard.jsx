@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { C, API_BASE, authFetch } from "../config";
+import { LiveIndicator, useAutoRefresh } from "../components/LiveIndicator";
 import {
   BarChart,
   Bar,
@@ -916,25 +917,27 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
   const weeklyAbortRef = useRef(null);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [lastRefreshed, setLastRefreshed] = useState(null);
   const abortRef = useRef(null);
 
-  const fetchData = useCallback(() => {
+  const fetchData = useCallback((silent = false) => {
     if (abortRef.current) abortRef.current.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    setLoading(true);
+    if (!silent) setLoading(true);
     authFetch(`/api/team/${teamId}/${period}`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
         if (ctrl.signal.aborted) return;
         setData(d);
-        setLoading(false);
+        setLastRefreshed(new Date());
+        if (!silent) setLoading(false);
       })
       .catch((err) => {
         if (err?.name === "AbortError") return;
         console.error("[TeamDashboard] fetch failed", err);
         setData({ summary: {}, clients: [], eod: [] });
-        setLoading(false);
+        if (!silent) setLoading(false);
       });
   }, [teamId, period]);
 
@@ -944,6 +947,11 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
       if (abortRef.current) abortRef.current.abort();
     };
   }, [fetchData]);
+
+  // Auto-refresh on Today view (silent — don't flash skeletons)
+  const isLive = period === "today";
+  const refreshSilent = useCallback(() => fetchData(true), [fetchData]);
+  const tickNow = useAutoRefresh(refreshSilent, isLive, lastRefreshed);
 
   // Leaderboard for the active period (drives Team Members table).
   useEffect(() => {
@@ -1223,18 +1231,12 @@ ${clients.map((o) => (
           </div>
         )}
 
-        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.teal }}>
-          <div
-            style={{
-              width: 7,
-              height: 7,
-              borderRadius: "50%",
-              background: C.teal,
-              animation: "pulse-dot 2s infinite",
-            }}
-          />
-          Live
-        </div>
+        <LiveIndicator
+          lastRefreshed={lastRefreshed}
+          now={tickNow}
+          isLive={isLive}
+          onRefresh={() => fetchData(false)}
+        />
 
         <div style={{ textAlign: "right", marginLeft: "auto" }}>
           <div

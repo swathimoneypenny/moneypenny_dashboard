@@ -2483,6 +2483,90 @@ def debug_admin_groups():
     }
 
 
+@app.get("/api/debug/upstream-time-fields")
+def debug_upstream_time_fields():
+    """Probe whether the Timesheets.com upstream returns any per-row
+    timestamp field (clock-in, clock-out, last-changed, etc).
+
+    Lists every field key from the first 3 rows of a one-week report, then
+    isolates any field whose name contains TIME/DATE/CHANG/CLOCK/START/END/
+    CREAT/UPDAT/STAMP — and shows a sample value so we can see whether the
+    value carries HH:MM:SS precision or is date-only.
+
+    This is the precondition check for the proposed "Currently Active" and
+    "Daily Timeline" features. If no time-bearing field exists upstream,
+    those features can't have per-row precision without fabricating data.
+    """
+    today = datetime.now()
+    start = (today - timedelta(days=7)).strftime("%Y-%m-%d")
+    end   = today.strftime("%Y-%m-%d")
+    data = _debug_fetch_raw(start, end, "None")
+    if not isinstance(data, dict) or "error" in data:
+        return {"error": data.get("error") if isinstance(data, dict) else "no data"}
+
+    report = data.get("report") or {}
+    report_data = report.get("ReportData") or []
+    rows: list[dict] = []
+    for group in report_data:
+        recs = group.get("Records") or {}
+        for row in (recs.get("Data") or []):
+            rows.append(row)
+            if len(rows) >= 3:
+                break
+        if len(rows) >= 3:
+            break
+
+    all_keys: set = set()
+    for r in rows:
+        all_keys.update(r.keys())
+
+    time_tokens = ("TIME", "DATE", "CHANG", "CLOCK", "START", "END",
+                   "CREAT", "UPDAT", "STAMP", "PUNCH")
+    time_like_keys = sorted(k for k in all_keys
+                            if any(tok in k.upper() for tok in time_tokens))
+
+    # For each time-like key, sample values from the first 3 rows
+    time_like_samples: dict = {}
+    for k in time_like_keys:
+        vals = []
+        for r in rows:
+            v = r.get(k)
+            if v not in (None, ""):
+                vals.append(str(v))
+        time_like_samples[k] = vals[:3]
+
+    # Heuristic: does any time-like field carry HH:MM:SS precision (not just
+    # "00:00:00" trailing on a date)? Look for non-zero seconds.
+    def _has_realtime(samples: list) -> bool:
+        for s in samples:
+            # Check for any "HH:MM:SS" pattern where time isn't 00:00:00
+            m = re.search(r"\b(\d{1,2}):(\d{2}):(\d{2})\b", s)
+            if m:
+                hh, mm, ss = m.group(1), m.group(2), m.group(3)
+                if not (hh == "00" and mm == "00" and ss == "00"):
+                    return True
+        return False
+
+    realtime_fields = [k for k, vals in time_like_samples.items() if _has_realtime(vals)]
+
+    return {
+        "range":                  {"start": start, "end": end},
+        "total_keys_per_row":     len(all_keys),
+        "row_keys_sorted":        sorted(all_keys),
+        "time_like_keys":         time_like_keys,
+        "time_like_samples":      time_like_samples,
+        "fields_with_real_clock": realtime_fields,
+        "first_3_rows_full":      rows,
+        "verdict": (
+            "Upstream has per-row clock precision in: " + ", ".join(realtime_fields)
+            if realtime_fields else
+            "Upstream returns date-only values (all HH:MM:SS are 00:00:00 or absent). "
+            "Per-minute features (live presence, timeline blocks) can't be built without "
+            "fabricating times."
+        ),
+    }
+
+
 @app.get("/api/debug/raw-row")
 def debug_raw_row():
     """Probe the upstream report endpoint with three GroupType variants and dump

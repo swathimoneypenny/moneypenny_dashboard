@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { TEAMS as STATIC_TEAMS, C, API_BASE, authFetch, clearToken } from "../config";
+import { LiveIndicator, useAutoRefresh } from "../components/LiveIndicator";
 
 const API = API_BASE;
 const HOVER_PREFETCH_DELAY_MS = 220;
@@ -426,13 +427,13 @@ function TeamTab({ onSelectTeam }) {
   const [search, setSearch] = useState("");
   const [teams, setTeams]   = useState(STATIC_TEAMS);
   const [loading, setLoading] = useState(true);
+  const [lastRefreshed, setLastRefreshed] = useState(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    authFetch(`/api/teams`)
+  const fetchTeams = (silent = false) => {
+    if (!silent) setLoading(true);
+    return authFetch(`/api/teams`)
       .then((r) => r.json())
       .then((d) => {
-        if (cancelled) return;
         const list = (d?.teams ?? []).map((t) => ({
           id:            t.id,
           label:         t.label,
@@ -446,16 +447,23 @@ function TeamTab({ onSelectTeam }) {
           hasSheet:      t.hasSheet,
           missingLead:   t.missingLead,
         }));
-        console.log("[Home] /api/teams loaded:", list);
         if (list.length > 0) setTeams(list);
-        setLoading(false);
+        setLastRefreshed(new Date());
+        if (!silent) setLoading(false);
       })
       .catch((err) => {
         console.error("[Home] /api/teams failed", err);
-        setLoading(false);
+        if (!silent) setLoading(false);
       });
-    return () => { cancelled = true; };
+  };
+
+  useEffect(() => {
+    fetchTeams();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Static badge (no period selector on Home → no auto-refresh)
+  const tickNow = useAutoRefresh(null, false, lastRefreshed);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
@@ -486,6 +494,14 @@ function TeamTab({ onSelectTeam }) {
             Discovering teams…
           </div>
         )}
+        <div style={{ marginLeft: "auto" }}>
+          <LiveIndicator
+            lastRefreshed={lastRefreshed}
+            now={tickNow}
+            isLive={false}
+            onRefresh={() => fetchTeams(false)}
+          />
+        </div>
       </div>
       <div
         style={{
@@ -506,26 +522,31 @@ function ClientTab({ onSelectClient }) {
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [lastRefreshed, setLastRefreshed] = useState(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    authFetch(`/api/active-clients`)
+  const fetchClients = (silent = false) => {
+    if (!silent) setLoading(true);
+    return authFetch(`/api/active-clients`)
       .then((r) => r.json())
       .then((data) => {
-        if (!cancelled) {
-          const sorted = (data.clients ?? []).sort(
-            (a, b) => (b.totalHours ?? 0) - (a.totalHours ?? 0)
-          );
-          setClients(sorted);
-          setLoading(false);
-        }
+        const sorted = (data.clients ?? []).sort(
+          (a, b) => (b.totalHours ?? 0) - (a.totalHours ?? 0)
+        );
+        setClients(sorted);
+        setLastRefreshed(new Date());
+        if (!silent) setLoading(false);
       })
       .catch(() => {
         // keep loading state on error — never show empty state
       });
-    return () => { cancelled = true; };
+  };
+
+  useEffect(() => {
+    fetchClients();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const tickNow = useAutoRefresh(null, false, lastRefreshed);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -550,6 +571,14 @@ function ClientTab({ onSelectClient }) {
             Fetching live data…
           </div>
         )}
+        <div style={{ marginLeft: "auto" }}>
+          <LiveIndicator
+            lastRefreshed={lastRefreshed}
+            now={tickNow}
+            isLive={false}
+            onRefresh={() => fetchClients(false)}
+          />
+        </div>
       </div>
 
       <div

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { C, API_BASE, authFetch } from "../config";
+import { LiveIndicator, useAutoRefresh } from "../components/LiveIndicator";
 import {
   BarChart,
   Bar,
@@ -434,25 +435,32 @@ export default function ClientDashboard({ clientName, onBack, onContextUpdate })
   const mainAbortRef  = useRef(null);
   const trendAbortRef = useRef(null);
 
-  const fetchMain = useCallback(() => {
+  const [lastRefreshed, setLastRefreshed] = useState(null);
+
+  const fetchMain = useCallback((silent = false) => {
     if (mainAbortRef.current) mainAbortRef.current.abort();
     const ctrl = new AbortController();
     mainAbortRef.current = ctrl;
     const p = PERIODS.find((pp) => pp.key === period) ?? PERIODS[2];
-    setLoading(true);
+    if (!silent) setLoading(true);
     authFetch(`/api/client/${encodeURIComponent(clientName)}/${p.endpoint}`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
         if (ctrl.signal.aborted) return;
         setData(d);
-        setLoading(false);
+        setLastRefreshed(new Date());
+        if (!silent) setLoading(false);
       })
       .catch((err) => {
         if (err?.name === "AbortError") return;
         setData({ summary: {}, staff: [] });
-        setLoading(false);
+        if (!silent) setLoading(false);
       });
   }, [clientName, period]);
+
+  const isLive = period === "today";
+  const refreshSilent = useCallback(() => fetchMain(true), [fetchMain]);
+  const tickNow = useAutoRefresh(refreshSilent, isLive, lastRefreshed);
 
   const fetchTrend = useCallback(
     (bustCache = false) => {
@@ -704,6 +712,13 @@ ${Object.entries(staffObj).map(([name, v]) => {
             ↻
           </span>
         </button>
+
+        <LiveIndicator
+          lastRefreshed={lastRefreshed}
+          now={tickNow}
+          isLive={isLive}
+          onRefresh={() => fetchMain(false)}
+        />
 
         <div style={{ textAlign: "right", marginLeft: "auto" }}>
           <div
