@@ -219,11 +219,12 @@ TEAM_ROSTERS: dict[str, list[str]] = {
     "team_h": ["deepali", "yashika", "madu"],
     "team_i": ["radhika", "aparna s", "jeevitha", "sakthi s"],
     "team_j": ["logeswari", "nisha m", "dhana", "sindhu", "monikaa"],
-    "team_k": ["karthika", "akshaya", "keerthana", "jani priya", "rohitha", "abinaya"],
+    "team_k": ["karthika", "akshaya devi", "keerthana", "jani priya", "rohitha", "abinaya"],
     "team_l": ["nasreen", "krishna", "swathi", "sarika", "razia"],
     "team_m": ["pavithra", "bhuva", "Reshma Lakshmanaboopathi"],
     "team_n": ["vino", "shivani", "snega"],
-    "team_t": ["pragathi"],
+    "team_t": ["pragathi", "reshma hameeth", "prithvi b", "akshaya manojkumar",
+               "fathima", "naveena", "dharani p", "shiyamala devi"],
 }
 
 # Startup warning — Team T preparers haven't been provided by management yet.
