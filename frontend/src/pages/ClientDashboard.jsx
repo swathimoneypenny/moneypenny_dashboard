@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { C, API_BASE, authFetch } from "../config";
 import { LiveIndicator, useAutoRefresh } from "../components/LiveIndicator";
+import DelayDetailModal from "../components/DelayDetailModal";
 import {
   BarChart,
   Bar,
@@ -190,6 +191,7 @@ function buildAgingChartData(delaysByDay) {
       Overdue:   Number(d.overdue)   || 0,
       statusBreakdown: d.statusBreakdown || {},
       topQueries:      Array.isArray(d.topQueries) ? d.topQueries : [],
+      allRows:         Array.isArray(d.allRows) ? d.allRows : [],
       queryPreview:    d.queryPreview || "",
     };
   });
@@ -620,9 +622,13 @@ ${Object.entries(staffObj).map(([name, v]) => {
   const agingChart     = useMemo(() => buildAgingChartData(delaysByDay), [delaysByDay]);
   const agingTotalOpen = (agingSummary?.totalOpen ?? 0);
   const agingHasAnyData = useMemo(
-    () => agingChart.some((d) => (d.Completed + d["In Progress"] + d["Awaiting Response"]) > 0),
+    () => agingChart.some((d) => (d.Completed + d.Fresh + d.Aging + d.Overdue) > 0),
     [agingChart],
   );
+  const [selectedDay, setSelectedDay] = useState(null);
+  const onBarClick = useCallback((data) => {
+    if (data && data.payload) setSelectedDay(data.payload);
+  }, []);
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg }}>
@@ -912,12 +918,15 @@ ${Object.entries(staffObj).map(([name, v]) => {
                     />
                     <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} />
                     <Tooltip content={<AgingTooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
-                    <Bar dataKey="Completed" stackId="a" fill="#3DC58B" />
-                    <Bar dataKey="Fresh"     stackId="a" fill="#F0B947" />
-                    <Bar dataKey="Aging"     stackId="a" fill="#F2895A" />
-                    <Bar dataKey="Overdue"   stackId="a" fill="#E25C5C" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="Completed" stackId="a" fill="#3DC58B" cursor="pointer" onClick={onBarClick} />
+                    <Bar dataKey="Fresh"     stackId="a" fill="#F0B947" cursor="pointer" onClick={onBarClick} />
+                    <Bar dataKey="Aging"     stackId="a" fill="#F2895A" cursor="pointer" onClick={onBarClick} />
+                    <Bar dataKey="Overdue"   stackId="a" fill="#E25C5C" cursor="pointer" onClick={onBarClick} radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
+                <div style={{ fontSize: 10, color: C.muted, marginTop: 6, textAlign: "center", letterSpacing: 0.3 }}>
+                  Hover for summary · Click any bar for full details
+                </div>
               </>
             )}
           </div>
@@ -982,6 +991,7 @@ ${Object.entries(staffObj).map(([name, v]) => {
           )}
         </div>
       </div>
+      <DelayDetailModal day={selectedDay} onClose={() => setSelectedDay(null)} />
     </div>
   );
 }

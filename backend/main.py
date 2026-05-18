@@ -988,6 +988,76 @@ def _parse_eod_date(date_str) -> datetime | None:
     return None
 
 
+_STOPWORDS = frozenset((
+    "the", "a", "an", "and", "or", "for", "to", "of", "in", "on", "at",
+    "is", "are", "was", "were", "be", "been", "by", "from", "with", "as",
+    "this", "that", "it", "we", "you", "they", "he", "she", "i", "but",
+    "not", "no", "yes", "have", "has", "had", "do", "does", "did", "will",
+    "would", "should", "can", "could", "may", "might", "all", "any", "some",
+    "task", "tasks", "client", "clients", "weekly", "monthly", "today",
+    "yesterday", "please", "need", "needs", "needed", "pending", "open",
+))
+
+
+def _query_keyset(text: str) -> set[str]:
+    """Lowercase, strip non-letter, keep tokens >3 chars and not stopwords.
+    Used to compare two queryText strings for "same query?" fuzzy matching."""
+    if not text:
+        return set()
+    cleaned = re.sub(r"[^a-z\s]", " ", text.lower())
+    return {
+        t for t in cleaned.split()
+        if len(t) > 3 and t not in _STOPWORDS
+    }
+
+
+def _estimate_resolved_in_days(completed_row: dict, all_eod_rows: list[dict],
+                                completed_date: datetime) -> int | None:
+    """Best-effort: for a completed EOD row, find the earliest prior open row
+    in the same sheet whose queryText overlaps significantly, and return the
+    days-between. Returns None if no plausible match.
+
+    Uses Jaccard similarity on filtered word tokens with a 0.4 threshold and
+    a minimum of 3 shared significant words to avoid false positives from
+    incidental word overlap."""
+    cur_text = (completed_row.get("queryText") or completed_row.get("notes") or "").strip()
+    if not cur_text:
+        return None
+    cur_keys = _query_keyset(cur_text)
+    if len(cur_keys) < 3:
+        return None
+
+    earliest: datetime | None = None
+    for r in all_eod_rows or []:
+        sn = (r.get("statusNorm") or "").lower()
+        if sn == "completed":
+            continue
+        d = _parse_eod_date(r.get("date") or r.get("dateRaw") or "")
+        if not d or d >= completed_date:
+            continue
+        other_text = (r.get("queryText") or r.get("notes") or "").strip()
+        if not other_text:
+            continue
+        other_keys = _query_keyset(other_text)
+        if len(other_keys) < 3:
+            continue
+        shared = cur_keys & other_keys
+        if len(shared) < 3:
+            continue
+        union = cur_keys | other_keys
+        if not union:
+            continue
+        if len(shared) / len(union) < 0.4:
+            continue
+        if earliest is None or d < earliest:
+            earliest = d
+
+    if earliest is None:
+        return None
+    days = (completed_date - earliest).days
+    return max(0, days)
+
+
 def compute_delays_aging(eod_rows: list[dict], period_start: str, period_end: str) -> dict:
     """Build aging-report aggregates from EOD rows for the given period.
 
@@ -1100,6 +1170,34 @@ def compute_delays_aging(eod_rows: list[dict], period_start: str, period_end: st
             if sn in status_breakdown:
                 status_breakdown[sn] += 1
 
+        # Full per-row detail for the click-to-open modal. Untruncated — the
+        # modal renders the entire queryText + notes.
+        raised_date_formatted = cur.strftime("%B %d, %Y")
+        all_rows_payload: list[dict] = []
+        for r in day_rows:
+            sn = (r.get("statusNorm") or "").lower()
+            is_completed = sn == "completed"
+            row_payload = {
+                "queryText":        (r.get("queryText") or ""),
+                "notes":            (r.get("notes") or ""),
+                "eodStatus":        (r.get("eodStatus") or ""),
+                "statusNorm":       sn,
+                "statusNormSource": (r.get("statusNormSource") or ""),
+                "ageDays":          age_days,
+                "raisedDate":       key,
+                "raisedDateFormatted": raised_date_formatted,
+                "isCompleted":      is_completed,
+                "committed":        float(r.get("committed") or 0),
+                "booked":           float(r.get("booked") or 0),
+                "utilPct":          float(r.get("utilPct") or 0),
+                "resolvedInDays":   None,
+            }
+            if is_completed:
+                row_payload["resolvedInDays"] = _estimate_resolved_in_days(
+                    r, eod_rows, cur,
+                )
+            all_rows_payload.append(row_payload)
+
         delays_by_day.append({
             "date":             key,
             "total":            total_today,
@@ -1109,6 +1207,7 @@ def compute_delays_aging(eod_rows: list[dict], period_start: str, period_end: st
             "overdue":          overdue_ct,
             "topQueries":       top_queries,
             "statusBreakdown":  status_breakdown,
+            "allRows":          all_rows_payload,
             # Legacy fields, kept for back-compat with the existing
             # delaysAgeSummary caller and any downstream consumers.
             "totalDelays":      total_today,
