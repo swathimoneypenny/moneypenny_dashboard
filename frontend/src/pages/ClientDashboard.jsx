@@ -113,6 +113,8 @@ function AgingTooltip({ active, payload }) {
   if (!active || !payload?.length) return null;
   const p = payload[0]?.payload ?? {};
   const total = (p.Completed ?? 0) + (p.Fresh ?? 0) + (p.Aging ?? 0) + (p.Overdue ?? 0);
+  const sb = p.statusBreakdown || {};
+  const topQ = Array.isArray(p.topQueries) ? p.topQueries : [];
   return (
     <div
       style={{
@@ -120,34 +122,51 @@ function AgingTooltip({ active, payload }) {
         backdropFilter: "blur(10px)",
         border: `1px solid ${C.border}`,
         borderRadius: 8,
-        padding: "10px 14px",
+        padding: "12px 14px",
         fontSize: 12,
         color: C.pri,
         boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
-        maxWidth: 300,
+        maxWidth: 380,
       }}
     >
       <div style={{ fontWeight: 600, marginBottom: 6, color: C.sec }}>
         {p.fullDateLabel || p.fullDate || `Day ${p.day}`}
       </div>
-      <div style={{ marginBottom: 4, fontFamily: "'DM Mono', monospace" }}>
-        Total: {total}
+      <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>
+        {total} delay{total === 1 ? "" : "s"}
+        {(p.Overdue ?? 0) > 0 && (
+          <> · <span style={{ color: "#E25C5C" }}>{p.Overdue} overdue</span></>
+        )}
       </div>
-      {(p.Completed ?? 0) > 0 && (
-        <div style={{ color: "#3DC58B", fontSize: 11 }}>Completed: {p.Completed}</div>
-      )}
-      {(p.Fresh ?? 0) > 0 && (
-        <div style={{ color: "#F0B947", fontSize: 11 }}>Fresh (0-2d): {p.Fresh}</div>
-      )}
-      {(p.Aging ?? 0) > 0 && (
-        <div style={{ color: "#F2895A", fontSize: 11 }}>Aging (3-7d): {p.Aging}</div>
-      )}
-      {(p.Overdue ?? 0) > 0 && (
-        <div style={{ color: "#E25C5C", fontSize: 11 }}>Overdue (8+d): {p.Overdue}</div>
-      )}
-      {p.queryPreview && (
-        <div style={{ marginTop: 6, color: C.muted, fontSize: 11, fontStyle: "italic", lineHeight: 1.4 }}>
-          “{p.queryPreview.slice(0, 60)}{p.queryPreview.length > 60 ? "…" : ""}”
+      <div style={{ fontSize: 11, marginBottom: 6, display: "flex", gap: 10, flexWrap: "wrap" }}>
+        {(sb.completed ?? 0) > 0 && (
+          <span style={{ color: "#3DC58B" }}>● {sb.completed} Completed</span>
+        )}
+        {(sb.in_progress ?? 0) > 0 && (
+          <span style={{ color: "#F0B947" }}>● {sb.in_progress} In Progress</span>
+        )}
+        {(sb.awaiting_response ?? 0) > 0 && (
+          <span style={{ color: "#E25C5C" }}>● {sb.awaiting_response} Awaiting Response</span>
+        )}
+      </div>
+      {topQ.length > 0 && (
+        <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 8, marginTop: 8 }}>
+          <div style={{ fontSize: 10, color: C.muted, marginBottom: 4, letterSpacing: 0.8, fontWeight: 600 }}>
+            OLDEST QUERIES
+          </div>
+          {topQ.map((q, i) => {
+            const age = Number(q.ageDays) || 0;
+            const ageColor = age >= 8 ? "#E25C5C" : age >= 3 ? "#F2895A" : "#F0B947";
+            return (
+              <div key={i} style={{ fontSize: 11, marginBottom: 4, lineHeight: 1.4 }}>
+                <span style={{ color: ageColor, fontFamily: "'DM Mono', monospace", fontWeight: 600 }}>
+                  {age}d old
+                </span>
+                <span style={{ color: C.muted }}> — </span>
+                <span style={{ color: C.pri }}>{q.text}</span>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -169,7 +188,9 @@ function buildAgingChartData(delaysByDay) {
       Fresh:     Number(d.fresh)     || 0,
       Aging:     Number(d.aging)     || 0,
       Overdue:   Number(d.overdue)   || 0,
-      queryPreview: d.queryPreview || "",
+      statusBreakdown: d.statusBreakdown || {},
+      topQueries:      Array.isArray(d.topQueries) ? d.topQueries : [],
+      queryPreview:    d.queryPreview || "",
     };
   });
 }

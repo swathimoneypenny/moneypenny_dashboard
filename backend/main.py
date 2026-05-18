@@ -1063,12 +1063,42 @@ def compute_delays_aging(eod_rows: list[dict], period_start: str, period_end: st
             fresh_ct, aging_ct, overdue_ct = 0, 0, open_ct
         total_today = completed_ct + open_ct
 
-        # Pick the longest query text on this day as the preview
+        # Pick the longest query text on this day as the preview (legacy field
+        # used by the existing tooltip code path until the new one ships).
         queries = [str(r.get("queryText") or "").strip() for r in day_rows]
         queries = [q for q in queries if q]
         query_preview = ""
         if queries:
             query_preview = max(queries, key=len)
+
+        # Per-day topQueries — open rows on this day with non-empty queryText,
+        # sorted by length desc (within one day all rows share the same age,
+        # so length stands in for "most informative"). Truncated to 100 chars
+        # for the tooltip. Up to 3 entries.
+        open_rows_today: list[dict] = []
+        for r in day_rows:
+            sn = (r.get("statusNorm") or "").lower()
+            if sn == "completed":
+                continue
+            qt = (r.get("queryText") or "").strip().replace("\n", " ")
+            if not qt:
+                qt = (r.get("notes") or "").strip().replace("\n", " ")
+            if not qt:
+                continue
+            open_rows_today.append((qt, r))
+        open_rows_today.sort(key=lambda pair: -len(pair[0]))
+        top_queries = [
+            {"text": qt[:100], "ageDays": age_days, "client": ""}
+            for qt, _r in open_rows_today[:3]
+        ]
+
+        # Per-day statusBreakdown — counts by normalized status for the
+        # tooltip's color-coded dots row.
+        status_breakdown = {"awaiting_response": 0, "in_progress": 0, "completed": 0}
+        for r in day_rows:
+            sn = (r.get("statusNorm") or "").lower()
+            if sn in status_breakdown:
+                status_breakdown[sn] += 1
 
         delays_by_day.append({
             "date":             key,
@@ -1077,6 +1107,8 @@ def compute_delays_aging(eod_rows: list[dict], period_start: str, period_end: st
             "fresh":            fresh_ct,
             "aging":            aging_ct,
             "overdue":          overdue_ct,
+            "topQueries":       top_queries,
+            "statusBreakdown":  status_breakdown,
             # Legacy fields, kept for back-compat with the existing
             # delaysAgeSummary caller and any downstream consumers.
             "totalDelays":      total_today,
@@ -3810,7 +3842,8 @@ def _build_chat_rows_block(view_hint: dict | None) -> str:
 DELAY_KEYWORDS = (
     "delay", "delays", "question", "queries", "query", "open", "pending",
     "eod", "awaiting", "blocker", "blocked", "non-billable", "nonbillable",
-    "non billable", "billable hours", "billable hour", " why ", " why?", "why "
+    "non billable", "billable hours", "billable hour", " why ", " why?", "why ",
+    "overdue", "stuck", "oldest", "longest", "older than", "days old",
 )
 
 
@@ -3827,9 +3860,9 @@ def _user_query_mentions_delays(messages: list) -> bool:
 
 
 def _build_chat_eod_block(view_hint: dict | None) -> str:
-    """When the user asks about delays/questions/etc., surface recent EOD rows
-    for the relevant team (resolved from team_id, client_name's parent team,
-    or employee's roster team) so the LLM can cite EOD Status + date + query."""
+    """Surface recent EOD rows for the relevant team so the LLM can answer
+    delay/age/status questions. Rows are sorted by ageDays desc (oldest first)
+    and capped at 50 to stay within the token budget."""
     if not view_hint or not isinstance(view_hint, dict):
         return ""
 
@@ -3846,53 +3879,65 @@ def _build_chat_eod_block(view_hint: dict | None) -> str:
     if not cfg or not cfg.get("sheetId"):
         return ""
 
+    # For client scope, route through the flexible-tab picker so we get the
+    # correct populated tab (matches the live client endpoint exactly).
     try:
-        eod_rows = get_eod_data(cfg["sheetId"], gid=cfg.get("gid"))
+        if client_name:
+            eod_rows, _label = _resolve_eod_rows_for_client(team_id, client_name)
+        else:
+            eod_rows = get_eod_data(cfg["sheetId"], gid=cfg.get("gid"))
     except Exception as e:
         return f"\nEOD SHEET ROWS: (fetch failed: {e})"
     if not eod_rows:
         return ""
 
-    # Last 30 days, most recent first
     today_d = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    cutoff  = (today_d - timedelta(days=30)).strftime("%Y-%m-%d")
+    cutoff  = today_d - timedelta(days=60)  # 60-day lookback so "older than 30 days" queries can answer
 
-    def _key(r):
-        return (r.get("date") or "")[:10]
-    eod_rows.sort(key=_key, reverse=True)
-    recent = [r for r in eod_rows if (r.get("date") or "")[:10] >= cutoff][:30]
-    if not recent:
+    # Decorate each row with ageDays. Drop rows we can't date or that fall
+    # outside the lookback window.
+    decorated: list[tuple[int, dict]] = []
+    for r in eod_rows:
+        d = _parse_eod_date(r.get("date") or r.get("dateRaw") or "")
+        if not d:
+            continue
+        if d < cutoff:
+            continue
+        age = max(0, (today_d - d).days)
+        decorated.append((age, r))
+
+    # Sort oldest first so the LLM sees the most-aged items at the top of the
+    # context — "what's the oldest open question" can be answered from row 1.
+    decorated.sort(key=lambda pair: -pair[0])
+    capped = decorated[:50]
+    if not capped:
         return ""
 
-    # Status label that's clear to the LLM
-    def _status_label(r):
-        sn = (r.get("statusNorm") or "").lower()
+    def _status_label(sn: str) -> str:
+        sn = (sn or "").lower()
         if sn == "awaiting_response":
-            return "Awaiting Response"
+            return "awaiting_response"
         if sn == "in_progress":
-            return "In Progress"
+            return "in_progress"
         if sn == "completed":
-            return "Completed"
-        return (r.get("eodStatus") or "—").strip() or "—"
+            return "completed"
+        return "unknown"
 
-    # For client scope, attribute the EOD row to that specific client; otherwise team label.
     attribution = client_name or cfg.get("label") or team_id
 
-    def _fmt(r):
+    def _fmt(age: int, r: dict) -> str:
         date  = (r.get("date") or "unknown")[:10]
-        stat  = _status_label(r)
-        book  = float(r.get("booked") or 0)
-        com   = float(r.get("committed") or 0)
+        stat  = _status_label(r.get("statusNorm") or "")
         qtext = (r.get("queryText") or "").strip().replace("\n", " ")
         if not qtext:
             qtext = (r.get("notes") or "").strip().replace("\n", " ")
-        return f"- {date} | {attribution} | EOD status: {stat} | booked: {book:.1f}/committed: {com:.1f} | query: {qtext[:120]}"
+        return f'- [{date}] {attribution} | status: {stat} | age: {age} days | query: "{qtext[:200]}"'
 
     header = (
         f"\nEOD SHEET ROWS for {attribution} "
-        f"(last 30 days, {len(recent)} entries, most recent first):"
+        f"(last 60 days, {len(capped)} entries, OLDEST FIRST):"
     )
-    return "\n".join([header, *(_fmt(r) for r in recent)])
+    return "\n".join([header, *(_fmt(age, r) for age, r in capped)])
 
 
 @app.post("/api/chat")
@@ -3915,24 +3960,36 @@ REAL DATA RIGHT NOW:
 {eod_block}
 
 Answer questions directly using ONLY this data.
-- When the user asks about delays, questions, non-billable hours, or specific
-  entries, ALWAYS cite the date (YYYY-MM-DD) and the source (timesheet entry
-  vs EOD sheet). Never say "I don't have the date" — the date IS in the data.
+
+GENERAL RULES:
+- ALWAYS cite the date (YYYY-MM-DD) and the source (timesheet entry vs EOD sheet).
+  Never say "I don't have the date" — the date IS in the data above.
 - If asked "why" a person or client has a value, list each contributing entry
-  with date, hours, and a brief description. If there are many, show the top 5
-  by hours or recency.
-- For EOD rows, ALWAYS mention the EOD Status (Completed / In Progress /
-  Awaiting Response) and the query text if present.
+  with date, hours, and a brief description. If many, show the top 5 by hours
+  or recency.
 - Format dates as YYYY-MM-DD. Sum hours when there are multiple entries.
-- Give specific numbers, not generic advice. Keep response under 150 words.
-  Use bullet points when listing multiple entries.
+- Give specific numbers, not generic advice. Keep response under 180 words.
+- Use bullet points when listing multiple entries.
+
+EOD / DELAY RULES (when the user asks about delays, questions, pending items,
+overdue items, oldest items, or anything similar):
+- Each EOD row has format: [date] team_or_client | status: STATE | age: N days | query: "..."
+- The rows are pre-sorted OLDEST FIRST. Use that order.
+- ALWAYS state the age in days when describing an open item (e.g. "12 days old").
+- ALWAYS include the EOD Status (Awaiting Response / In Progress / Completed).
+- If user asks "older than N days" or "over N days" or "more than N days":
+  filter to ageDays >= N and list every matching row.
+- If user asks for "oldest" / "longest pending" / "stale": return the row(s)
+  with the highest age.
+- If user asks "show all delays": list every OPEN row (status != completed)
+  with date, age, status, and query text.
 
 Status thresholds: BELOW TARGET <75% | ON TARGET 75-95% | OVER TARGET 95-120% | CRITICAL >120%"""
 
     response = groq_client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[{"role": "system", "content": system_prompt}, *messages],
-        max_tokens=260,
+        max_tokens=320,
         temperature=0.2,
     )
     return {"reply": response.choices[0].message.content}
