@@ -211,20 +211,29 @@ for _tid in list(TEAM_LETTER_MAP.keys()):
 TEAM_ROSTERS: dict[str, list[str]] = {
     "team_a": ["kokila", "uma", "jayashree r", "jayashree b"],
     "team_b": ["buela", "ivanjalin", "varshini", "pavithra s"],
-    "team_c": ["grace", "mahalakshmi", "jeevtha s"],
-    "team_d": ["chandra", "yamini", "sharmila", "krithiga", "dharani s", "sandhiya", "sirisha", "swetha"],
+    "team_c": ["grace", "mahalakshmi", "jeevtha s", "keerthana"],
+    "team_d": ["chandra", "yamini", "sharmila", "krithiga", "dharani s", "sandhiya", "sirisha", "swetha s"],
     "team_e": ["shaalini", "kaviya", "preethi"],
-    "team_f": ["inbamozhi", "monikaa", "keerthana"],
+    "team_f": ["inbamozhi", "sarika"],
     "team_g": ["hema", "indra", "amala", "nidisha", "pechi"],
     "team_h": ["deepali", "yashika", "madu"],
-    "team_i": ["radhika", "aparna s", "jeevitha", "sakthi"],
-    "team_j": ["logeswari", "nisha m", "dhana", "sindhu"],
-    "team_k": ["karthika", "akshaya", "devadharshini", "keerthana", "jani priya", "rohitha", "abinaya"],
+    "team_i": ["radhika", "aparna s", "jeevitha", "sakthi s"],
+    "team_j": ["logeswari", "nisha m", "dhana", "sindhu", "monikaa"],
+    "team_k": ["karthika", "akshaya", "keerthana", "jani priya", "rohitha", "abinaya"],
     "team_l": ["nasreen", "krishna", "swathi", "sarika", "razia"],
-    "team_m": ["pavithra", "bhuva", "reshma"],
+    "team_m": ["pavithra", "bhuva", "Reshma Lakshmanaboopathi"],
     "team_n": ["vino", "shivani", "snega"],
     "team_t": ["pragathi"],
 }
+
+# Startup warning — Team T preparers haven't been provided by management yet.
+# The single-entry roster will only match Pragathi herself; all other Team T
+# work logged by preparers will fall through to Internal/Other or whichever
+# team the ADMIN_MAP routes them to.
+if len(TEAM_ROSTERS.get("team_t", [])) <= 1:
+    print(f"[WARN] team_t roster has only {len(TEAM_ROSTERS['team_t'])} "
+          f"member(s) configured ({TEAM_ROSTERS['team_t']}). Add Team T preparers "
+          f"to TEAM_ROSTERS when available.")
 
 
 # Customer/project names that should always be treated as internal work,
