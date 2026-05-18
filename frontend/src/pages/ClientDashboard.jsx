@@ -626,8 +626,14 @@ ${Object.entries(staffObj).map(([name, v]) => {
     [agingChart],
   );
   const [selectedDay, setSelectedDay] = useState(null);
-  const onBarClick = useCallback((data) => {
-    if (data && data.payload) setSelectedDay(data.payload);
+  // onClick on individual <Bar> in a stacked chart fires only when the small
+  // colored segment is hit and Recharts intermittently drops the event near
+  // segment borders. Parent <BarChart> uses the chart's hit-test against the
+  // nearest x-value, so any click anywhere in the chart area resolves.
+  const handleBarChartClick = useCallback((chartData) => {
+    console.log("[delay-chart] click event:", chartData);
+    const p = chartData?.activePayload?.[0]?.payload;
+    if (p) setSelectedDay(p);
   }, []);
 
   return (
@@ -904,7 +910,13 @@ ${Object.entries(staffObj).map(([name, v]) => {
                 )}
                 <AgingLegend />
                 <ResponsiveContainer width="100%" height={170}>
-                  <BarChart data={agingChart} margin={{ top: 4, right: 8, left: -18, bottom: 36 }}>
+                  <BarChart
+                    data={agingChart}
+                    margin={{ top: 4, right: 8, left: -18, bottom: 36 }}
+                    onClick={handleBarChartClick}
+                    maxBarSize={40}
+                    style={{ cursor: "pointer" }}
+                  >
                     <CartesianGrid vertical={false} stroke={C.border} strokeDasharray="3 3" />
                     <XAxis
                       dataKey="day"
@@ -918,10 +930,10 @@ ${Object.entries(staffObj).map(([name, v]) => {
                     />
                     <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} />
                     <Tooltip content={<AgingTooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
-                    <Bar dataKey="Completed" stackId="a" fill="#3DC58B" cursor="pointer" onClick={onBarClick} />
-                    <Bar dataKey="Fresh"     stackId="a" fill="#F0B947" cursor="pointer" onClick={onBarClick} />
-                    <Bar dataKey="Aging"     stackId="a" fill="#F2895A" cursor="pointer" onClick={onBarClick} />
-                    <Bar dataKey="Overdue"   stackId="a" fill="#E25C5C" cursor="pointer" onClick={onBarClick} radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="Completed" stackId="a" fill="#3DC58B" />
+                    <Bar dataKey="Fresh"     stackId="a" fill="#F0B947" />
+                    <Bar dataKey="Aging"     stackId="a" fill="#F2895A" />
+                    <Bar dataKey="Overdue"   stackId="a" fill="#E25C5C" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
                 <div style={{ fontSize: 10, color: C.muted, marginTop: 6, textAlign: "center", letterSpacing: 0.3 }}>
