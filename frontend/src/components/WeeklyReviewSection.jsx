@@ -1,5 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { C, authFetch } from "../config";
+import {
+  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  Tooltip, ResponsiveContainer, ReferenceLine, Cell,
+} from "recharts";
 
 // Section meta — order, label, color, and the field-name → label map for
 // each card inside the section.
@@ -95,6 +99,211 @@ function ReviewField({ label, value }) {
         {v || "—"}
       </div>
     </div>
+  );
+}
+
+// Wrapper used by the 3 charts in the row above the section cards
+function ChartCard({ title, subtitle, children }) {
+  return (
+    <div
+      style={{
+        background: C.card,
+        border: `1px solid ${C.border}`,
+        borderRadius: 10,
+        padding: "14px 16px",
+        flex: "1 1 320px",
+        minWidth: 280,
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: C.sec, textTransform: "uppercase", letterSpacing: 1 }}>
+          {title}
+        </span>
+        {subtitle && (
+          <span style={{ marginLeft: "auto", fontSize: 10, color: C.muted, fontFamily: "'DM Mono', monospace" }}>
+            {subtitle}
+          </span>
+        )}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function SectionCompletionChart({ sections }) {
+  const stats = useMemo(() => SECTIONS.map((s) => {
+    const total  = s.fields.length;
+    const filled = s.fields.filter(([k]) => (sections?.[s.key]?.[k] || "").trim()).length;
+    return { key: s.key, label: s.label, icon: s.icon, color: s.color, filled, total };
+  }), [sections]);
+  const totalFilled = stats.reduce((a, s) => a + s.filled, 0);
+  const totalAll    = stats.reduce((a, s) => a + s.total, 0);
+  const overallPct  = totalAll ? Math.round(totalFilled * 100 / totalAll) : 0;
+  return (
+    <ChartCard
+      title={`Section Completion (${totalFilled}/${totalAll})`}
+      subtitle={`Overall ${overallPct}%`}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {stats.map((s) => {
+          const pct = s.total ? (s.filled * 100 / s.total) : 0;
+          return (
+            <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 10 }}>{s.icon}</span>
+              <span style={{ fontSize: 10, color: C.sec, width: 96, flexShrink: 0 }}>{s.label}</span>
+              <div style={{ flex: 1, height: 8, background: C.surface, borderRadius: 4, overflow: "hidden" }}>
+                <div
+                  style={{
+                    width: `${pct}%`,
+                    height: "100%",
+                    background: s.color,
+                    transition: "width .25s",
+                  }}
+                />
+              </div>
+              <span style={{ fontSize: 10, color: C.muted, fontFamily: "'DM Mono', monospace", width: 38, textAlign: "right" }}>
+                {s.filled}/{s.total}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </ChartCard>
+  );
+}
+
+function WeeklyTrendChart({ teamId }) {
+  const [weeks, setWeeks]   = useState(null);
+  const [error, setError]   = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    setWeeks(null);
+    setError(null);
+    authFetch(`/api/team/${teamId}/weekly-trend?weeks=8`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled) return;
+        if (d?.error) { setError(d.error); setWeeks([]); }
+        else          { setWeeks(Array.isArray(d?.weeks) ? d.weeks : []); }
+      })
+      .catch((e) => { if (!cancelled) { setError(e?.message || String(e)); setWeeks([]); } });
+    return () => { cancelled = true; };
+  }, [teamId]);
+
+  const latest = weeks && weeks.length ? weeks[weeks.length - 1] : null;
+  const belowTarget = !!latest && latest.completionPct < 80;
+  const subtitle = latest
+    ? `Latest ${latest.weekRange} · ${latest.completionPct}%${belowTarget ? " ⚠" : ""}`
+    : "";
+
+  return (
+    <ChartCard title="Completion Trend — Last 8 Weeks" subtitle={subtitle}>
+      {weeks === null ? (
+        <div className="kpi-skeleton" style={{ height: 160, borderRadius: 6 }} />
+      ) : error ? (
+        <div style={{ height: 160, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 11, fontStyle: "italic" }}>
+          Couldn't load trend: {error}
+        </div>
+      ) : weeks.length === 0 ? (
+        <div style={{ height: 160, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 11, fontStyle: "italic" }}>
+          No filled weeks yet.
+        </div>
+      ) : (
+        <ResponsiveContainer width="100%" height={160}>
+          <LineChart data={weeks} margin={{ top: 6, right: 10, left: -20, bottom: 4 }}>
+            <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
+            <XAxis
+              dataKey="weekRange"
+              tick={{ fill: C.muted, fontSize: 9 }}
+              axisLine={false}
+              tickLine={false}
+              interval={0}
+              tickFormatter={(v) => (v || "").replace(/\s*-\s*.*/, "")}
+            />
+            <YAxis
+              domain={[0, 100]}
+              tick={{ fill: C.muted, fontSize: 9 }}
+              axisLine={false}
+              tickLine={false}
+              ticks={[0, 50, 80, 100]}
+              tickFormatter={(v) => `${v}%`}
+            />
+            <Tooltip
+              cursor={{ stroke: C.border }}
+              contentStyle={{ background: "rgba(11,25,41,0.95)", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, color: C.pri }}
+              formatter={(v, _k, p) => [`${v}% (${p?.payload?.filledFields}/${p?.payload?.totalFields})`, "Completion"]}
+              labelFormatter={(l) => l}
+            />
+            <ReferenceLine y={80} stroke="#3DC58B" strokeDasharray="4 4" />
+            <Line
+              type="monotone"
+              dataKey="completionPct"
+              stroke="#4A8FE7"
+              strokeWidth={2}
+              dot={({ cx, cy, payload, index }) => {
+                const isLast = index === weeks.length - 1;
+                const red    = isLast && payload.completionPct < 80;
+                return (
+                  <circle
+                    key={index}
+                    cx={cx}
+                    cy={cy}
+                    r={isLast ? 5 : 3}
+                    fill={red ? "#E25C5C" : "#4A8FE7"}
+                    stroke={red ? "#E25C5C" : "#4A8FE7"}
+                  />
+                );
+              }}
+              activeDot={{ r: 6 }}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      )}
+    </ChartCard>
+  );
+}
+
+function ClientMentionsChart({ mentions, weekRange }) {
+  const data = Array.isArray(mentions) ? mentions : [];
+  return (
+    <ChartCard
+      title="Issues Mentioned Per Client"
+      subtitle={weekRange ? `Week of ${weekRange}` : ""}
+    >
+      {data.length === 0 ? (
+        <div style={{ height: 160, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 11, fontStyle: "italic" }}>
+          No client mentions in Work Intake this week.
+        </div>
+      ) : (
+        <ResponsiveContainer width="100%" height={Math.max(120, data.length * 36)}>
+          <BarChart data={data} layout="vertical" margin={{ top: 4, right: 16, bottom: 4, left: 4 }}>
+            <CartesianGrid stroke={C.border} strokeDasharray="3 3" horizontal={false} />
+            <XAxis type="number" tick={{ fill: C.muted, fontSize: 9 }} axisLine={false} tickLine={false} allowDecimals={false} />
+            <YAxis
+              type="category"
+              dataKey="client"
+              tick={{ fill: C.sec, fontSize: 10 }}
+              axisLine={false}
+              tickLine={false}
+              width={110}
+            />
+            <Tooltip
+              cursor={{ fill: "rgba(255,255,255,0.04)" }}
+              contentStyle={{ background: "rgba(11,25,41,0.95)", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, color: C.pri }}
+              formatter={(v) => [`${v} mention${v === 1 ? "" : "s"}`, ""]}
+              labelFormatter={(l) => l}
+            />
+            <Bar dataKey="count" radius={[0, 4, 4, 0]} maxBarSize={20}>
+              {data.map((_, i) => (
+                <Cell key={i} fill="#E25C5C" />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      )}
+    </ChartCard>
   );
 }
 
@@ -230,11 +439,18 @@ export default function WeeklyReviewSection({ teamId, embedded = false }) {
         </div>
       )}
       {!error && !loading && filled && sections && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           {data?.reviewedBy && (
             <div style={{ fontSize: 11, color: C.muted }}>
               Reviewed by <span style={{ color: C.sec, fontWeight: 600 }}>{data.reviewedBy}</span>
               {data.teamClient ? ` · ${data.teamClient}` : ""}
+            </div>
+          )}
+          {!embedded && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+              <SectionCompletionChart sections={sections} />
+              <WeeklyTrendChart teamId={teamId} />
+              <ClientMentionsChart mentions={data?.clientMentions} weekRange={data?.weekRange} />
             </div>
           )}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
