@@ -1159,10 +1159,29 @@ _WEEKLY_REVIEW_SECTIONS: dict[str, list[str]] = {
 }
 
 
+# Matches week-range strings in col A of a real data row. Examples that pass:
+#   "May 18 - May 23", "Apr 27 - May 02", "Jun 01 - Jun 06", "5/18 - 5/23".
+# Header/title rows ("Week of", "Reviewed by", "WEEKLY TEAM REVIEW — Kokila…")
+# are rejected because they don't have the "<date> - <date>" shape.
+_WEEK_RANGE_RE = re.compile(
+    r"^\s*"
+    r"(?:[A-Za-z]{3,}\.?,?\s+\d{1,2}|\d{1,2}/\d{1,2}(?:/\d{2,4})?)"
+    r"\s*[-–—]\s*"
+    r"(?:[A-Za-z]{3,}\.?,?\s+\d{1,2}|\d{1,2}/\d{1,2}(?:/\d{2,4})?)"
+    r".*$"
+)
+
+
+def _looks_like_week_range(s: str) -> bool:
+    return bool(_WEEK_RANGE_RE.match((s or "").strip()))
+
+
 def _parse_weekly_review_csv(csv_text: str) -> list[dict]:
     """Parse the weekly-review tab CSV into a list of row dicts (one per week).
 
-    Skips the header row plus any rows whose 'weekRange' (col A) is empty.
+    Filters down to rows whose col A matches the "<date> - <date>" pattern, so
+    the title row, section-header row, and column-header row ("Week of",
+    "Reviewed by"…) are all rejected — even though their col A is non-empty.
     """
     if not csv_text:
         return []
@@ -1170,22 +1189,19 @@ def _parse_weekly_review_csv(csv_text: str) -> list[dict]:
     rows = list(reader)
     if not rows:
         return []
-    # Detect header: first row's col A typically reads "Week of" or similar
-    first_a = (rows[0][0] if rows[0] else "").strip().lower()
-    start = 1 if first_a and "week" in first_a and "of" in first_a else 0
 
     out: list[dict] = []
-    for raw in rows[start:]:
+    for raw in rows:
         if not raw:
+            continue
+        col_a = (raw[0] if raw else "").strip()
+        if not _looks_like_week_range(col_a):
             continue
         # Pad to 25 columns so column-N lookups never IndexError
         padded = list(raw) + [""] * max(0, 25 - len(raw))
         row_dict: dict[str, str] = {}
         for idx, field in _WEEKLY_REVIEW_COLUMNS:
             row_dict[field] = str(padded[idx] or "").strip()
-        # Skip rows with no weekRange (empty separator rows in sheet)
-        if not row_dict["weekRange"]:
-            continue
         out.append(row_dict)
     return out
 
@@ -1271,12 +1287,19 @@ def get_weekly_review(team_id: str, week_offset: int = 0) -> dict:
 
     cfg = TEAM_LETTER_MAP.get(team_id) or {}
     rows, matched_tab = _fetch_weekly_review_rows(team_id)
+    # Sheet stores weeks chronologically with newest at the bottom, so reverse
+    # to get a newest-first list. We only surface filled rows in the dropdown
+    # — empty future-week placeholders aren't useful navigation targets.
+    filled_rows_newest_first = [r for r in reversed(rows) if _row_is_filled(r)]
     available_weeks = [
-        {"weekRange": r["weekRange"], "isFilled": _row_is_filled(r)}
-        for r in rows
+        {"weekRange": r["weekRange"], "isFilled": True}
+        for r in filled_rows_newest_first
     ]
-    # Most-recent-first by sheet order (the lead adds the newest week at the top)
-    selected_row = rows[week_offset] if 0 <= week_offset < len(rows) else None
+    selected_row = (
+        filled_rows_newest_first[week_offset]
+        if 0 <= week_offset < len(filled_rows_newest_first)
+        else None
+    )
     payload = _build_review_payload(selected_row)
     payload.update({
         "teamId":         team_id,
@@ -3467,6 +3490,115 @@ async def admin_review_endpoint(team_id: str, week_offset: int = 0):
         week_offset = 0
     result = await asyncio.to_thread(get_weekly_review, team_id, week_offset)
     return result
+
+
+def _debug_weekly_review(team_id: str) -> dict:
+    """Returns the raw CSV grid alongside the parsed rows so we can see exactly
+    which row the parser is picking and which rows it's skipping (title /
+    section-headers / column-headers)."""
+    cfg = TEAM_LETTER_MAP.get(team_id) or {}
+    lead = (cfg.get("leadName") or "").strip()
+    if not lead or not WEEKLY_REVIEW_SHEET_ID:
+        return {"error": "team_id has no leadName or WEEKLY_REVIEW_SHEET_ID is unset",
+                "team_id": team_id}
+
+    # Reuse the tab-resolution path
+    cached_tab = _weekly_review_tab_resolved.get(team_id)
+    candidates = (
+        [cached_tab] + _candidate_weekly_tab_names(lead)
+        if cached_tab else _candidate_weekly_tab_names(lead)
+    )
+
+    matched_tab: str | None = None
+    raw_rows: list[list[str]] = []
+    last_error: str | None = None
+    for tab in candidates:
+        try:
+            csv_text, _url = _fetch_eod_csv(WEEKLY_REVIEW_SHEET_ID, tab=tab)
+        except EodSheetError as e:
+            last_error = e.reason
+            continue
+        except Exception as e:
+            last_error = str(e)
+            continue
+        if not csv_text:
+            continue
+        reader = csv.reader(io.StringIO(csv_text))
+        candidate_rows = list(reader)
+        # Pick this tab if it parses any real data rows
+        if any(_looks_like_week_range((r[0] if r else "").strip()) for r in candidate_rows):
+            matched_tab = tab
+            raw_rows = candidate_rows
+            break
+
+    if not matched_tab:
+        return {
+            "team_id":   team_id,
+            "lead_name": lead,
+            "sheet_id":  WEEKLY_REVIEW_SHEET_ID,
+            "tab_used":  None,
+            "tried_candidates": candidates,
+            "last_error": last_error,
+        }
+
+    parsed = []
+    for i, raw in enumerate(raw_rows):
+        col_a = (raw[0] if raw else "").strip()
+        kept = _looks_like_week_range(col_a)
+        parsed.append({
+            "sheet_row":          i + 1,  # 1-indexed to match the sheet UI
+            "col_a":               col_a,
+            "kept_as_data_row":    kept,
+            "is_filled":           False,
+            "row_dict":            None,
+            "raw":                 list(raw),
+        })
+
+    # Now fill in is_filled / row_dict for the rows we kept
+    data_rows: list[dict] = []
+    for entry in parsed:
+        if not entry["kept_as_data_row"]:
+            continue
+        padded = list(entry["raw"]) + [""] * max(0, 25 - len(entry["raw"]))
+        row_dict = {field: str(padded[idx] or "").strip()
+                    for idx, field in _WEEKLY_REVIEW_COLUMNS}
+        entry["row_dict"]  = row_dict
+        entry["is_filled"] = _row_is_filled(row_dict)
+        data_rows.append({"sheet_row": entry["sheet_row"], "row": row_dict})
+
+    # Pick newest filled (sheet has newest at bottom → reverse)
+    filled_newest_first = [d for d in reversed(data_rows) if _row_is_filled(d["row"])]
+    picked = filled_newest_first[0] if filled_newest_first else None
+
+    return {
+        "team_id":             team_id,
+        "lead_name":           lead,
+        "sheet_id":            WEEKLY_REVIEW_SHEET_ID,
+        "tab_used":            matched_tab,
+        "total_rows_scanned":  len(raw_rows),
+        "filled_rows_found":   len(filled_newest_first),
+        "all_filled_weeks":    [d["row"]["weekRange"] for d in filled_newest_first],
+        "picked_sheet_row":    picked["sheet_row"] if picked else None,
+        "picked_row_raw":      next((p["raw"] for p in parsed
+                                     if picked and p["sheet_row"] == picked["sheet_row"]),
+                                    None),
+        "parsed_data":         picked["row"] if picked else None,
+        "row_3_for_comparison": parsed[2]["raw"] if len(parsed) >= 3 else None,
+        "all_rows_summary":    [
+            {"sheet_row": p["sheet_row"], "col_a": p["col_a"],
+             "kept_as_data_row": p["kept_as_data_row"], "is_filled": p["is_filled"]}
+            for p in parsed
+        ],
+    }
+
+
+@app.get("/api/debug/weekly-review")
+async def debug_weekly_review_endpoint(team_id: str):
+    """Diagnostic dump of the weekly-review sheet for a given team. Shows every
+    sheet row plus which ones the parser kept and which one it picked."""
+    if team_id not in TEAM_LETTER_MAP:
+        return {"error": f"unknown team_id {team_id}"}
+    return await asyncio.to_thread(_debug_weekly_review, team_id)
 
 
 @app.get("/api/team/{team_id}/{period}")
