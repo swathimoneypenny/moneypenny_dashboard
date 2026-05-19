@@ -3,6 +3,7 @@ import Home from "./pages/Home";
 import TeamDashboard from "./pages/TeamDashboard";
 import ClientDashboard from "./pages/ClientDashboard";
 import EmployeeProfile from "./pages/EmployeeProfile";
+import AdminHourPage from "./pages/AdminHourPage";
 import LoginPage from "./pages/LoginPage";
 import Chatbot from "./components/Chatbot";
 import { API_BASE, getToken, clearToken } from "./config";
@@ -51,9 +52,10 @@ export default function App() {
   }
 
   const basicContext = (() => {
-    if (view.page === "client")   return `Viewing client: ${view.clientName}`;
-    if (view.page === "employee") return `Viewing employee: ${view.employeeName} (${view.teamName})`;
-    if (view.page === "team")     return `Viewing team: ${view.teamName}`;
+    if (view.page === "client")     return `Viewing client: ${view.clientName}`;
+    if (view.page === "employee")   return `Viewing employee: ${view.employeeName} (${view.teamName})`;
+    if (view.page === "team")       return `Viewing team: ${view.teamName}`;
+    if (view.page === "admin_hour") return "Viewing Admin Hour cross-team overview";
     return "Viewing MoneyPenny Dashboard home screen";
   })();
 
@@ -132,6 +134,18 @@ export default function App() {
     );
   }
 
+  if (view.page === "admin_hour") {
+    return (
+      <>
+        <AdminHourPage
+          onBack={() => setView({ page: "home" })}
+          onSelectTeam={(team) => setView({ page: "team", teamId: team.id, teamName: team.name })}
+        />
+        <Chatbot context={context} viewHint={viewHint} />
+      </>
+    );
+  }
+
   return (
     <>
       <Home
@@ -143,6 +157,7 @@ export default function App() {
           setRichContext("");
           setView({ page: "client", clientName: client.name });
         }}
+        onOpenAdminHour={() => setView({ page: "admin_hour" })}
       />
       <Chatbot context={context} viewHint={viewHint} />
     </>

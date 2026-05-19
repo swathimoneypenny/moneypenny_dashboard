@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { C, API_BASE, authFetch } from "../config";
 import { LiveIndicator, useAutoRefresh, timeAgo, formatTimeIST } from "../components/LiveIndicator";
 import DelayDetailModal from "../components/DelayDetailModal";
+import WeeklyReviewSection from "../components/WeeklyReviewSection";
 import {
   BarChart,
   Bar,
@@ -1547,6 +1548,10 @@ ${clients.map((o) => (
             members={leaderboard?.members ?? null}
             onSelect={(name) => onSelectEmployee && onSelectEmployee({ teamId, employeeName: name, teamName: displayLabel })}
           />
+        )}
+
+        {!data?.needsRosterSetup && (
+          <WeeklyReviewSection teamId={teamId} />
         )}
       </div>
       <DelayDetailModal day={selectedDay} onClose={() => setSelectedDay(null)} />

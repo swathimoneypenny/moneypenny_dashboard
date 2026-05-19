@@ -1058,6 +1058,238 @@ def _estimate_resolved_in_days(completed_row: dict, all_eod_rows: list[dict],
     return max(0, days)
 
 
+# ══════════════════════════════════════════════════════════════════════
+# Weekly Review sheet — Team Lead reflections, one row per week per lead.
+# Read-only consumption of a separate Google Sheet keyed by tab name.
+# ══════════════════════════════════════════════════════════════════════
+
+WEEKLY_REVIEW_SHEET_ID = os.getenv(
+    "WEEKLY_REVIEW_SHEET_ID",
+    # Default to the sheet ID the user provided; env var overrides.
+    "1E-4WDKWWb2oFjXC5kgqJdML6VJ56iJ5e",
+)
+WEEKLY_REVIEW_CACHE_SECS = 300  # 5 min per spec
+
+# Module-level cache: { (team_id, week_offset): {"at": datetime, "data": dict} }
+_weekly_review_cache: dict[tuple[str, int], dict] = {}
+# Once we successfully match a tab name for a team, remember it so subsequent
+# requests skip the candidate-probing.
+_weekly_review_tab_resolved: dict[str, str] = {}
+
+# Common alternate spellings / short forms for Team Lead names — used to
+# generate candidate tab names. Lead names in TEAM_LETTER_MAP don't always
+# match the tab spelling in the sheet (e.g. "Vinodhini" → "Vinothini").
+_LEAD_ALIASES: dict[str, list[str]] = {
+    "Buelaangel":   ["Buela"],
+    "Chandralekha": ["Chandra"],
+    "Logeshwari":   ["Logeswari", "Logesh"],
+    "Vinodhini":    ["Vinothini", "Vino"],
+    "Pavithira":    ["Pavithra"],
+    "Inbamozhi":    ["Inba"],
+    "Shaalini":     ["Shalini"],
+}
+
+
+def _candidate_weekly_tab_names(lead: str) -> list[str]:
+    """Generate candidate Weekly-Review tab names for a team lead.
+
+    Spec examples:
+      "Kokila - Weekly Review"    (space-dash-space)
+      "Vinothini- Weekly Review"  (no space before dash)
+
+    Each form crosses with several separator variants. Order matters —
+    earlier candidates are tried first.
+    """
+    forms: list[str] = [lead]
+    # First word (e.g. "Buelaangel" → also "Buela")
+    if " " in lead:
+        forms.append(lead.split()[0])
+    forms.extend(_LEAD_ALIASES.get(lead, []))
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for f in forms:
+        for sep in (" - ", "- ", " -", "-"):
+            name = f"{f}{sep}Weekly Review"
+            if name.lower() not in seen:
+                seen.add(name.lower())
+                candidates.append(name)
+    return candidates
+
+
+# ── Column → semantic field mapping for the Weekly Review tab ──
+# Columns A-Y per spec.
+_WEEKLY_REVIEW_COLUMNS: list[tuple[int, str]] = [
+    (0,  "weekRange"),           # A: "May 18 - May 23"
+    (1,  "reviewedBy"),           # B
+    (2,  "teamClient"),           # C
+    (3,  "lateFiles"),            # D
+    (4,  "blockedJobs"),          # E
+    (5,  "scopeCreep"),           # F
+    (6,  "deliveredVsContracted"),# G
+    (7,  "clientBlockedHours"),   # H
+    (8,  "trainingPto"),          # I
+    (9,  "utilFlags"),            # J
+    (10, "usNotes"),              # K
+    (11, "repeatIssues"),         # L
+    (12, "questionVolume"),       # M
+    (13, "recognize"),            # N
+    (14, "needsConversation"),    # O
+    (15, "spanOfControl"),        # P
+    (16, "sopGap"),               # Q
+    (17, "complaintTheme"),       # R
+    (18, "singlePointFailure"),   # S
+    (19, "updatedThisWeek"),      # T (Whale)
+    (20, "newProcedure"),         # U
+    (21, "pendingUpdates"),       # V
+    (22, "iOweClients"),          # W
+    (23, "iOweStaff"),            # X
+    (24, "iOweUS"),               # Y
+]
+
+# Sections grouping for the response payload
+_WEEKLY_REVIEW_SECTIONS: dict[str, list[str]] = {
+    "workIntake":    ["lateFiles", "blockedJobs", "scopeCreep"],
+    "hoursCapacity": ["deliveredVsContracted", "clientBlockedHours", "trainingPto", "utilFlags"],
+    "quality":       ["usNotes", "repeatIssues", "questionVolume"],
+    "staffNotes":    ["recognize", "needsConversation", "spanOfControl"],
+    "patterns":      ["sopGap", "complaintTheme", "singlePointFailure"],
+    "whale":         ["updatedThisWeek", "newProcedure", "pendingUpdates"],
+    "commitments":   ["iOweClients", "iOweStaff", "iOweUS"],
+}
+
+
+def _parse_weekly_review_csv(csv_text: str) -> list[dict]:
+    """Parse the weekly-review tab CSV into a list of row dicts (one per week).
+
+    Skips the header row plus any rows whose 'weekRange' (col A) is empty.
+    """
+    if not csv_text:
+        return []
+    reader = csv.reader(io.StringIO(csv_text))
+    rows = list(reader)
+    if not rows:
+        return []
+    # Detect header: first row's col A typically reads "Week of" or similar
+    first_a = (rows[0][0] if rows[0] else "").strip().lower()
+    start = 1 if first_a and "week" in first_a and "of" in first_a else 0
+
+    out: list[dict] = []
+    for raw in rows[start:]:
+        if not raw:
+            continue
+        # Pad to 25 columns so column-N lookups never IndexError
+        padded = list(raw) + [""] * max(0, 25 - len(raw))
+        row_dict: dict[str, str] = {}
+        for idx, field in _WEEKLY_REVIEW_COLUMNS:
+            row_dict[field] = str(padded[idx] or "").strip()
+        # Skip rows with no weekRange (empty separator rows in sheet)
+        if not row_dict["weekRange"]:
+            continue
+        out.append(row_dict)
+    return out
+
+
+def _row_is_filled(row: dict) -> bool:
+    """True iff any of cols D-Y carries text (i.e. the lead filled something
+    beyond weekRange / reviewedBy / teamClient header metadata)."""
+    for _, field in _WEEKLY_REVIEW_COLUMNS[3:]:  # cols D-Y
+        if (row.get(field) or "").strip():
+            return True
+    return False
+
+
+def _build_review_payload(row: dict | None) -> dict:
+    """Turn a flat row dict into the section-grouped response shape."""
+    if not row:
+        return {
+            "weekRange":  None,
+            "isFilled":   False,
+            "reviewedBy": None,
+            "sections":   None,
+        }
+    sections: dict[str, dict[str, str]] = {}
+    for sec_name, fields in _WEEKLY_REVIEW_SECTIONS.items():
+        sections[sec_name] = {f: (row.get(f) or "") for f in fields}
+    return {
+        "weekRange":   row.get("weekRange") or "",
+        "isFilled":    _row_is_filled(row),
+        "reviewedBy":  row.get("reviewedBy") or "",
+        "teamClient":  row.get("teamClient") or "",
+        "sections":    sections,
+    }
+
+
+def _fetch_weekly_review_rows(team_id: str) -> tuple[list[dict], str | None]:
+    """Fetch all weekly-review rows for a team, trying tab-name candidates.
+    Returns (rows, matched_tab_name). matched_tab_name is None on no match.
+    Caches the resolved tab name in _weekly_review_tab_resolved so subsequent
+    fetches skip the candidate probe."""
+    cfg = TEAM_LETTER_MAP.get(team_id) or {}
+    lead = (cfg.get("leadName") or "").strip()
+    if not lead or not WEEKLY_REVIEW_SHEET_ID:
+        return [], None
+
+    # Fast path: we've successfully resolved a tab for this team before
+    cached_tab = _weekly_review_tab_resolved.get(team_id)
+    candidates = (
+        [cached_tab] + _candidate_weekly_tab_names(lead)
+        if cached_tab else _candidate_weekly_tab_names(lead)
+    )
+
+    last_error: str | None = None
+    for tab in candidates:
+        try:
+            csv_text, _url = _fetch_eod_csv(WEEKLY_REVIEW_SHEET_ID, tab=tab)
+        except EodSheetError as e:
+            last_error = e.reason
+            continue
+        except Exception as e:
+            last_error = str(e)
+            continue
+        rows = _parse_weekly_review_csv(csv_text)
+        if rows:
+            _weekly_review_tab_resolved[team_id] = tab
+            print(f"[weeklyReview] team={team_id} matchedTab={tab!r} rows={len(rows)}")
+            return rows, tab
+    print(f"[weeklyReview] team={team_id} no matching tab "
+          f"(tried {len(candidates)} candidates, last error={last_error})")
+    return [], None
+
+
+def get_weekly_review(team_id: str, week_offset: int = 0) -> dict:
+    """Returns the weekly-review payload for a team at a given week offset.
+
+    week_offset = 0 → most recent row; 1 → previous week; etc.
+
+    Cached for WEEKLY_REVIEW_CACHE_SECS to limit upstream Google Sheets hits.
+    """
+    cache_key = (team_id, week_offset)
+    entry = _weekly_review_cache.get(cache_key)
+    if entry and (datetime.now() - entry["at"]).total_seconds() < WEEKLY_REVIEW_CACHE_SECS:
+        return entry["data"]
+
+    cfg = TEAM_LETTER_MAP.get(team_id) or {}
+    rows, matched_tab = _fetch_weekly_review_rows(team_id)
+    available_weeks = [
+        {"weekRange": r["weekRange"], "isFilled": _row_is_filled(r)}
+        for r in rows
+    ]
+    # Most-recent-first by sheet order (the lead adds the newest week at the top)
+    selected_row = rows[week_offset] if 0 <= week_offset < len(rows) else None
+    payload = _build_review_payload(selected_row)
+    payload.update({
+        "teamId":         team_id,
+        "teamLabel":      cfg.get("label", team_id),
+        "leadName":       cfg.get("leadName", ""),
+        "matchedTab":     matched_tab,
+        "weekOffset":     week_offset,
+        "availableWeeks": available_weeks,
+    })
+    _weekly_review_cache[cache_key] = {"at": datetime.now(), "data": payload}
+    return payload
+
+
 def compute_delays_aging(eod_rows: list[dict], period_start: str, period_end: str) -> dict:
     """Build aging-report aggregates from EOD rows for the given period.
 
@@ -3800,6 +4032,94 @@ def debug_client_coverage(team_id: str):
     }
 
 
+@app.get("/api/team/{team_id}/weekly-review")
+async def weekly_review_endpoint(team_id: str, week_offset: int = 0):
+    """Per-team weekly review payload for a given week_offset (0 = newest row).
+    Tab name is matched against the team lead's name with several spelling
+    variants — see _candidate_weekly_tab_names."""
+    if team_id not in TEAM_LETTER_MAP:
+        return {"error": f"unknown team_id {team_id}"}
+    if week_offset < 0:
+        week_offset = 0
+    result = await asyncio.to_thread(get_weekly_review, team_id, week_offset)
+    return result
+
+
+@app.get("/api/admin-hour")
+async def admin_hour_endpoint(week_offset: int = 0):
+    """Aggregated weekly-review view across every team in TEAM_ORDER.
+
+    Returns one entry per team with isFilled + review payload, plus a summary
+    that the AdminHourPage uses for the cards and compliance chart. Fetches
+    each team's review in parallel via asyncio.gather so total latency is
+    bounded by the slowest single fetch, not the sum.
+    """
+    if week_offset < 0:
+        week_offset = 0
+    team_ids = list(TEAM_ORDER)
+
+    async def _one(tid: str) -> dict:
+        try:
+            review = await asyncio.to_thread(get_weekly_review, tid, week_offset)
+        except Exception as e:
+            return {"teamId": tid, "isFilled": False, "review": None, "error": str(e)}
+        return {
+            "teamId":     tid,
+            "teamLabel":  TEAM_LETTER_MAP.get(tid, {}).get("label", tid),
+            "leadName":   TEAM_LETTER_MAP.get(tid, {}).get("leadName", ""),
+            "isFilled":   bool(review.get("isFilled")),
+            "review":     review,
+        }
+
+    teams = await asyncio.gather(*(_one(tid) for tid in team_ids))
+
+    teams_filled = sum(1 for t in teams if t["isFilled"])
+    total_teams  = len(teams)
+    compliance   = round(teams_filled * 100 / total_teams) if total_teams else 0
+
+    # Rough cross-team aggregates: count how many sections-with-any-text
+    # appear in the patterns / commitments / quality buckets. Best-effort
+    # signal; not a strict definition.
+    issues_found    = 0
+    sop_gaps        = 0
+    commitments_ct  = 0
+    for t in teams:
+        review = t.get("review") or {}
+        sections = review.get("sections") or {}
+        patterns = sections.get("patterns") or {}
+        if (patterns.get("sopGap") or "").strip():
+            sop_gaps += 1
+        if (patterns.get("complaintTheme") or "").strip():
+            issues_found += 1
+        if (patterns.get("singlePointFailure") or "").strip():
+            issues_found += 1
+        for field, txt in (sections.get("commitments") or {}).items():
+            if (txt or "").strip():
+                commitments_ct += 1
+
+    # Use the first filled team's weekRange as the cross-team range label,
+    # since all leads ought to be writing about the same calendar week.
+    week_range_label = ""
+    for t in teams:
+        if t["isFilled"] and (t.get("review") or {}).get("weekRange"):
+            week_range_label = t["review"]["weekRange"]
+            break
+
+    return {
+        "weekRange":   week_range_label,
+        "weekOffset":  week_offset,
+        "summary": {
+            "teamsFilled":       teams_filled,
+            "totalTeams":        total_teams,
+            "compliancePct":     compliance,
+            "totalIssuesFound":  issues_found,
+            "totalCommitments":  commitments_ct,
+            "totalSopGaps":      sop_gaps,
+        },
+        "teams":       teams,
+    }
+
+
 @app.get("/api/clear-cache")
 @app.post("/api/clear-cache")
 async def clear_cache():
@@ -3808,6 +4128,7 @@ async def clear_cache():
     _rows_cache.clear()
     _trend_cache.clear()
     _leaderboard_cache.clear()
+    _weekly_review_cache.clear()
     return {"ok": True, "status": "all caches cleared", "time": datetime.now().isoformat()}
 
 

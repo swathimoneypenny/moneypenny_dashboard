@@ -49,7 +49,7 @@ const today = new Date().toLocaleDateString("en-US", {
   day: "numeric",
 });
 
-function Header() {
+function Header({ onOpenAdminHour }) {
   function signOut() {
     clearToken();
     if (typeof window !== "undefined") window.location.reload();
@@ -75,6 +75,28 @@ function Header() {
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+        {onOpenAdminHour && (
+          <button
+            onClick={onOpenAdminHour}
+            title="Cross-team weekly review overview"
+            style={{
+              background: "transparent",
+              border: `1px solid ${C.border}`,
+              color: C.sec,
+              borderRadius: 8,
+              padding: "8px 14px",
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: 600,
+              fontFamily: "'DM Sans', sans-serif",
+              transition: "all 0.15s",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#3DC58B"; e.currentTarget.style.color = "#3DC58B"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.sec; }}
+          >
+            ⏰ Admin Hour
+          </button>
+        )}
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: C.teal }}>MoneyPenny LLC</div>
           <div style={{ fontSize: 11, color: C.muted }}>{today}</div>
@@ -602,12 +624,12 @@ function ClientTab({ onSelectClient }) {
   );
 }
 
-export default function Home({ onSelectTeam, onSelectClient }) {
+export default function Home({ onSelectTeam, onSelectClient, onOpenAdminHour }) {
   const [tab, setTab] = useState("team");
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, display: "flex", flexDirection: "column" }}>
-      <Header />
+      <Header onOpenAdminHour={onOpenAdminHour} />
 
       <div style={{ padding: "28px 32px", flex: 1 }}>
         {/* Tab toggle */}
