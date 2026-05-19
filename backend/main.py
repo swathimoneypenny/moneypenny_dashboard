@@ -3453,6 +3453,22 @@ async def leaderboard_endpoint(team_id: str, period: str):
     return result
 
 
+# Registered BEFORE the /api/team/{team_id}/{period} catch-all below — otherwise
+# the period placeholder would swallow "admin-review" and reject it as an
+# invalid period.
+@app.get("/api/team/{team_id}/admin-review")
+async def admin_review_endpoint(team_id: str, week_offset: int = 0):
+    """Per-team weekly admin-review payload for a given week_offset (0 = newest row).
+    Tab name is matched against the team lead's name with several spelling
+    variants — see _candidate_weekly_tab_names."""
+    if team_id not in TEAM_LETTER_MAP:
+        return {"error": f"unknown team_id {team_id}"}
+    if week_offset < 0:
+        week_offset = 0
+    result = await asyncio.to_thread(get_weekly_review, team_id, week_offset)
+    return result
+
+
 @app.get("/api/team/{team_id}/{period}")
 async def get_team_data(team_id: str, period: str):
     if period not in ("today", "weekly", "monthly"):
@@ -4030,19 +4046,6 @@ def debug_client_coverage(team_id: str):
         "configured_clients":  configured_out,
         "unmapped_customers":  unmapped_out,
     }
-
-
-@app.get("/api/team/{team_id}/weekly-review")
-async def weekly_review_endpoint(team_id: str, week_offset: int = 0):
-    """Per-team weekly review payload for a given week_offset (0 = newest row).
-    Tab name is matched against the team lead's name with several spelling
-    variants — see _candidate_weekly_tab_names."""
-    if team_id not in TEAM_LETTER_MAP:
-        return {"error": f"unknown team_id {team_id}"}
-    if week_offset < 0:
-        week_offset = 0
-    result = await asyncio.to_thread(get_weekly_review, team_id, week_offset)
-    return result
 
 
 @app.get("/api/admin-hour")

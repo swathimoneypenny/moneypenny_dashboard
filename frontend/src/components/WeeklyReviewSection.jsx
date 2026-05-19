@@ -140,7 +140,7 @@ export default function WeeklyReviewSection({ teamId, embedded = false }) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    authFetch(`/api/team/${teamId}/weekly-review?week_offset=${weekOffset}`)
+    authFetch(`/api/team/${teamId}/admin-review?week_offset=${weekOffset}`)
       .then((r) => r.json())
       .then((d) => {
         if (cancelled) return;

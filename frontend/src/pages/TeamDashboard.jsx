@@ -24,6 +24,7 @@ const PERIODS = [
   { key: "today",   label: "Today" },
   { key: "weekly",  label: "This Week" },
   { key: "monthly", label: "This Month" },
+  { key: "review",  label: "📋 Weekly Review" },
 ];
 
 function utilColor(pct) {
@@ -946,6 +947,9 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
   const abortRef = useRef(null);
 
   const fetchData = useCallback((silent = false) => {
+    // The Weekly Review tab has its own data source (admin-review endpoint) —
+    // don't hit /api/team/{id}/review (would 404 / hit the period catch-all).
+    if (period === "review") return;
     if (abortRef.current) abortRef.current.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -980,6 +984,7 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
 
   // Leaderboard for the active period (drives Team Members table).
   useEffect(() => {
+    if (period === "review") return;
     if (lbAbortRef.current) lbAbortRef.current.abort();
     const ctrl = new AbortController();
     lbAbortRef.current = ctrl;
@@ -1242,7 +1247,7 @@ ${clients.map((o) => (
                 fontWeight: 600,
                 fontFamily: "'DM Sans', sans-serif",
                 transition: "all 0.15s",
-                background: period === p.key ? C.blue : "transparent",
+                background: period === p.key ? (p.key === "review" ? "#7C3AED" : C.blue) : "transparent",
                 color: period === p.key ? "#fff" : C.sec,
               }}
             >
@@ -1291,6 +1296,9 @@ ${clients.map((o) => (
       </div>
 
       <div style={{ padding: "24px 32px", display: "flex", flexDirection: "column", gap: 24 }}>
+        {period === "review" ? (
+          <WeeklyReviewSection teamId={teamId} />
+        ) : (<>
         {/* Roster info banner */}
         {!loading && data && !data.error && !data.needsRosterSetup && (
           <div
@@ -1549,10 +1557,7 @@ ${clients.map((o) => (
             onSelect={(name) => onSelectEmployee && onSelectEmployee({ teamId, employeeName: name, teamName: displayLabel })}
           />
         )}
-
-        {!data?.needsRosterSetup && (
-          <WeeklyReviewSection teamId={teamId} />
-        )}
+        </>)}
       </div>
       <DelayDetailModal day={selectedDay} onClose={() => setSelectedDay(null)} />
     </div>
