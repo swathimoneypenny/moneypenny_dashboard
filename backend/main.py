@@ -1069,12 +1069,85 @@ WEEKLY_REVIEW_SHEET_ID = os.getenv(
     "1E-4WDKWWb2oFjXC5kgqJdML6VJ56iJ5e",
 )
 WEEKLY_REVIEW_CACHE_SECS = 300  # 5 min per spec
+_WEEKLY_TABS_CACHE_TTL    = 300  # 5 min for the tab-list scrape
 
 # Module-level cache: { (team_id, week_offset): {"at": datetime, "data": dict} }
 _weekly_review_cache: dict[tuple[str, int], dict] = {}
-# Once we successfully match a tab name for a team, remember it so subsequent
-# requests skip the candidate-probing.
+# Kept for backward compat with debug callers; the new fetch path no longer
+# writes to it (tab resolution is now keyed by sheet_id, not team_id).
 _weekly_review_tab_resolved: dict[str, str] = {}
+# { sheet_id: {"at": datetime, "tabs": {tab_name: gid}} }
+_weekly_tabs_cache: dict[str, dict] = {}
+
+
+def _list_sheet_tabs(sheet_id: str) -> dict[str, int]:
+    """Returns {tab_name: gid} for every visible tab in a Google Sheet.
+
+    CRITICAL background: gviz with sheet=NonExistent silently falls back to
+    the FIRST tab and returns its CSV with HTTP 200 — so we can NEVER detect
+    "tab doesn't exist" by probing gviz alone. We have to enumerate tabs out
+    of band. We do that by scraping the /htmlview page (works on any sheet
+    that's shared "Anyone with the link can view"). Cached for
+    _WEEKLY_TABS_CACHE_TTL seconds.
+
+    Returns an empty dict on failure — callers treat that as "no tabs found",
+    which is safer than guessing.
+    """
+    if not sheet_id:
+        return {}
+    cached = _weekly_tabs_cache.get(sheet_id)
+    if cached and (datetime.now() - cached["at"]).total_seconds() < _WEEKLY_TABS_CACHE_TTL:
+        return cached["tabs"]
+
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/htmlview"
+    try:
+        resp = requests.get(url, timeout=15)
+    except Exception as e:
+        print(f"[weeklyTabs] fetch error: {e}")
+        return cached["tabs"] if cached else {}
+    if resp.status_code != 200:
+        print(f"[weeklyTabs] htmlview status={resp.status_code}")
+        return cached["tabs"] if cached else {}
+
+    html = resp.text
+    pairs: dict[str, int] = {}
+
+    # Primary pattern: htmlview's bottom tab bar uses
+    #   <li id="sheet-button-{gid}" ...>...<a ...>TabName</a>...</li>
+    for m in re.finditer(r'id="sheet-button-(\d+)"[^>]*>(.*?)</li>', html, re.DOTALL):
+        gid_str = m.group(1)
+        block   = m.group(2)
+        name    = re.sub(r"<[^>]+>", "", block).strip()
+        name    = (name.replace("&amp;", "&")
+                       .replace("&quot;", '"')
+                       .replace("&#39;",  "'")
+                       .replace("&#34;",  '"')
+                       .replace("&lt;",   "<")
+                       .replace("&gt;",   ">"))
+        if name:
+            try:
+                pairs[name] = int(gid_str)
+            except ValueError:
+                pass
+
+    # Fallback pattern: embedded JSON metadata in the page's bootstrap data.
+    if not pairs:
+        for m in re.finditer(r'"name":"([^"\\]*(?:\\.[^"\\]*)*)","sheetId":(\d+)', html):
+            try:
+                name = m.group(1).encode("utf-8").decode("unicode_escape")
+            except Exception:
+                name = m.group(1)
+            try:
+                pairs[name] = int(m.group(2))
+            except ValueError:
+                pass
+
+    if pairs:
+        _weekly_tabs_cache[sheet_id] = {"at": datetime.now(), "tabs": pairs}
+        print(f"[weeklyTabs] sheet={sheet_id} discovered {len(pairs)} tabs: {list(pairs.keys())}")
+    else:
+        print(f"[weeklyTabs] sheet={sheet_id} could not parse any tabs from htmlview")
+    return pairs
 
 # Common alternate spellings / short forms for Team Lead names — used to
 # generate candidate tab names. Lead names in TEAM_LETTER_MAP don't always
@@ -1236,41 +1309,62 @@ def _build_review_payload(row: dict | None) -> dict:
     }
 
 
+def _match_weekly_tab(lead: str, tabs_map: dict[str, int]) -> tuple[str | None, int | None]:
+    """Given a lead name and the actual {tab_name: gid} map, returns the
+    (matched_tab_name, gid) or (None, None) if no candidate matches an actual
+    tab. Comparison is case-insensitive and whitespace-tolerant."""
+    if not lead or not tabs_map:
+        return None, None
+    actual_norm = {t.strip().lower(): t for t in tabs_map.keys()}
+    for cand in _candidate_weekly_tab_names(lead):
+        key = cand.strip().lower()
+        if key in actual_norm:
+            actual = actual_norm[key]
+            return actual, tabs_map[actual]
+    return None, None
+
+
 def _fetch_weekly_review_rows(team_id: str) -> tuple[list[dict], str | None]:
-    """Fetch all weekly-review rows for a team, trying tab-name candidates.
-    Returns (rows, matched_tab_name). matched_tab_name is None on no match.
-    Caches the resolved tab name in _weekly_review_tab_resolved so subsequent
-    fetches skip the candidate probe."""
+    """Fetch all weekly-review rows for a team using an EXACT tab match.
+
+    CRITICAL: we do NOT silently fall back to the first tab. gviz's CSV
+    endpoint will silently return the first tab's data when an unknown sheet
+    name is requested, which would make every team without a tab show the
+    first lead's review. To guard against that, we:
+      1. Enumerate the sheet's actual tabs out-of-band (htmlview scrape).
+      2. Match our candidate names against the discovered list.
+      3. Fetch by gid (via /export) — gid is server-validated, so no fallback.
+    If no candidate matches, we return ([], None) so the caller emits
+    isFilled=False rather than another team's data.
+    """
     cfg = TEAM_LETTER_MAP.get(team_id) or {}
     lead = (cfg.get("leadName") or "").strip()
     if not lead or not WEEKLY_REVIEW_SHEET_ID:
         return [], None
 
-    # Fast path: we've successfully resolved a tab for this team before
-    cached_tab = _weekly_review_tab_resolved.get(team_id)
-    candidates = (
-        [cached_tab] + _candidate_weekly_tab_names(lead)
-        if cached_tab else _candidate_weekly_tab_names(lead)
-    )
+    tabs_map = _list_sheet_tabs(WEEKLY_REVIEW_SHEET_ID)
+    if not tabs_map:
+        # Couldn't enumerate tabs — refuse to guess, return empty.
+        return [], None
 
-    last_error: str | None = None
-    for tab in candidates:
-        try:
-            csv_text, _url = _fetch_eod_csv(WEEKLY_REVIEW_SHEET_ID, tab=tab)
-        except EodSheetError as e:
-            last_error = e.reason
-            continue
-        except Exception as e:
-            last_error = str(e)
-            continue
-        rows = _parse_weekly_review_csv(csv_text)
-        if rows:
-            _weekly_review_tab_resolved[team_id] = tab
-            print(f"[weeklyReview] team={team_id} matchedTab={tab!r} rows={len(rows)}")
-            return rows, tab
-    print(f"[weeklyReview] team={team_id} no matching tab "
-          f"(tried {len(candidates)} candidates, last error={last_error})")
-    return [], None
+    matched_tab, gid = _match_weekly_tab(lead, tabs_map)
+    if not matched_tab or gid is None:
+        print(f"[weeklyReview] team={team_id} lead={lead!r} no matching tab; "
+              f"actual tabs={list(tabs_map.keys())}")
+        return [], None
+
+    try:
+        csv_text, _url = _fetch_eod_csv(WEEKLY_REVIEW_SHEET_ID, gid=str(gid))
+    except EodSheetError as e:
+        print(f"[weeklyReview] team={team_id} fetch failed: {e.reason}")
+        return [], None
+    except Exception as e:
+        print(f"[weeklyReview] team={team_id} fetch error: {e}")
+        return [], None
+
+    rows = _parse_weekly_review_csv(csv_text)
+    print(f"[weeklyReview] team={team_id} matchedTab={matched_tab!r} gid={gid} rows={len(rows)}")
+    return rows, matched_tab
 
 
 # Content columns (D-Y) used for "% filled" math and the trend chart
@@ -3581,50 +3675,42 @@ async def weekly_trend_endpoint(team_id: str, weeks: int = 8):
 def _debug_weekly_review(team_id: str) -> dict:
     """Returns the raw CSV grid alongside the parsed rows so we can see exactly
     which row the parser is picking and which rows it's skipping (title /
-    section-headers / column-headers)."""
+    section-headers / column-headers).
+
+    Resolves the tab via _list_sheet_tabs + _match_weekly_tab so it's subject
+    to the same anti-fallback safeguards as the production endpoint.
+    """
     cfg = TEAM_LETTER_MAP.get(team_id) or {}
     lead = (cfg.get("leadName") or "").strip()
     if not lead or not WEEKLY_REVIEW_SHEET_ID:
         return {"error": "team_id has no leadName or WEEKLY_REVIEW_SHEET_ID is unset",
                 "team_id": team_id}
 
-    # Reuse the tab-resolution path
-    cached_tab = _weekly_review_tab_resolved.get(team_id)
-    candidates = (
-        [cached_tab] + _candidate_weekly_tab_names(lead)
-        if cached_tab else _candidate_weekly_tab_names(lead)
-    )
+    tabs_map = _list_sheet_tabs(WEEKLY_REVIEW_SHEET_ID)
+    candidates = _candidate_weekly_tab_names(lead)
+    matched_tab, gid = _match_weekly_tab(lead, tabs_map)
 
-    matched_tab: str | None = None
     raw_rows: list[list[str]] = []
     last_error: str | None = None
-    for tab in candidates:
+    if matched_tab and gid is not None:
         try:
-            csv_text, _url = _fetch_eod_csv(WEEKLY_REVIEW_SHEET_ID, tab=tab)
+            csv_text, _url = _fetch_eod_csv(WEEKLY_REVIEW_SHEET_ID, gid=str(gid))
+            reader = csv.reader(io.StringIO(csv_text))
+            raw_rows = list(reader)
         except EodSheetError as e:
             last_error = e.reason
-            continue
         except Exception as e:
             last_error = str(e)
-            continue
-        if not csv_text:
-            continue
-        reader = csv.reader(io.StringIO(csv_text))
-        candidate_rows = list(reader)
-        # Pick this tab if it parses any real data rows
-        if any(_looks_like_week_range((r[0] if r else "").strip()) for r in candidate_rows):
-            matched_tab = tab
-            raw_rows = candidate_rows
-            break
 
     if not matched_tab:
         return {
-            "team_id":   team_id,
-            "lead_name": lead,
-            "sheet_id":  WEEKLY_REVIEW_SHEET_ID,
-            "tab_used":  None,
-            "tried_candidates": candidates,
-            "last_error": last_error,
+            "team_id":           team_id,
+            "lead_name":         lead,
+            "sheet_id":          WEEKLY_REVIEW_SHEET_ID,
+            "tab_used":          None,
+            "tried_candidates":  candidates,
+            "all_tabs_in_sheet": list(tabs_map.keys()),
+            "last_error":        last_error,
         }
 
     parsed = []
@@ -3676,6 +3762,38 @@ def _debug_weekly_review(team_id: str) -> dict:
             for p in parsed
         ],
     }
+
+
+def _debug_weekly_review_tabs() -> dict:
+    """Returns the list of actual tabs in the weekly-review sheet plus the
+    per-team match status. Use this to confirm we're NOT falling back to
+    the first tab for teams whose lead doesn't have their own tab."""
+    tabs_map = _list_sheet_tabs(WEEKLY_REVIEW_SHEET_ID)
+    actual_tabs = list(tabs_map.keys())
+    mapping = []
+    for tid in TEAM_ORDER:
+        cfg  = TEAM_LETTER_MAP.get(tid) or {}
+        lead = (cfg.get("leadName") or "").strip()
+        matched_tab, _gid = _match_weekly_tab(lead, tabs_map)
+        mapping.append({
+            "team_id":    tid,
+            "leadName":   lead,
+            "matchedTab": matched_tab,
+            "status":     "matched" if matched_tab else "no_tab_for_this_team",
+        })
+    return {
+        "sheet_id":            WEEKLY_REVIEW_SHEET_ID,
+        "all_tabs_in_sheet":   actual_tabs,
+        "team_to_tab_mapping": mapping,
+    }
+
+
+@app.get("/api/debug/weekly-review-tabs")
+async def debug_weekly_review_tabs_endpoint():
+    """Lists every tab discovered in the weekly-review sheet and shows which
+    team_id (if any) maps to each. Confirms unfilled teams don't silently
+    inherit another lead's data."""
+    return await asyncio.to_thread(_debug_weekly_review_tabs)
 
 
 @app.get("/api/debug/weekly-review")
@@ -4350,6 +4468,8 @@ async def clear_cache():
     _trend_cache.clear()
     _leaderboard_cache.clear()
     _weekly_review_cache.clear()
+    _weekly_tabs_cache.clear()
+    _weekly_review_tab_resolved.clear()
     return {"ok": True, "status": "all caches cleared", "time": datetime.now().isoformat()}
 
 
