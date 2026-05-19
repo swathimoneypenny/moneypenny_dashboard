@@ -267,9 +267,9 @@ UNCATEGORIZED_CLIENTS = [
 # CUSTOMERNAME (or WORKDESCRIPTION as fallback). estHrs = monthly commitment.
 TEAM_CLIENTS: dict[str, list[dict]] = {
     "team_a": [
-        {"name": "Bookkeeping Doctor",   "tsMatch": ["BKP Doctor", "Bookkeeping Doctor"],     "estHrs": 80,  "tz": "EST", "meeting": "2nd & 3rd week Thursday 9am IST & every Wednesday 4:30pm IST"},
-        {"name": "Ollin Balance",        "tsMatch": ["Ollin Balance"],                         "estHrs": 160, "tz": "EST", "meeting": "4th week Tuesday 4:30pm IST"},
-        {"name": "24hr Bookkeeper",      "tsMatch": ["24hr Bookkeeper"],                       "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "Bookkeeping Doctor",   "tsMatch": ["BKP Doctor", "Bookkeeping Doctor", "BKD", "Bkd"],         "estHrs": 80,  "tz": "EST", "meeting": "2nd & 3rd week Thursday 9am IST & every Wednesday 4:30pm IST"},
+        {"name": "Ollin Balance",        "tsMatch": ["Ollin Balance", "Ollinbalance", "Ollin"],                  "estHrs": 160, "tz": "EST", "meeting": "4th week Tuesday 4:30pm IST"},
+        {"name": "24hr Bookkeeper",      "tsMatch": ["24hr Bookkeeper", "24 hrs", "24hrs", "24 Hrs", "24 hr"], "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
     ],
     "team_b": [
         {"name": "NisiVoccia",           "tsMatch": ["NisiVoccia"],                            "estHrs": 120, "tz": "EST", "meeting": "3rd week Thursday 6:30pm IST"},
@@ -1367,21 +1367,6 @@ def _fetch_weekly_review_rows(team_id: str) -> tuple[list[dict], str | None]:
     return rows, matched_tab
 
 
-# Content columns (D-Y) used for "% filled" math and the trend chart
-_WEEKLY_REVIEW_CONTENT_COLS: list[tuple[int, str]] = _WEEKLY_REVIEW_COLUMNS[3:]
-
-
-def _row_completion(row: dict) -> tuple[int, int]:
-    """Returns (filled_count, total_count) for a single weekly-review row,
-    considering only the 22 content fields (cols D-Y)."""
-    total  = len(_WEEKLY_REVIEW_CONTENT_COLS)
-    filled = sum(
-        1 for _, field in _WEEKLY_REVIEW_CONTENT_COLS
-        if (row.get(field) or "").strip()
-    )
-    return filled, total
-
-
 def _compute_client_mentions(team_id: str, work_intake: dict | None) -> list[dict]:
     """Counts how often each configured client (name + tsMatch aliases) appears
     in the team's Work Intake free-text fields for the picked week. Returns
@@ -1453,34 +1438,6 @@ def get_weekly_review(team_id: str, week_offset: int = 0) -> dict:
     })
     _weekly_review_cache[cache_key] = {"at": datetime.now(), "data": payload}
     return payload
-
-
-def get_weekly_trend(team_id: str, max_weeks: int = 8) -> dict:
-    """Returns up to `max_weeks` most recent filled weeks for the team, in
-    oldest-first chronological order so the trend chart reads left-to-right.
-    Each entry: {weekRange, completionPct, filledFields, totalFields}."""
-    cfg = TEAM_LETTER_MAP.get(team_id) or {}
-    rows, matched_tab = _fetch_weekly_review_rows(team_id)
-    filled_newest_first = [r for r in reversed(rows) if _row_is_filled(r)]
-    recent = filled_newest_first[:max_weeks]
-    chronological = list(reversed(recent))
-    weeks: list[dict] = []
-    for r in chronological:
-        filled, total = _row_completion(r)
-        pct = round(filled * 100 / total) if total else 0
-        weeks.append({
-            "weekRange":     r.get("weekRange") or "",
-            "completionPct": pct,
-            "filledFields":  filled,
-            "totalFields":   total,
-        })
-    return {
-        "teamId":     team_id,
-        "teamLabel":  cfg.get("label", team_id),
-        "leadName":   cfg.get("leadName", ""),
-        "matchedTab": matched_tab,
-        "weeks":      weeks,
-    }
 
 
 def compute_delays_aging(eod_rows: list[dict], period_start: str, period_end: str) -> dict:
@@ -3660,16 +3617,6 @@ async def admin_review_endpoint(team_id: str, week_offset: int = 0):
         week_offset = 0
     result = await asyncio.to_thread(get_weekly_review, team_id, week_offset)
     return result
-
-
-# Also before the period catch-all — same routing reason.
-@app.get("/api/team/{team_id}/weekly-trend")
-async def weekly_trend_endpoint(team_id: str, weeks: int = 8):
-    """Completion-% trend for the last N filled weeks (oldest-first)."""
-    if team_id not in TEAM_LETTER_MAP:
-        return {"error": f"unknown team_id {team_id}"}
-    weeks = max(1, min(weeks, 26))
-    return await asyncio.to_thread(get_weekly_trend, team_id, weeks)
 
 
 def _debug_weekly_review(team_id: str) -> dict:

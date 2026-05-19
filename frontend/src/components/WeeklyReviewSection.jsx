@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { C, authFetch } from "../config";
 import {
-  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, ReferenceLine, Cell,
+  PieChart, Pie, BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  Tooltip, ResponsiveContainer, Cell, Legend,
 } from "recharts";
 
 // Section meta — order, label, color, and the field-name → label map for
@@ -132,133 +132,148 @@ function ChartCard({ title, subtitle, children }) {
   );
 }
 
-function SectionCompletionChart({ sections }) {
-  const stats = useMemo(() => SECTIONS.map((s) => {
-    const total  = s.fields.length;
-    const filled = s.fields.filter(([k]) => (sections?.[s.key]?.[k] || "").trim()).length;
-    return { key: s.key, label: s.label, icon: s.icon, color: s.color, filled, total };
-  }), [sections]);
-  const totalFilled = stats.reduce((a, s) => a + s.filled, 0);
-  const totalAll    = stats.reduce((a, s) => a + s.total, 0);
-  const overallPct  = totalAll ? Math.round(totalFilled * 100 / totalAll) : 0;
+// Split free-text into a count of distinct entries — leads write commitments
+// and issues as bullets/lines, so a newline-separated count is the truest
+// signal. Falls back to "1 if any non-whitespace text exists" for prose blobs.
+function countItems(text) {
+  if (!text) return 0;
+  const lines = String(text)
+    .split(/\r?\n/)
+    .map((s) => s.replace(/^[\s•\-*]+/, "").trim())
+    .filter(Boolean);
+  if (lines.length) return lines.length;
+  return text.trim() ? 1 : 0;
+}
+
+const ISSUE_CATEGORIES = [
+  { key: "lateFiles",    label: "Late/Missing files",          color: "#E25C5C" },
+  { key: "blockedJobs",  label: "Blocked — awaiting response", color: "#F0B947" },
+  { key: "scopeCreep",   label: "Scope creep",                 color: "#F2895A" },
+  { key: "repeatIssues", label: "Quality / Rework",            color: "#9B7EE8" },
+];
+
+function IssueBreakdownChart({ sections, weekRange }) {
+  const data = useMemo(() => {
+    const wi = sections?.workIntake || {};
+    const q  = sections?.quality    || {};
+    const sourceMap = {
+      lateFiles:    wi.lateFiles,
+      blockedJobs:  wi.blockedJobs,
+      scopeCreep:   wi.scopeCreep,
+      repeatIssues: q.repeatIssues,
+    };
+    return ISSUE_CATEGORIES.map((c) => ({
+      ...c,
+      count: countItems(sourceMap[c.key]),
+    }));
+  }, [sections]);
+  const total = data.reduce((a, d) => a + d.count, 0);
+  const pieData = data.filter((d) => d.count > 0);
   return (
     <ChartCard
-      title={`Section Completion (${totalFilled}/${totalAll})`}
-      subtitle={`Overall ${overallPct}%`}
+      title="Issue Type Breakdown"
+      subtitle={total ? `${total} this week${weekRange ? ` · ${weekRange}` : ""}` : (weekRange || "")}
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {stats.map((s) => {
-          const pct = s.total ? (s.filled * 100 / s.total) : 0;
-          return (
-            <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 10 }}>{s.icon}</span>
-              <span style={{ fontSize: 10, color: C.sec, width: 96, flexShrink: 0 }}>{s.label}</span>
-              <div style={{ flex: 1, height: 8, background: C.surface, borderRadius: 4, overflow: "hidden" }}>
-                <div
-                  style={{
-                    width: `${pct}%`,
-                    height: "100%",
-                    background: s.color,
-                    transition: "width .25s",
-                  }}
-                />
-              </div>
-              <span style={{ fontSize: 10, color: C.muted, fontFamily: "'DM Mono', monospace", width: 38, textAlign: "right" }}>
-                {s.filled}/{s.total}
-              </span>
-            </div>
-          );
-        })}
-      </div>
+      {total === 0 ? (
+        <div style={{ height: 180, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 11, fontStyle: "italic" }}>
+          No issues logged this week.
+        </div>
+      ) : (
+        <ResponsiveContainer width="100%" height={180}>
+          <PieChart>
+            <Pie
+              data={pieData}
+              dataKey="count"
+              nameKey="label"
+              cx="35%"
+              cy="50%"
+              innerRadius={36}
+              outerRadius={66}
+              paddingAngle={2}
+              stroke="none"
+            >
+              {pieData.map((d, i) => (
+                <Cell key={i} fill={d.color} />
+              ))}
+            </Pie>
+            <Tooltip
+              contentStyle={{ background: "rgba(11,25,41,0.95)", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, color: C.pri }}
+              formatter={(v, n) => [`${v} (${Math.round(v * 100 / total)}%)`, n]}
+            />
+            <Legend
+              layout="vertical"
+              align="right"
+              verticalAlign="middle"
+              wrapperStyle={{ fontSize: 11, color: C.sec, lineHeight: "1.6em" }}
+              iconType="circle"
+              iconSize={8}
+              formatter={(value, entry) => {
+                const c = entry?.payload?.count ?? 0;
+                return `${value} · ${c}`;
+              }}
+            />
+          </PieChart>
+        </ResponsiveContainer>
+      )}
     </ChartCard>
   );
 }
 
-function WeeklyTrendChart({ teamId }) {
-  const [weeks, setWeeks]   = useState(null);
-  const [error, setError]   = useState(null);
-  useEffect(() => {
-    let cancelled = false;
-    setWeeks(null);
-    setError(null);
-    authFetch(`/api/team/${teamId}/weekly-trend?weeks=8`)
-      .then((r) => r.json())
-      .then((d) => {
-        if (cancelled) return;
-        if (d?.error) { setError(d.error); setWeeks([]); }
-        else          { setWeeks(Array.isArray(d?.weeks) ? d.weeks : []); }
-      })
-      .catch((e) => { if (!cancelled) { setError(e?.message || String(e)); setWeeks([]); } });
-    return () => { cancelled = true; };
-  }, [teamId]);
+const COMMITMENT_CATEGORIES = [
+  { key: "iOweClients", label: "Clients", color: "#4A8FE7" },
+  { key: "iOweStaff",   label: "Staff",   color: "#3DC58B" },
+  { key: "iOweUS",      label: "US",      color: "#F2895A" },
+];
 
-  const latest = weeks && weeks.length ? weeks[weeks.length - 1] : null;
-  const belowTarget = !!latest && latest.completionPct < 80;
-  const subtitle = latest
-    ? `Latest ${latest.weekRange} · ${latest.completionPct}%${belowTarget ? " ⚠" : ""}`
-    : "";
-
+function PendingCommitmentsChart({ sections, weekRange }) {
+  const data = useMemo(() => {
+    const c = sections?.commitments || {};
+    return COMMITMENT_CATEGORIES.map((cat) => ({
+      ...cat,
+      count: countItems(c[cat.key]),
+    }));
+  }, [sections]);
+  const total = data.reduce((a, d) => a + d.count, 0);
   return (
-    <ChartCard title="Completion Trend — Last 8 Weeks" subtitle={subtitle}>
-      {weeks === null ? (
-        <div className="kpi-skeleton" style={{ height: 160, borderRadius: 6 }} />
-      ) : error ? (
+    <ChartCard
+      title="Commitments for Next Week"
+      subtitle={total ? `${total} open${weekRange ? ` · ${weekRange}` : ""}` : (weekRange || "")}
+    >
+      {total === 0 ? (
         <div style={{ height: 160, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 11, fontStyle: "italic" }}>
-          Couldn't load trend: {error}
-        </div>
-      ) : weeks.length === 0 ? (
-        <div style={{ height: 160, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 11, fontStyle: "italic" }}>
-          No filled weeks yet.
+          No open commitments this week.
         </div>
       ) : (
         <ResponsiveContainer width="100%" height={160}>
-          <LineChart data={weeks} margin={{ top: 6, right: 10, left: -20, bottom: 4 }}>
-            <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
+          <BarChart data={data} layout="vertical" margin={{ top: 4, right: 16, bottom: 4, left: 4 }}>
+            <CartesianGrid stroke={C.border} strokeDasharray="3 3" horizontal={false} />
             <XAxis
-              dataKey="weekRange"
+              type="number"
               tick={{ fill: C.muted, fontSize: 9 }}
               axisLine={false}
               tickLine={false}
-              interval={0}
-              tickFormatter={(v) => (v || "").replace(/\s*-\s*.*/, "")}
+              allowDecimals={false}
             />
             <YAxis
-              domain={[0, 100]}
-              tick={{ fill: C.muted, fontSize: 9 }}
+              type="category"
+              dataKey="label"
+              tick={{ fill: C.sec, fontSize: 11 }}
               axisLine={false}
               tickLine={false}
-              ticks={[0, 50, 80, 100]}
-              tickFormatter={(v) => `${v}%`}
+              width={70}
             />
             <Tooltip
-              cursor={{ stroke: C.border }}
+              cursor={{ fill: "rgba(255,255,255,0.04)" }}
               contentStyle={{ background: "rgba(11,25,41,0.95)", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, color: C.pri }}
-              formatter={(v, _k, p) => [`${v}% (${p?.payload?.filledFields}/${p?.payload?.totalFields})`, "Completion"]}
-              labelFormatter={(l) => l}
+              formatter={(v) => [`${v} promise${v === 1 ? "" : "s"}`, ""]}
+              labelFormatter={(l) => `I owe — ${l}`}
             />
-            <ReferenceLine y={80} stroke="#3DC58B" strokeDasharray="4 4" />
-            <Line
-              type="monotone"
-              dataKey="completionPct"
-              stroke="#4A8FE7"
-              strokeWidth={2}
-              dot={({ cx, cy, payload, index }) => {
-                const isLast = index === weeks.length - 1;
-                const red    = isLast && payload.completionPct < 80;
-                return (
-                  <circle
-                    key={index}
-                    cx={cx}
-                    cy={cy}
-                    r={isLast ? 5 : 3}
-                    fill={red ? "#E25C5C" : "#4A8FE7"}
-                    stroke={red ? "#E25C5C" : "#4A8FE7"}
-                  />
-                );
-              }}
-              activeDot={{ r: 6 }}
-            />
-          </LineChart>
+            <Bar dataKey="count" radius={[0, 4, 4, 0]} maxBarSize={22}>
+              {data.map((d, i) => (
+                <Cell key={i} fill={d.color} />
+              ))}
+            </Bar>
+          </BarChart>
         </ResponsiveContainer>
       )}
     </ChartCard>
@@ -448,9 +463,9 @@ export default function WeeklyReviewSection({ teamId, embedded = false }) {
           )}
           {!embedded && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-              <SectionCompletionChart sections={sections} />
-              <WeeklyTrendChart teamId={teamId} />
+              <IssueBreakdownChart sections={sections} weekRange={data?.weekRange} />
               <ClientMentionsChart mentions={data?.clientMentions} weekRange={data?.weekRange} />
+              <PendingCommitmentsChart sections={sections} weekRange={data?.weekRange} />
             </div>
           )}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
