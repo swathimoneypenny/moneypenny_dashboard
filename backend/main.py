@@ -1635,6 +1635,49 @@ _DELAYS_HEADER_KEYWORDS = (
 )
 
 
+def _list_team_sheet_tabs(sheet_id: str) -> list[str]:
+    """Best-effort enumeration of tab names in a Google Sheet via /htmlview
+    page scrape. Returns [] on any failure (network, parse, or unsupported
+    page format). For diagnostic use only — never relied on for actual
+    routing, since the page format has changed in production before.
+    """
+    if not sheet_id:
+        return []
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/htmlview"
+    try:
+        resp = requests.get(url, timeout=12)
+        if resp.status_code != 200:
+            return []
+        html = resp.text
+    except Exception as e:
+        print(f"[debugDelaysTab] htmlview fetch error: {e}")
+        return []
+
+    tabs: list[str] = []
+    # Primary pattern: <li id="sheet-button-{gid}" ...>...<a ...>TabName</a>...</li>
+    for m in re.finditer(r'id="sheet-button-(\d+)"[^>]*>(.*?)</li>', html, re.DOTALL):
+        block = m.group(2)
+        name = re.sub(r"<[^>]+>", "", block).strip()
+        name = (name.replace("&amp;", "&")
+                    .replace("&quot;", '"')
+                    .replace("&#39;", "'")
+                    .replace("&#34;", '"')
+                    .replace("&lt;", "<")
+                    .replace("&gt;", ">"))
+        if name and name not in tabs:
+            tabs.append(name)
+    # Fallback: bootstrap JSON
+    if not tabs:
+        for m in re.finditer(r'"name":"([^"\\]*(?:\\.[^"\\]*)*)","sheetId":\d+', html):
+            try:
+                name = m.group(1).encode("utf-8").decode("unicode_escape")
+            except Exception:
+                name = m.group(1)
+            if name and name not in tabs:
+                tabs.append(name)
+    return tabs
+
+
 def _csv_looks_like_delays_tab(csv_text: str) -> bool:
     """Detect gviz's silent fallback to the first (main EOD) tab. The Delays
     tab has 'question' / 'query' / 'delay' / 'resolution' in its header row;
@@ -4185,47 +4228,118 @@ async def debug_weekly_review_tabs_endpoint():
 
 
 def _debug_delays_tab(team_id: str, client: str) -> dict:
-    """Diagnostic dump of a single client's Delays tab probe. Shows the
-    candidates we tried, which one matched, the discovered column mapping,
-    and a sample of parsed rows so we can verify the schema before relying
-    on the integration in the modal."""
-    if team_id not in TEAM_LETTER_MAP:
-        return {"error": f"unknown team_id {team_id}"}
-    if not client:
-        return {"error": "missing client query param"}
-    clients_cfg = TEAM_CLIENTS.get(team_id) or []
-    aliases: list[str] = []
-    for c in clients_cfg:
-        if (c.get("name") or "").lower() == client.lower():
-            aliases = list(c.get("tsMatch") or [])
-            break
-    matched_tab, csv_text, candidates = _resolve_delays_tab(team_id, client, aliases)
-    if not matched_tab:
-        return {
-            "team_id":        team_id,
-            "client_name":    client,
-            "tab_name_tried": candidates,
-            "tab_found":      None,
-            "row_count":      0,
-            "note":           "No matching Delays tab found in the team's sheet.",
-        }
-    parsed, mapping = _parse_delays_tab_csv(csv_text)
-    return {
-        "team_id":                  team_id,
-        "client_name":              client,
-        "tab_name_tried":           candidates,
-        "tab_found":                matched_tab,
-        "row_count":                len(parsed),
-        "column_mapping_detected":  mapping,
-        "sample_rows":              parsed[:10],
+    """Diagnostic dump of a single client's Delays tab probe. Returns a
+    structured response even on failure — every exception is caught and
+    surfaced in the response body so the caller sees a 200 with an `error`
+    field instead of a 500."""
+    base: dict = {
+        "team_id":     team_id,
+        "client_name": client,
     }
+    try:
+        if not team_id or team_id not in TEAM_LETTER_MAP:
+            return {**base,
+                    "error":        "unknown_team",
+                    "error_detail": f"team_id {team_id!r} is not in TEAM_LETTER_MAP",
+                    "known_teams":  list(TEAM_LETTER_MAP.keys())}
+        if not client:
+            return {**base,
+                    "error":        "missing_client",
+                    "error_detail": "client query param required, e.g. ?client=Bookkeeping%20Doctor"}
+
+        cfg      = TEAM_LETTER_MAP.get(team_id) or {}
+        sheet_id = cfg.get("sheetId")
+        if not sheet_id:
+            return {**base,
+                    "error":        "no_sheet_id",
+                    "error_detail": f"team {team_id!r} has no sheetId configured "
+                                    f"(env SHEET_{team_id.upper()} unset?)"}
+        base["sheet_id"] = sheet_id
+
+        clients_cfg = TEAM_CLIENTS.get(team_id) or []
+        aliases: list[str] = []
+        client_match_found = False
+        for c in clients_cfg:
+            if (c.get("name") or "").lower() == client.lower():
+                aliases = list(c.get("tsMatch") or [])
+                client_match_found = True
+                break
+        base["client_aliases_used"]    = aliases
+        base["client_in_TEAM_CLIENTS"] = client_match_found
+
+        # Best-effort tab enumeration via htmlview. Failure is non-fatal.
+        try:
+            all_tabs = _list_team_sheet_tabs(sheet_id)
+        except Exception as e:
+            print(f"[debugDelaysTab] tab enumeration error: {e}")
+            all_tabs = []
+        base["all_tabs_in_sheet"] = all_tabs
+
+        # Probe candidates with the resolver. The resolver itself never raises,
+        # but wrap as belt-and-suspenders.
+        try:
+            matched_tab, csv_text, candidates = _resolve_delays_tab(team_id, client, aliases)
+        except Exception as e:
+            return {**base,
+                    "error":            "resolver_error",
+                    "error_detail":     f"{type(e).__name__}: {e}",
+                    "tab_names_tried":  []}
+        base["tab_names_tried"] = candidates
+
+        if not matched_tab or not csv_text:
+            return {**base,
+                    "error":     "tab_not_found",
+                    "error_detail": "No candidate tab returned a Delays-shaped "
+                                    "CSV (header row missing 'question' / "
+                                    "'query' / 'delay' / 'resolution' keywords).",
+                    "tab_found": None,
+                    "row_count": 0}
+        base["tab_found"] = matched_tab
+
+        # Read raw rows verbatim BEFORE structured parsing — so even if the
+        # parser blows up we can still see what the sheet returned.
+        raw_rows: list[list[str]] = []
+        try:
+            reader = csv.reader(io.StringIO(csv_text))
+            for i, row in enumerate(reader):
+                raw_rows.append([(c or "") for c in row])
+                if i >= 30:
+                    break
+        except Exception as e:
+            return {**base,
+                    "error":        "csv_read_error",
+                    "error_detail": f"{type(e).__name__}: {e}"}
+        base["raw_row_count"]    = len(raw_rows)
+        base["first_5_raw_rows"] = raw_rows[:5]
+
+        # Structured parsing — also wrapped, because we want to keep the raw
+        # data visible even on parser failure.
+        try:
+            parsed, mapping = _parse_delays_tab_csv(csv_text)
+        except Exception as e:
+            import traceback
+            return {**base,
+                    "error":           "parse_error",
+                    "error_detail":    f"{type(e).__name__}: {e}",
+                    "traceback_tail":  traceback.format_exc().splitlines()[-6:]}
+
+        return {**base,
+                "row_count":               len(parsed),
+                "column_mapping_detected": mapping,
+                "sample_rows":             parsed[:10]}
+    except Exception as e:
+        import traceback
+        return {**base,
+                "error":          "unhandled_exception",
+                "error_detail":   f"{type(e).__name__}: {e}",
+                "traceback_tail": traceback.format_exc().splitlines()[-6:]}
 
 
 @app.get("/api/debug/delays-tab")
 async def debug_delays_tab_endpoint(team_id: str, client: str):
     """Probes the team's main sheet for the '{client} Delays' tab and returns
-    the discovered schema + first 10 parsed rows. Use this to verify the tab
-    exists with the expected columns before the modal integration is trusted."""
+    the discovered schema + first 10 parsed rows. Defensive: always returns
+    JSON with a structured `error` field rather than a 500."""
     return await asyncio.to_thread(_debug_delays_tab, team_id, client)
 
 
