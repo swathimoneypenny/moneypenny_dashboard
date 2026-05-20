@@ -344,26 +344,39 @@ const COMMITMENT_CATEGORIES = [
   { key: "iOweUS",      label: "US",      color: "#F2895A" },
 ];
 
-function PendingCommitmentsChart({ sections, weekRange }) {
+function PendingCommitmentsChart({ sections, weekRange, commitmentCounts }) {
   const data = useMemo(() => {
     const c = sections?.commitments || {};
-    return COMMITMENT_CATEGORIES.map((cat) => ({
-      ...cat,
-      count: countItems(fieldText(c[cat.key])),
-    }));
-  }, [sections]);
-  const total = data.reduce((a, d) => a + d.count, 0);
+    return COMMITMENT_CATEGORIES.map((cat) => {
+      // Backend now computes commitmentCounts via _count_commitments — it
+      // tolerates single-sentence fields (no separators) that the simple
+      // newline split here would otherwise undercount. Fall back to the
+      // local counter if the backend payload didn't ship the field.
+      const backendCount = commitmentCounts && Number.isFinite(commitmentCounts[cat.key])
+        ? commitmentCounts[cat.key]
+        : countItems(fieldText(c[cat.key]));
+      return { ...cat, count: backendCount };
+    });
+  }, [sections, commitmentCounts]);
+  const total       = data.reduce((a, d) => a + d.count, 0);
+  // Empty-state check: only show "No open commitments" when nothing was
+  // counted AND every I-owe field is also literally empty / dash.
+  const hasAnyText = COMMITMENT_CATEGORIES.some((cat) => {
+    const t = fieldText((sections?.commitments || {})[cat.key]).trim();
+    return t && t !== "—";
+  });
+  const empty = total === 0 && !hasAnyText;
   return (
     <ChartCard
       title="Commitments for Next Week"
       subtitle={total ? `${total} open${weekRange ? ` · ${weekRange}` : ""}` : (weekRange || "")}
       caption={
-        total === 0
+        empty
           ? "What this means: No open commitments tracked this week."
           : "What this means: Open promises the TL made this week — to clients, staff, or US contacts. These need follow-up next week."
       }
     >
-      {total === 0 ? (
+      {empty ? (
         <div style={{ height: 160, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 11, fontStyle: "italic" }}>
           No open commitments this week.
         </div>
@@ -591,7 +604,7 @@ export default function WeeklyReviewSection({ teamId, embedded = false }) {
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
               <IssueBreakdownChart sections={sections} weekRange={data?.weekRange} />
               <ClientMentionsChart mentions={data?.clientMentions} weekRange={data?.weekRange} />
-              <PendingCommitmentsChart sections={sections} weekRange={data?.weekRange} />
+              <PendingCommitmentsChart sections={sections} weekRange={data?.weekRange} commitmentCounts={data?.commitmentCounts} />
             </div>
           )}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>

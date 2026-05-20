@@ -1402,6 +1402,37 @@ def _fetch_weekly_review_rows(team_id: str) -> tuple[list[dict], str | None]:
     return rows, matched_tab
 
 
+def _count_commitments(text: str) -> int:
+    """Counts distinct commitment items in a single 'I owe — …' field.
+
+    Leads sometimes write commitments as one long sentence with no
+    separators, so a naive newline-split underreports. We split on both
+    newlines and semicolons, ignore the placeholder dash, and fall back to
+    a count of 1 when there's substantive text but no separators to split on.
+    """
+    if not text or not text.strip():
+        return 0
+    items: list[str] = []
+    for chunk in text.replace(";", "\n").split("\n"):
+        chunk = chunk.strip()
+        if chunk and len(chunk) > 5 and chunk != "—":
+            items.append(chunk)
+    if not items and len(text.strip()) > 10:
+        return 1
+    return len(items)
+
+
+def _commitment_counts(commitments_section: dict | None) -> dict:
+    """Returns {iOweClients, iOweStaff, iOweUS} count per category."""
+    if not commitments_section:
+        return {"iOweClients": 0, "iOweStaff": 0, "iOweUS": 0}
+    return {
+        "iOweClients": _count_commitments(_section_field_text(commitments_section.get("iOweClients"))),
+        "iOweStaff":   _count_commitments(_section_field_text(commitments_section.get("iOweStaff"))),
+        "iOweUS":      _count_commitments(_section_field_text(commitments_section.get("iOweUS"))),
+    }
+
+
 def _compute_client_mentions(team_id: str, work_intake: dict | None) -> list[dict]:
     """Counts how often each configured client (name + tsMatch aliases) appears
     in the team's Work Intake free-text fields for the picked week. Returns
@@ -1569,14 +1600,16 @@ def get_weekly_review(team_id: str, week_offset: int = 0) -> dict:
     )
     payload = _build_review_payload(selected_row)
     work_intake = (payload.get("sections") or {}).get("workIntake") if payload.get("isFilled") else None
+    commitments_section = (payload.get("sections") or {}).get("commitments") if payload.get("isFilled") else None
     payload.update({
-        "teamId":         team_id,
-        "teamLabel":      cfg.get("label", team_id),
-        "leadName":       cfg.get("leadName", ""),
-        "matchedTab":     matched_tab,
-        "weekOffset":     week_offset,
-        "availableWeeks": available_weeks,
-        "clientMentions": _compute_client_mentions(team_id, work_intake),
+        "teamId":           team_id,
+        "teamLabel":        cfg.get("label", team_id),
+        "leadName":         cfg.get("leadName", ""),
+        "matchedTab":       matched_tab,
+        "weekOffset":       week_offset,
+        "availableWeeks":   available_weeks,
+        "clientMentions":   _compute_client_mentions(team_id, work_intake),
+        "commitmentCounts": _commitment_counts(commitments_section),
     })
     # AI action items come last because the generator reads fields off the
     # populated payload (teamId, weekRange, leadName).
