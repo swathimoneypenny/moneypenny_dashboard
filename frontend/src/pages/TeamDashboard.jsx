@@ -1152,9 +1152,24 @@ ${clients.map((o) => (
   // chart's hit-test against the nearest x-value, so any click anywhere in
   // the chart area resolves to the right day.
   const handleBarChartClick = useCallback((chartData) => {
-    console.log("[delay-chart] click event:", chartData);
+    console.log("[delay-chart] click event activePayload:", chartData?.activePayload);
     const p = chartData?.activePayload?.[0]?.payload;
-    if (p) setSelectedDay(p);
+    console.log("[delay-chart] day data:", p);
+    if (p) {
+      console.log("[delay-chart] setSelectedDay called with:", p);
+      setSelectedDay(p);
+    }
+  }, []);
+
+  // Bar-level click as a fallback. Recharts 3.x sometimes drops the
+  // BarChart.onClick activePayload on stacked-bar clicks, so we also wire
+  // onClick on each <Bar> — there `entry.payload` is the underlying row.
+  const handleBarSegmentClick = useCallback((entry) => {
+    const p = entry?.payload || entry;
+    if (p && (p.allRows || p.fullDate || p.day)) {
+      console.log("[delay-chart] bar-segment click payload:", p);
+      setSelectedDay(p);
+    }
   }, []);
 
   const displayLabel = data?.teamLabel ?? data?.team ?? teamName ?? teamId;
@@ -1523,10 +1538,10 @@ ${clients.map((o) => (
                     />
                     <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} />
                     <Tooltip content={<AgingTooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
-                    <Bar dataKey="Completed" stackId="a" fill="#3DC58B" />
-                    <Bar dataKey="Fresh"     stackId="a" fill="#F0B947" />
-                    <Bar dataKey="Aging"     stackId="a" fill="#F2895A" />
-                    <Bar dataKey="Overdue"   stackId="a" fill="#E25C5C" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="Completed" stackId="a" fill="#3DC58B" onClick={handleBarSegmentClick} cursor="pointer" />
+                    <Bar dataKey="Fresh"     stackId="a" fill="#F0B947" onClick={handleBarSegmentClick} cursor="pointer" />
+                    <Bar dataKey="Aging"     stackId="a" fill="#F2895A" onClick={handleBarSegmentClick} cursor="pointer" />
+                    <Bar dataKey="Overdue"   stackId="a" fill="#E25C5C" radius={[4, 4, 0, 0]} onClick={handleBarSegmentClick} cursor="pointer" />
                   </BarChart>
                 </ResponsiveContainer>
                 <div style={{ fontSize: 10, color: C.muted, marginTop: 6, textAlign: "center", letterSpacing: 0.3 }}>
