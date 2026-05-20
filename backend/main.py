@@ -4515,6 +4515,8 @@ async def admin_hour_endpoint(week_offset: int = 0):
     # Rough cross-team aggregates: count how many sections-with-any-text
     # appear in the patterns / commitments / quality buckets. Best-effort
     # signal; not a strict definition.
+    # NOTE: each section field is now {text, lines}, not a plain string, so
+    # we go through _section_field_text() instead of calling .strip() on it.
     issues_found    = 0
     sop_gaps        = 0
     commitments_ct  = 0
@@ -4522,14 +4524,14 @@ async def admin_hour_endpoint(week_offset: int = 0):
         review = t.get("review") or {}
         sections = review.get("sections") or {}
         patterns = sections.get("patterns") or {}
-        if (patterns.get("sopGap") or "").strip():
+        if _section_field_text(patterns.get("sopGap")):
             sop_gaps += 1
-        if (patterns.get("complaintTheme") or "").strip():
+        if _section_field_text(patterns.get("complaintTheme")):
             issues_found += 1
-        if (patterns.get("singlePointFailure") or "").strip():
+        if _section_field_text(patterns.get("singlePointFailure")):
             issues_found += 1
-        for field, txt in (sections.get("commitments") or {}).items():
-            if (txt or "").strip():
+        for _field, txt in (sections.get("commitments") or {}).items():
+            if _section_field_text(txt):
                 commitments_ct += 1
 
     # Use the first filled team's weekRange as the cross-team range label,

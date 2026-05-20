@@ -250,12 +250,17 @@ function ChartCard({ title, subtitle, caption, children }) {
 // signal. Falls back to "1 if any non-whitespace text exists" for prose blobs.
 function countItems(text) {
   if (!text) return 0;
-  const lines = String(text)
+  // Defensive: accept the new {text, lines} shape too — chart accessors
+  // already wrap with fieldText, but this keeps countItems safe to call
+  // with raw section field values from anywhere.
+  const s = typeof text === "string" ? text : fieldText(text);
+  if (!s) return 0;
+  const lines = s
     .split(/\r?\n/)
-    .map((s) => s.replace(/^[\s•\-*]+/, "").trim())
+    .map((line) => line.replace(/^[\s•\-*]+/, "").trim())
     .filter(Boolean);
   if (lines.length) return lines.length;
-  return text.trim() ? 1 : 0;
+  return s.trim() ? 1 : 0;
 }
 
 const ISSUE_CATEGORIES = [
