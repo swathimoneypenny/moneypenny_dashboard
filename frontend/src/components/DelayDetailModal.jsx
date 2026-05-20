@@ -153,6 +153,107 @@ function DelayRowCard({ row, isCompleted = false }) {
   );
 }
 
+// Card for a Delays-tab question row (separate from the EOD-tab batch row).
+// Uses the per-client "{client} Delays" tab fields exposed by backend
+// _parse_delays_tab_csv.
+function DelayQuestionCard({ q }) {
+  const isResolved = !!q.isResolved;
+  const ageColorOpen = (q.ageDays || 0) >= 8 ? "#E25C5C" : (q.ageDays || 0) >= 3 ? "#F2895A" : "#F0B947";
+  const meta = isResolved
+    ? { color: "#3DC58B", label: "Resolved" }
+    : { color: ageColorOpen, label: (q.status && q.status.trim()) || "Open" };
+  return (
+    <div
+      style={{
+        background: C.surface,
+        border: `1px solid ${C.border}`,
+        borderLeft: `3px solid ${meta.color}`,
+        borderRadius: 8,
+        padding: 14,
+        marginBottom: 10,
+        opacity: isResolved ? 0.85 : 1,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 11,
+            padding: "3px 10px",
+            borderRadius: 12,
+            background: `${meta.color}22`,
+            color: meta.color,
+            fontWeight: 600,
+            letterSpacing: 0.3,
+          }}
+        >
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: meta.color }} />
+          {meta.label}
+        </div>
+        <div style={{ fontSize: 12, color: isResolved ? "#3DC58B" : ageColorOpen, fontWeight: 600, fontFamily: "'DM Mono', monospace" }}>
+          {isResolved && q.resolvedInDays != null
+            ? `Resolved in ${q.resolvedInDays} day${q.resolvedInDays === 1 ? "" : "s"}`
+            : q.ageDays != null
+              ? `${q.ageDays} day${q.ageDays === 1 ? "" : "s"} old`
+              : ""}
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, display: "flex", gap: 14, flexWrap: "wrap" }}>
+        {q.clientName && <span>Client: <span style={{ color: C.sec, fontWeight: 600 }}>{q.clientName}</span></span>}
+        {q.datePosted && <span>Posted: {q.datePosted}</span>}
+        {q.postedTo && <span>To: {q.postedTo}</span>}
+        {q.fileReference && <span>Ref: {q.fileReference}</span>}
+      </div>
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ fontSize: 11, color: C.sec, marginBottom: 4, fontWeight: 700 }}>
+          ❓ Question:
+        </div>
+        {q.questionText ? (
+          <div style={{ fontSize: 13, lineHeight: 1.5, color: C.pri, whiteSpace: "pre-wrap" }}>
+            {q.questionText}
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: C.muted, fontStyle: "italic" }}>
+            Question text not recorded in Delays tab
+          </div>
+        )}
+      </div>
+      {isResolved && (
+        <div
+          style={{
+            marginTop: 10,
+            padding: "10px 12px",
+            background: "rgba(61,197,139,0.08)",
+            border: `1px solid rgba(61,197,139,0.25)`,
+            borderLeft: `3px solid #3DC58B`,
+            borderRadius: 6,
+          }}
+        >
+          <div style={{ fontSize: 11, color: "#3DC58B", marginBottom: 4, fontWeight: 700 }}>
+            ✓ Resolution / Answer:
+          </div>
+          {q.resolutionNotes ? (
+            <div style={{ fontSize: 12, lineHeight: 1.5, color: C.pri, whiteSpace: "pre-wrap" }}>
+              {q.resolutionNotes}
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: C.muted, fontStyle: "italic" }}>
+              Resolution notes not recorded
+            </div>
+          )}
+          {q.dateAnswered && (
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 6, fontFamily: "'DM Mono', monospace" }}>
+              Answered on: {q.dateAnswered}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function DelayDetailModal({ day, onClose }) {
   // ESC closes
   useEffect(() => {
@@ -177,6 +278,9 @@ export default function DelayDetailModal({ day, onClose }) {
   const allRows = Array.isArray(day.allRows) ? day.allRows : [];
   const openRows      = allRows.filter((r) => !r.isCompleted);
   const completedRows = allRows.filter((r) => r.isCompleted);
+  const delayQuestions = Array.isArray(day.delayQuestionsForDay) ? day.delayQuestionsForDay : [];
+  const openQuestions      = delayQuestions.filter((q) => !q.isResolved);
+  const resolvedQuestions  = delayQuestions.filter((q) =>  q.isResolved);
   const headerDate = day.fullDateLabel || day.date || "—";
   const total = day.total ?? allRows.length;
 
@@ -230,6 +334,9 @@ export default function DelayDetailModal({ day, onClose }) {
             </div>
             <div style={{ fontSize: 13, color: C.muted }}>
               {total} total · {openRows.length} open · {completedRows.length} completed
+              {delayQuestions.length > 0 && (
+                <> · {delayQuestions.length} question{delayQuestions.length === 1 ? "" : "s"} from Delays tab</>
+              )}
             </div>
           </div>
           <button
@@ -276,10 +383,36 @@ export default function DelayDetailModal({ day, onClose }) {
           </div>
         )}
 
+        {/* Delay questions from the per-client "{client} Delays" tab —
+            this is where the actual question + resolution text lives. */}
+        {openQuestions.length > 0 && (
+          <div style={{ marginBottom: 22, marginTop: openRows.length || completedRows.length ? 22 : 0 }}>
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, textTransform: "uppercase", letterSpacing: 1, fontWeight: 600 }}>
+              ❓ Open Questions from Delays Tab ({openQuestions.length})
+            </div>
+            {openQuestions.map((q, i) => (
+              <DelayQuestionCard key={`q-open-${i}`} q={q} />
+            ))}
+          </div>
+        )}
+        {resolvedQuestions.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, textTransform: "uppercase", letterSpacing: 1, fontWeight: 600 }}>
+              ✅ Resolved Questions from Delays Tab ({resolvedQuestions.length})
+            </div>
+            {resolvedQuestions.map((q, i) => (
+              <DelayQuestionCard key={`q-done-${i}`} q={q} />
+            ))}
+          </div>
+        )}
+
         {/* Empty state */}
-        {openRows.length === 0 && completedRows.length === 0 && (
+        {openRows.length === 0 && completedRows.length === 0 && delayQuestions.length === 0 && (
           <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>
             No delay details available for this day.
+            <div style={{ marginTop: 8, fontSize: 11, fontStyle: "italic" }}>
+              (Delay questions tab not found, or no rows for this date.)
+            </div>
           </div>
         )}
       </div>

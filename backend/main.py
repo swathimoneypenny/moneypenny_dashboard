@@ -1618,6 +1618,235 @@ def get_weekly_review(team_id: str, week_offset: int = 0) -> dict:
     return payload
 
 
+# ── Per-client "Delays" tab integration ────────────────────────────
+# Each team's main EOD sheet has one tab per configured client (e.g.
+# "Bookkeeping Doctor") with day-level batch totals. The actual delay
+# questions live in a SEPARATE tab named "{client} Delays" (e.g.
+# "Bookkeeping Doctor Delays") with one row per posted question and a
+# resolution-notes column for completed items.
+_DELAYS_TAB_MATCH_TTL = 3600  # 1 h
+# (team_id, client_name) -> {at, tab_name | None, csv_text | None, candidates}
+_delays_tab_match_cache: dict[tuple[str, str], dict] = {}
+# team_id -> {at, questions: list[dict]} — flattened across all configured clients
+_team_delay_questions_cache: dict[str, dict] = {}
+
+_DELAYS_HEADER_KEYWORDS = (
+    "question", "query", "delay", "resolution", "posted query", "raised",
+)
+
+
+def _csv_looks_like_delays_tab(csv_text: str) -> bool:
+    """Detect gviz's silent fallback to the first (main EOD) tab. The Delays
+    tab has 'question' / 'query' / 'delay' / 'resolution' in its header row;
+    the main EOD tab does not."""
+    if not csv_text:
+        return False
+    reader = csv.reader(io.StringIO(csv_text))
+    rows = list(reader)[:5]
+    blob = " ".join(c for r in rows for c in (r or [])).lower()
+    return any(kw in blob for kw in _DELAYS_HEADER_KEYWORDS)
+
+
+def _candidate_delays_tab_names(client_name: str, aliases: list[str] | None) -> list[str]:
+    """Generate candidate tab names for a client's Delays tab. Crosses each
+    name form with several suffix patterns leads have been seen to use."""
+    forms: list[str] = [client_name]
+    for a in aliases or []:
+        if a and a not in forms:
+            forms.append(a)
+    suffixes = (" Delays", " - Delays", " Delay Questions", " Delay Qns", " Delay Q&A")
+    out: list[str] = []
+    seen: set[str] = set()
+    for f in forms:
+        f = (f or "").strip()
+        if not f:
+            continue
+        for s in suffixes:
+            name = f"{f}{s}"
+            if name.lower() not in seen:
+                seen.add(name.lower())
+                out.append(name)
+    return out
+
+
+def _resolve_delays_tab(team_id: str, client_name: str, aliases: list[str] | None
+                       ) -> tuple[str | None, str | None, list[str]]:
+    """Probe gviz for the client's Delays tab on the team's main sheet.
+    Returns (matched_tab_name, csv_text, candidates_tried). Each positive
+    match is cached for 1 h; negative matches are cached too (with shorter
+    effective TTL via the upstream team-response cache)."""
+    key = (team_id, (client_name or "").strip())
+    cached = _delays_tab_match_cache.get(key)
+    if cached and (datetime.now() - cached["at"]).total_seconds() < _DELAYS_TAB_MATCH_TTL:
+        return cached.get("tab_name"), cached.get("csv_text"), cached.get("candidates", [])
+
+    cfg = TEAM_LETTER_MAP.get(team_id) or {}
+    sheet_id = cfg.get("sheetId")
+    if not sheet_id or not client_name:
+        return None, None, []
+
+    candidates = _candidate_delays_tab_names(client_name, aliases)
+    matched_tab: str | None = None
+    matched_csv: str | None = None
+    for cand in candidates:
+        try:
+            csv_text, _url = _fetch_eod_csv(sheet_id, tab=cand)
+        except EodSheetError as e:
+            print(f"[delaysTab] team={team_id} client={client_name!r} cand={cand!r} skip ({e.reason})")
+            continue
+        except Exception as e:
+            print(f"[delaysTab] team={team_id} client={client_name!r} cand={cand!r} error: {e}")
+            continue
+        if csv_text and _csv_looks_like_delays_tab(csv_text):
+            matched_tab = cand
+            matched_csv = csv_text
+            break
+        # else: gviz silently fell back to the main tab — keep probing
+
+    _delays_tab_match_cache[key] = {
+        "at":         datetime.now(),
+        "tab_name":   matched_tab,
+        "csv_text":   matched_csv,
+        "candidates": candidates,
+    }
+    if matched_tab:
+        print(f"[delaysTab] team={team_id} client={client_name!r} matched cand={matched_tab!r}")
+    else:
+        print(f"[delaysTab] team={team_id} client={client_name!r} no tab matched (tried {len(candidates)})")
+    return matched_tab, matched_csv, candidates
+
+
+def _parse_delays_tab_csv(csv_text: str) -> tuple[list[dict], dict]:
+    """Parse a Delays tab CSV into structured rows. Column positions are
+    header-driven (we don't assume fixed A-G layout). Returns (rows, mapping)
+    where mapping records the column-index → semantic-field map we used."""
+    if not csv_text:
+        return [], {}
+    reader = csv.reader(io.StringIO(csv_text))
+    raw = list(reader)
+    if not raw:
+        return [], {}
+
+    # Find header — first row in the top 5 that has "date" + ("question" or "query")
+    header_idx = -1
+    for i, row in enumerate(raw[:5]):
+        if not row:
+            continue
+        rlow = " ".join((c or "").lower() for c in row)
+        if "date" in rlow and ("question" in rlow or "query" in rlow or "delay" in rlow):
+            header_idx = i
+            break
+    if header_idx == -1:
+        # Looser fallback: any row containing 'question' / 'query'
+        for i, row in enumerate(raw[:5]):
+            rlow = " ".join((c or "").lower() for c in row)
+            if "question" in rlow or "query" in rlow:
+                header_idx = i
+                break
+    if header_idx == -1:
+        return [], {}
+
+    headers = [(c or "").strip() for c in raw[header_idx]]
+    mapping: dict[str, int] = {}
+    for idx, h in enumerate(headers):
+        hl = h.lower()
+        if "datePosted" not in mapping and (
+            "date posted" in hl or "date raised" in hl or "posted on" in hl
+            or hl == "date" or "raised date" in hl
+        ):
+            mapping["datePosted"] = idx
+        if "questionText" not in mapping and ("question" in hl or "query" in hl or hl.startswith("delay")):
+            mapping["questionText"] = idx
+        if "fileReference" not in mapping and ("file" in hl or "account" in hl or "ref" in hl):
+            mapping["fileReference"] = idx
+        if "postedTo" not in mapping and ("posted to" in hl or "raised to" in hl or "addressee" in hl or "assigned" in hl):
+            mapping["postedTo"] = idx
+        if "status" not in mapping and "status" in hl:
+            mapping["status"] = idx
+        if "dateAnswered" not in mapping and ("date answered" in hl or "answered on" in hl or "resolved on" in hl or "date resolved" in hl):
+            mapping["dateAnswered"] = idx
+        if "resolutionNotes" not in mapping and ("resolution" in hl or "answer" in hl or "notes" in hl):
+            mapping["resolutionNotes"] = idx
+
+    def _col(row: list[str], key: str) -> str:
+        idx = mapping.get(key)
+        if idx is None or idx >= len(row):
+            return ""
+        return (row[idx] or "").strip()
+
+    today = datetime.now()
+    out: list[dict] = []
+    for row in raw[header_idx + 1:]:
+        if not row or not any((c or "").strip() for c in row):
+            continue
+        date_posted = _col(row, "datePosted")
+        question    = _col(row, "questionText")
+        if not date_posted and not question:
+            continue  # skip blank rows
+        normalized_posted = _normalize_eod_date(date_posted) if date_posted else ""
+        date_answered = _col(row, "dateAnswered")
+        normalized_answered = _normalize_eod_date(date_answered) if date_answered else ""
+
+        # Days math (best effort)
+        age_days = None
+        resolved_in_days = None
+        try:
+            posted_dt = _parse_eod_date(normalized_posted) if normalized_posted else None
+            if posted_dt:
+                age_days = max(0, (today - posted_dt).days)
+                if normalized_answered:
+                    answered_dt = _parse_eod_date(normalized_answered)
+                    if answered_dt:
+                        resolved_in_days = max(0, (answered_dt - posted_dt).days)
+        except Exception:
+            pass
+
+        status_raw = _col(row, "status")
+        is_resolved = bool(normalized_answered) or "resolv" in status_raw.lower() or "closed" in status_raw.lower() or "complete" in status_raw.lower()
+
+        out.append({
+            "datePosted":      normalized_posted or date_posted,
+            "questionText":    question,
+            "fileReference":   _col(row, "fileReference"),
+            "postedTo":        _col(row, "postedTo"),
+            "status":          status_raw,
+            "dateAnswered":    normalized_answered or None,
+            "resolutionNotes": _col(row, "resolutionNotes"),
+            "ageDays":         age_days,
+            "resolvedInDays":  resolved_in_days,
+            "isResolved":      is_resolved,
+        })
+    return out, mapping
+
+
+def _get_team_delay_questions(team_id: str) -> list[dict]:
+    """Returns a flat list of delay questions across every configured client
+    for the team. Each entry carries a `clientName` field so the modal can
+    show provenance. Cached per team for 1 h."""
+    cached = _team_delay_questions_cache.get(team_id)
+    if cached and (datetime.now() - cached["at"]).total_seconds() < _DELAYS_TAB_MATCH_TTL:
+        return cached["questions"]
+
+    clients = TEAM_CLIENTS.get(team_id) or []
+    out: list[dict] = []
+    for c in clients:
+        name    = c.get("name") or ""
+        aliases = list(c.get("tsMatch") or [])
+        if not name:
+            continue
+        matched_tab, csv_text, _candidates = _resolve_delays_tab(team_id, name, aliases)
+        if not matched_tab or not csv_text:
+            continue
+        rows, _mapping = _parse_delays_tab_csv(csv_text)
+        for r in rows:
+            r["clientName"] = name
+            r["tabUsed"]    = matched_tab
+            out.append(r)
+    _team_delay_questions_cache[team_id] = {"at": datetime.now(), "questions": out}
+    print(f"[delaysTab] team={team_id} aggregated {len(out)} delay questions across clients")
+    return out
+
+
 def compute_delays_aging(eod_rows: list[dict], period_start: str, period_end: str) -> dict:
     """Build aging-report aggregates from EOD rows for the given period.
 
@@ -2732,6 +2961,25 @@ async def _team_response(team_id: str, period: str):
     # EOD values came from the parallel asyncio.gather above; just count delays.
     total_delays = sum(int(e.get("delays") or 0) for e in eod_rows)
     delays_aging = compute_delays_aging(eod_rows, start, end)
+
+    # Enrich each delaysByDay[i] with the matching delay-question rows from
+    # the per-client "{Client} Delays" tab. We attach the questions to the
+    # day they were datePosted on. Skipped for the admin-hour fan-out
+    # (different code path) — only the team endpoint pays the probe cost.
+    try:
+        questions = await asyncio.to_thread(_get_team_delay_questions, team_id)
+    except Exception as e:
+        print(f"[delaysTab] team={team_id} aggregator failed: {e}")
+        questions = []
+    if questions:
+        by_date: dict[str, list[dict]] = {}
+        for q in questions:
+            dp = (q.get("datePosted") or "")[:10]
+            if dp:
+                by_date.setdefault(dp, []).append(q)
+        for day in delays_aging.get("delaysByDay") or []:
+            d_key = (day.get("date") or "")[:10]
+            day["delayQuestionsForDay"] = by_date.get(d_key, [])
 
     # ── Monthly trend from timesheet rows (team-matched) ──────────
     # Always populate this so Chart 1 has data even when no EOD sheet is configured.
@@ -3936,6 +4184,51 @@ async def debug_weekly_review_tabs_endpoint():
     return await asyncio.to_thread(_debug_weekly_review_tabs)
 
 
+def _debug_delays_tab(team_id: str, client: str) -> dict:
+    """Diagnostic dump of a single client's Delays tab probe. Shows the
+    candidates we tried, which one matched, the discovered column mapping,
+    and a sample of parsed rows so we can verify the schema before relying
+    on the integration in the modal."""
+    if team_id not in TEAM_LETTER_MAP:
+        return {"error": f"unknown team_id {team_id}"}
+    if not client:
+        return {"error": "missing client query param"}
+    clients_cfg = TEAM_CLIENTS.get(team_id) or []
+    aliases: list[str] = []
+    for c in clients_cfg:
+        if (c.get("name") or "").lower() == client.lower():
+            aliases = list(c.get("tsMatch") or [])
+            break
+    matched_tab, csv_text, candidates = _resolve_delays_tab(team_id, client, aliases)
+    if not matched_tab:
+        return {
+            "team_id":        team_id,
+            "client_name":    client,
+            "tab_name_tried": candidates,
+            "tab_found":      None,
+            "row_count":      0,
+            "note":           "No matching Delays tab found in the team's sheet.",
+        }
+    parsed, mapping = _parse_delays_tab_csv(csv_text)
+    return {
+        "team_id":                  team_id,
+        "client_name":              client,
+        "tab_name_tried":           candidates,
+        "tab_found":                matched_tab,
+        "row_count":                len(parsed),
+        "column_mapping_detected":  mapping,
+        "sample_rows":              parsed[:10],
+    }
+
+
+@app.get("/api/debug/delays-tab")
+async def debug_delays_tab_endpoint(team_id: str, client: str):
+    """Probes the team's main sheet for the '{client} Delays' tab and returns
+    the discovered schema + first 10 parsed rows. Use this to verify the tab
+    exists with the expected columns before the modal integration is trusted."""
+    return await asyncio.to_thread(_debug_delays_tab, team_id, client)
+
+
 @app.get("/api/debug/weekly-review")
 async def debug_weekly_review_endpoint(team_id: str):
     """Diagnostic dump of the weekly-review sheet for a given team. Shows every
@@ -4613,6 +4906,8 @@ async def clear_cache():
     _weekly_tab_match_cache.clear()
     _weekly_review_tab_resolved.clear()
     _action_items_cache.clear()
+    _delays_tab_match_cache.clear()
+    _team_delay_questions_cache.clear()
     return {"ok": True, "status": "all caches cleared", "time": datetime.now().isoformat()}
 
 
