@@ -447,7 +447,7 @@ function StaffTable({ staff }) {
 }
 
 // ── Main ─────────────────────────────────────────────────────────
-export default function ClientDashboard({ clientName, onBack, onContextUpdate }) {
+export default function ClientDashboard({ clientName, onBack, onContextUpdate, onOpenDepartureAnalysis }) {
   const [period, setPeriod] = useState("monthly");
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -705,6 +705,30 @@ ${Object.entries(staffObj).map(([name, v]) => {
             <div style={{ fontSize: 12, color: C.sec }}>Client Performance Dashboard</div>
           </div>
         </div>
+
+        {/* Departure analysis entry */}
+        {onOpenDepartureAnalysis && (
+          <button
+            onClick={() => onOpenDepartureAnalysis(
+              (clientName || "").toLowerCase().replace(/\s+/g, "-")
+            )}
+            style={{
+              background: "linear-gradient(135deg, rgba(124,58,237,0.18), rgba(59,130,246,0.12))",
+              border: "1px solid #7C3AED55",
+              color: "#A78BFA",
+              borderRadius: 8,
+              padding: "7px 14px",
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: 600,
+              fontFamily: "'DM Sans', sans-serif",
+              letterSpacing: 0.3,
+            }}
+            title="AI root-cause analysis using last 6 months of data"
+          >
+            📉 View Departure Analysis
+          </button>
+        )}
 
         {/* Period buttons */}
         <div style={{ display: "flex", gap: 4, background: C.card, borderRadius: 8, padding: 3, border: `1px solid ${C.border}` }}>

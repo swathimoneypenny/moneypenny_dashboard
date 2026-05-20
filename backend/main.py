@@ -1100,6 +1100,9 @@ _weekly_review_cache: dict[tuple[str, int], dict] = {}
 _weekly_tab_match_cache: dict[str, dict] = {}
 # AI action-items: { (team_id, weekRange): {"at": datetime, "items": list[str]} }
 _action_items_cache: dict[tuple[str, str], dict] = {}
+# Departure analysis (Groq) per client_slug, 1h TTL
+_DEPARTURE_ANALYSIS_TTL = 3600
+_departure_analysis_cache: dict[str, dict] = {}
 # Kept for backward compat with /clear-cache callers.
 _weekly_review_tab_resolved: dict[str, str] = {}
 
@@ -1589,6 +1592,305 @@ def _get_action_items(payload: dict) -> list[str]:
     items = _generate_action_items(payload)
     _action_items_cache[key] = {"at": datetime.now(), "items": items}
     return items
+
+
+# ── Client departure analysis (AI-driven root-cause detector) ──────────
+# Aggregates ~6 months of operational data for a client (timesheet hours,
+# EOD entries, weekly-review mentions, delay history) and asks Groq to
+# identify why the relationship soured. Designed to be reusable across
+# clients — the URL slug picks the client.
+
+def _client_slug_to_canonical(slug: str) -> str:
+    """'bookkeeping-doctor' → 'bookkeeping doctor'."""
+    return (slug or "").replace("-", " ").replace("_", " ").strip().lower()
+
+
+def _resolve_client_slug(slug: str) -> tuple[str | None, dict | None]:
+    """Find which team a client_slug belongs to. Returns (team_id, client_cfg)
+    or (None, None) if no match. Matches against canonical name AND every
+    tsMatch alias, case- and whitespace-insensitive."""
+    target  = _client_slug_to_canonical(slug)
+    target_squashed = target.replace(" ", "")
+    if not target:
+        return None, None
+    for tid, clients in TEAM_CLIENTS.items():
+        for c in clients:
+            name = (c.get("name") or "").lower().strip()
+            if name == target or name.replace(" ", "") == target_squashed:
+                return tid, c
+            for a in (c.get("tsMatch") or []):
+                al = (a or "").lower().strip()
+                if al and (al == target or al.replace(" ", "") == target_squashed):
+                    return tid, c
+    return None, None
+
+
+def _build_client_departure_data(team_id: str, client_cfg: dict) -> dict:
+    """Aggregate ~6 months of operational data for the client. Returns a
+    compact, LLM-safe summary (raw rows are NOT passed to Groq — only counts,
+    snippets, and per-month rollups)."""
+    client_name = (client_cfg.get("name") or "").strip()
+    aliases     = [client_name.lower()] + [(a or "").lower() for a in (client_cfg.get("tsMatch") or []) if a]
+    aliases     = [a for a in aliases if a]
+
+    today      = datetime.now()
+    start_date = (today - timedelta(days=185)).replace(day=1)
+    start_str  = start_date.strftime("%Y-%m-%d")
+    end_str    = today.strftime("%Y-%m-%d")
+
+    # ── Timesheet hours per month + preparer breakdown ──
+    monthly_hours: dict[str, dict] = {}
+    preparer_hours: dict[str, float] = {}
+    try:
+        ts_rows = get_cached_rows(start_str, end_str)
+    except Exception as e:
+        print(f"[departure] timesheet fetch failed: {e}")
+        ts_rows = []
+    for r in ts_rows:
+        cust = (r.get("customer") or "").lower()
+        if not any(a in cust for a in aliases if a):
+            continue
+        d = (r.get("date") or "")[:10]
+        if len(d) < 7:
+            continue
+        ym = d[:7]
+        try:
+            h = float(r.get("hours") or 0)
+        except Exception:
+            h = 0
+        is_billable = bool(r.get("billable"))
+        bucket = monthly_hours.setdefault(ym, {"billable": 0.0, "nonBillable": 0.0, "total": 0.0, "entries": 0})
+        bucket["total"]   += h
+        bucket["entries"] += 1
+        if is_billable:
+            bucket["billable"]    += h
+        else:
+            bucket["nonBillable"] += h
+        nm = (r.get("name") or "").strip()
+        if nm:
+            preparer_hours[nm] = preparer_hours.get(nm, 0) + h
+
+    # Round + sort monthly
+    monthly_summary = []
+    for ym in sorted(monthly_hours.keys()):
+        b = monthly_hours[ym]
+        monthly_summary.append({
+            "month":       ym,
+            "billable":    round(b["billable"], 1),
+            "nonBillable": round(b["nonBillable"], 1),
+            "total":       round(b["total"], 1),
+            "entries":     b["entries"],
+            "utilPct":     round(b["billable"] * 100 / b["total"], 1) if b["total"] else 0,
+        })
+    top_preparers = sorted(preparer_hours.items(), key=lambda x: -x[1])[:8]
+    top_preparers = [{"name": n, "hours": round(h, 1)} for n, h in top_preparers]
+
+    # ── EOD entries: monthly status counts + last 20 status notes ──
+    eod_monthly: dict[str, dict] = {}
+    recent_notes: list[dict]      = []
+    try:
+        eod_rows, eod_tab = _resolve_eod_rows_for_client(team_id, client_name)
+    except Exception as e:
+        print(f"[departure] EOD fetch failed: {e}")
+        eod_rows, eod_tab = [], "error"
+    for er in eod_rows:
+        d = _parse_eod_date(str(er.get("date") or ""))
+        if not d:
+            continue
+        if d < start_date:
+            continue
+        ym = d.strftime("%Y-%m")
+        sn = (er.get("statusNorm") or "").lower()
+        bucket = eod_monthly.setdefault(ym, {"completed": 0, "awaiting": 0, "inProgress": 0, "other": 0, "total": 0})
+        bucket["total"] += 1
+        if sn == "completed":
+            bucket["completed"] += 1
+        elif sn == "awaiting_response":
+            bucket["awaiting"] += 1
+        elif sn == "in_progress":
+            bucket["inProgress"] += 1
+        else:
+            bucket["other"] += 1
+        notes_text = (er.get("notes") or "").strip()
+        query_text = (er.get("queryText") or "").strip()
+        if notes_text or query_text:
+            recent_notes.append({
+                "date":   d.strftime("%Y-%m-%d"),
+                "status": sn or (er.get("eodStatus") or ""),
+                "query":  query_text[:200],
+                "notes":  notes_text[:200],
+            })
+    recent_notes = sorted(recent_notes, key=lambda x: x["date"], reverse=True)[:25]
+    eod_summary = [
+        {"month": ym, **eod_monthly[ym]} for ym in sorted(eod_monthly.keys())
+    ]
+
+    # ── Weekly Review mentions ──
+    weekly_mentions: list[dict] = []
+    try:
+        wr_rows, _wr_tab = _fetch_weekly_review_rows(team_id)
+    except Exception as e:
+        print(f"[departure] weekly-review fetch failed: {e}")
+        wr_rows = []
+    for r in wr_rows:
+        snippets: list[str] = []
+        for k, v in r.items():
+            if not isinstance(v, str) or not v.strip():
+                continue
+            v_low = v.lower()
+            if any(a in v_low for a in aliases):
+                snippets.append(f"{k}: {v[:240]}")
+        if snippets:
+            weekly_mentions.append({"weekRange": r.get("weekRange"), "snippets": snippets[:6]})
+    weekly_mentions = weekly_mentions[:12]
+
+    # ── Delay-tab questions for this client ──
+    delay_questions: list[dict] = []
+    try:
+        all_delays = _get_team_delay_questions(team_id)
+        for q in all_delays:
+            if (q.get("clientName") or "").lower() == client_name.lower():
+                delay_questions.append({
+                    "datePosted":      q.get("datePosted"),
+                    "questionText":    (q.get("questionText") or "")[:240],
+                    "status":          q.get("status"),
+                    "dateAnswered":    q.get("dateAnswered"),
+                    "resolutionNotes": (q.get("resolutionNotes") or "")[:240],
+                    "ageDays":         q.get("ageDays"),
+                    "resolvedInDays":  q.get("resolvedInDays"),
+                    "isResolved":      q.get("isResolved"),
+                })
+    except Exception as e:
+        print(f"[departure] delay-tab fetch failed: {e}")
+
+    return {
+        "clientName":     client_name,
+        "teamId":         team_id,
+        "teamLabel":      TEAM_LETTER_MAP.get(team_id, {}).get("label", team_id),
+        "rangeStart":     start_str,
+        "rangeEnd":       end_str,
+        "monthlyHours":   monthly_summary,
+        "topPreparers":   top_preparers,
+        "eodTabUsed":     eod_tab,
+        "eodMonthly":     eod_summary,
+        "recentNotes":    recent_notes,
+        "weeklyMentions": weekly_mentions,
+        "delayHistory":   delay_questions[:30],
+    }
+
+
+def _generate_departure_analysis(data: dict) -> dict:
+    """Call Groq with the aggregated client data and parse the response into
+    the structured JSON shape expected by the frontend."""
+    client_name = data.get("clientName") or "this client"
+    summary_payload = json.dumps({
+        "clientName":     client_name,
+        "teamLabel":      data.get("teamLabel"),
+        "range":          f"{data.get('rangeStart')} → {data.get('rangeEnd')}",
+        "monthlyHours":   data.get("monthlyHours"),
+        "topPreparers":   data.get("topPreparers"),
+        "eodMonthly":     data.get("eodMonthly"),
+        "recentNotes":    data.get("recentNotes")[:15],
+        "weeklyMentions": data.get("weeklyMentions"),
+        "delayHistory":   data.get("delayHistory")[:20],
+    }, default=str)[:7500]  # cap context
+
+    system = (
+        "You analyze operational data for a back-office bookkeeping team and "
+        "identify why a client is leaving. Output ONLY valid JSON in the "
+        "exact shape requested — no markdown, no code fences, no commentary."
+    )
+    user = (
+        f"Client '{client_name}' is leaving MoneyPenny LLC in July 2026. "
+        "Analyze the last ~6 months of data and identify root causes, missed "
+        "warning signals, recovery options, and prevention rules.\n\n"
+        f"DATA:\n{summary_payload}\n\n"
+        'Return JSON with this exact shape:\n'
+        '{\n'
+        '  "rootCauses": [{"rank": 1, "cause": "...", "evidence": "...", '
+        '"severity": "high|medium|low"}],\n'
+        '  "earlyWarnings": [{"month": "YYYY-MM", "signal": "...", "missed": true}],\n'
+        '  "recovery": {"possible": "yes|no|maybe", "confidence": 0-100, "actions": ["..."]},\n'
+        '  "preventionRules": [{"trigger": "...", "threshold": "...", "intervention": "..."}],\n'
+        '  "summaryForPenny": "2-3 sentence executive summary"\n'
+        '}\n'
+        'Cite specific months, numbers, and quotes from the data as evidence. '
+        '3-5 root causes max, ranked by severity. Return JSON now.'
+    )
+
+    try:
+        resp = groq_client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user",   "content": user},
+            ],
+            max_tokens=2000,
+            temperature=0.3,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        print(f"[departure] Groq error: {e}")
+        return {"error": "groq_error", "error_detail": str(e)}
+
+    # Strip optional ```json fence
+    if content.startswith("```"):
+        inner = content.strip("`").strip()
+        if inner.lower().startswith("json"):
+            inner = inner[4:].lstrip()
+        content = inner
+
+    try:
+        parsed = json.loads(content)
+        if not isinstance(parsed, dict):
+            raise ValueError("expected JSON object at top level")
+    except Exception as e:
+        print(f"[departure] JSON parse error: {e} content_head={content[:200]!r}")
+        return {"error": "parse_error", "error_detail": str(e), "raw_head": content[:400]}
+
+    return parsed
+
+
+def analyze_client_departure(client_slug: str) -> dict:
+    """Orchestrates the departure-analysis pipeline. Cached per slug for 1 h."""
+    base = {"client_slug": client_slug}
+    cached = _departure_analysis_cache.get(client_slug)
+    if cached and (datetime.now() - cached["at"]).total_seconds() < _DEPARTURE_ANALYSIS_TTL:
+        return cached["data"]
+
+    team_id, client_cfg = _resolve_client_slug(client_slug)
+    if not team_id or not client_cfg:
+        return {**base, "error": "unknown_client",
+                "error_detail": f"slug {client_slug!r} did not match any client in TEAM_CLIENTS"}
+
+    try:
+        data = _build_client_departure_data(team_id, client_cfg)
+    except Exception as e:
+        import traceback
+        return {**base, "error": "data_aggregation_failed",
+                "error_detail": f"{type(e).__name__}: {e}",
+                "traceback_tail": traceback.format_exc().splitlines()[-6:]}
+
+    analysis = _generate_departure_analysis(data)
+
+    out = {
+        "clientSlug":  client_slug,
+        "clientName":  data.get("clientName"),
+        "teamId":      data.get("teamId"),
+        "teamLabel":   data.get("teamLabel"),
+        "rangeStart":  data.get("rangeStart"),
+        "rangeEnd":    data.get("rangeEnd"),
+        "monthlyHours":   data.get("monthlyHours"),
+        "topPreparers":   data.get("topPreparers"),
+        "eodMonthly":     data.get("eodMonthly"),
+        "weeklyMentions": data.get("weeklyMentions"),
+        "delayHistory":   data.get("delayHistory"),
+        "recentNotes":    data.get("recentNotes"),
+        "analysis":       analysis,
+        "generatedAt":    datetime.now().isoformat(),
+    }
+    _departure_analysis_cache[client_slug] = {"at": datetime.now(), "data": out}
+    return out
 
 
 def get_weekly_review(team_id: str, week_offset: int = 0) -> dict:
@@ -5124,6 +5426,27 @@ async def admin_hour_endpoint(week_offset: int = 0):
     }
 
 
+@app.get("/api/analysis/client-departure/{client_slug}")
+async def client_departure_endpoint(client_slug: str):
+    """AI-driven root-cause analysis for a departing client. Aggregates ~6
+    months of timesheet hours, EOD entries, weekly-review mentions, and
+    delay history, then asks Groq to identify root causes, missed warnings,
+    recovery options, and prevention rules. Cached 1 h per slug.
+
+    Always returns 200; structured `error` field on any failure path."""
+    try:
+        return await asyncio.to_thread(analyze_client_departure, client_slug)
+    except Exception as e:
+        import traceback
+        return JSONResponse({
+            "client_slug":    client_slug,
+            "error":          "outer_unhandled",
+            "error_class":    type(e).__name__,
+            "error_message":  str(e),
+            "traceback_tail": traceback.format_exc().splitlines()[-6:],
+        }, status_code=200)
+
+
 @app.get("/api/clear-cache")
 @app.post("/api/clear-cache")
 async def clear_cache():
@@ -5138,6 +5461,7 @@ async def clear_cache():
     _action_items_cache.clear()
     _delays_tab_match_cache.clear()
     _team_delay_questions_cache.clear()
+    _departure_analysis_cache.clear()
     return {"ok": True, "status": "all caches cleared", "time": datetime.now().isoformat()}
 
 

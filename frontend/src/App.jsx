@@ -4,6 +4,7 @@ import TeamDashboard from "./pages/TeamDashboard";
 import ClientDashboard from "./pages/ClientDashboard";
 import EmployeeProfile from "./pages/EmployeeProfile";
 import AdminHourPage from "./pages/AdminHourPage";
+import ClientDepartureAnalysisPage from "./pages/ClientDepartureAnalysisPage";
 import LoginPage from "./pages/LoginPage";
 import Chatbot from "./components/Chatbot";
 import { API_BASE, getToken, clearToken } from "./config";
@@ -52,10 +53,11 @@ export default function App() {
   }
 
   const basicContext = (() => {
-    if (view.page === "client")     return `Viewing client: ${view.clientName}`;
-    if (view.page === "employee")   return `Viewing employee: ${view.employeeName} (${view.teamName})`;
-    if (view.page === "team")       return `Viewing team: ${view.teamName}`;
-    if (view.page === "admin_hour") return "Viewing Admin Hour cross-team overview";
+    if (view.page === "client")              return `Viewing client: ${view.clientName}`;
+    if (view.page === "employee")            return `Viewing employee: ${view.employeeName} (${view.teamName})`;
+    if (view.page === "team")                return `Viewing team: ${view.teamName}`;
+    if (view.page === "admin_hour")          return "Viewing Admin Hour cross-team overview";
+    if (view.page === "departure_analysis")  return `Viewing departure analysis: ${view.clientSlug}`;
     return "Viewing MoneyPenny Dashboard home screen";
   })();
 
@@ -128,6 +130,26 @@ export default function App() {
           clientName={view.clientName}
           onBack={() => { setRichContext(""); setView({ page: "home" }); }}
           onContextUpdate={setRichContext}
+          onOpenDepartureAnalysis={(slug) => setView({ page: "departure_analysis", clientSlug: slug, fromClientName: view.clientName })}
+        />
+        <Chatbot context={context} viewHint={viewHint} />
+      </>
+    );
+  }
+
+  if (view.page === "departure_analysis") {
+    return (
+      <>
+        <ClientDepartureAnalysisPage
+          clientSlug={view.clientSlug}
+          onBack={() => {
+            setRichContext("");
+            if (view.fromClientName) {
+              setView({ page: "client", clientName: view.fromClientName });
+            } else {
+              setView({ page: "home" });
+            }
+          }}
         />
         <Chatbot context={context} viewHint={viewHint} />
       </>
