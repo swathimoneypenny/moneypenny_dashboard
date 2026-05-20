@@ -103,7 +103,7 @@ function ReviewField({ label, value }) {
 }
 
 // Wrapper used by the 3 charts in the row above the section cards
-function ChartCard({ title, subtitle, children }) {
+function ChartCard({ title, subtitle, caption, children }) {
   return (
     <div
       style={{
@@ -117,7 +117,7 @@ function ChartCard({ title, subtitle, children }) {
         flexDirection: "column",
       }}
     >
-      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: caption ? 4 : 10 }}>
         <span style={{ fontSize: 11, fontWeight: 700, color: C.sec, textTransform: "uppercase", letterSpacing: 1 }}>
           {title}
         </span>
@@ -127,6 +127,11 @@ function ChartCard({ title, subtitle, children }) {
           </span>
         )}
       </div>
+      {caption && (
+        <div style={{ fontSize: 12, color: C.muted, fontStyle: "italic", marginBottom: 10, lineHeight: 1.4 }}>
+          {caption}
+        </div>
+      )}
       {children}
     </div>
   );
@@ -173,6 +178,7 @@ function IssueBreakdownChart({ sections, weekRange }) {
     <ChartCard
       title="Issue Type Breakdown"
       subtitle={total ? `${total} this week${weekRange ? ` · ${weekRange}` : ""}` : (weekRange || "")}
+      caption="What this means: Shows the types of issues the team faced this week. Bigger slice = more issues of that type."
     >
       {total === 0 ? (
         <div style={{ height: 180, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 11, fontStyle: "italic" }}>
@@ -238,6 +244,11 @@ function PendingCommitmentsChart({ sections, weekRange }) {
     <ChartCard
       title="Commitments for Next Week"
       subtitle={total ? `${total} open${weekRange ? ` · ${weekRange}` : ""}` : (weekRange || "")}
+      caption={
+        total === 0
+          ? "What this means: No open commitments tracked this week."
+          : "What this means: Open promises the TL made this week — to clients, staff, or US contacts. These need follow-up next week."
+      }
     >
       {total === 0 ? (
         <div style={{ height: 160, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 11, fontStyle: "italic" }}>
@@ -286,6 +297,7 @@ function ClientMentionsChart({ mentions, weekRange }) {
     <ChartCard
       title="Issues Mentioned Per Client"
       subtitle={weekRange ? `Week of ${weekRange}` : ""}
+      caption="What this means: How often each client appeared in this week's review. Higher bar = client needed more TL attention."
     >
       {data.length === 0 ? (
         <div style={{ height: 160, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 11, fontStyle: "italic" }}>
