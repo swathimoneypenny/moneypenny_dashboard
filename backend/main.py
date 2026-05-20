@@ -89,6 +89,26 @@ async def auth_verify(request: Request):
     payload = verify_token(token or "") if token else None
     return {"valid": bool(payload), "exp": payload.get("exp") if payload else None}
 
+
+# Liveness probe. Also reports the git commit SHA when Railway sets the
+# standard env var, so we can confirm which build is live without auth.
+# Path is in AUTH_EXEMPT_PREFIXES so it returns even when bearer is missing.
+@app.get("/api/health")
+def health_endpoint():
+    return {
+        "ok":   True,
+        "time": datetime.now().isoformat(),
+        "build": {
+            "git_sha": (
+                os.getenv("RAILWAY_GIT_COMMIT_SHA")
+                or os.getenv("VERCEL_GIT_COMMIT_SHA")
+                or os.getenv("GIT_COMMIT_SHA")
+                or "unknown"
+            ),
+            "marker": "debug-endpoints-hardened",
+        },
+    }
+
 TIMESHEET_API_KEY   = os.getenv("TIMESHEET_API_KEY")
 TIMESHEET_API_TOKEN = os.getenv("TIMESHEET_API_TOKEN")
 ABS_SHEET_ID        = os.getenv("ABS_SHEET_ID")
@@ -4343,11 +4363,32 @@ def _debug_delays_tab(team_id: str, client: str) -> dict:
 
 
 @app.get("/api/debug/delays-tab")
-async def debug_delays_tab_endpoint(team_id: str, client: str):
+async def debug_delays_tab_endpoint(team_id: str | None = None, client: str | None = None):
     """Probes the team's main sheet for the '{client} Delays' tab and returns
     the discovered schema + first 10 parsed rows. Defensive: always returns
-    JSON with a structured `error` field rather than a 500."""
-    return await asyncio.to_thread(_debug_delays_tab, team_id, client)
+    a 200 JSON with a structured `error` field rather than a 500 — both the
+    inner function AND this outer wrapper catch every exception."""
+    try:
+        if not team_id:
+            return JSONResponse({"error": "missing_team_id",
+                                 "error_detail": "team_id query param required"},
+                                status_code=200)
+        if not client:
+            return JSONResponse({"error": "missing_client",
+                                 "error_detail": "client query param required"},
+                                status_code=200)
+        result = await asyncio.to_thread(_debug_delays_tab, team_id, client)
+        return result
+    except Exception as e:
+        import traceback
+        return JSONResponse({
+            "team_id":        team_id,
+            "client_name":    client,
+            "error":          "outer_unhandled",
+            "error_class":    type(e).__name__,
+            "error_message":  str(e),
+            "traceback_tail": traceback.format_exc().splitlines()[-6:],
+        }, status_code=200)
 
 
 def _debug_commitment_counts(team_id: str, week_offset: int) -> dict:
@@ -4395,10 +4436,27 @@ def _debug_commitment_counts(team_id: str, week_offset: int) -> dict:
 
 
 @app.get("/api/debug/commitment-counts")
-async def debug_commitment_counts_endpoint(team_id: str, week_offset: int = 0):
+async def debug_commitment_counts_endpoint(team_id: str | None = None, week_offset: int = 0):
     """Returns the raw I-owe text + computed counts so we can see why a
-    counter is showing 0 despite the section card being filled."""
-    return await asyncio.to_thread(_debug_commitment_counts, team_id, week_offset)
+    counter is showing 0 despite the section card being filled. Defensive:
+    always returns 200 JSON."""
+    try:
+        if not team_id:
+            return JSONResponse({"error": "missing_team_id",
+                                 "error_detail": "team_id query param required"},
+                                status_code=200)
+        result = await asyncio.to_thread(_debug_commitment_counts, team_id, week_offset)
+        return result
+    except Exception as e:
+        import traceback
+        return JSONResponse({
+            "team_id":        team_id,
+            "week_offset":    week_offset,
+            "error":          "outer_unhandled",
+            "error_class":    type(e).__name__,
+            "error_message":  str(e),
+            "traceback_tail": traceback.format_exc().splitlines()[-6:],
+        }, status_code=200)
 
 
 @app.get("/api/debug/weekly-review")
