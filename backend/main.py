@@ -966,6 +966,17 @@ _EOD_DATE_FORMATS = (
 )
 
 
+def _normalize_eod_date(date_str) -> str:
+    """Normalize an EOD-sheet date cell to a 'YYYY-MM-DD' string. Returns
+    "" on failure. Companion to _parse_eod_date — same parser, different
+    output shape. Used by the Delays-tab parser, which wants a stable
+    string key for date-matching across rows."""
+    if not date_str:
+        return ""
+    dt = _parse_eod_date(date_str)
+    return dt.strftime("%Y-%m-%d") if dt else ""
+
+
 def _parse_eod_date(date_str) -> datetime | None:
     """Parse an EOD-sheet date cell into a datetime.
 
