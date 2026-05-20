@@ -4,6 +4,7 @@ import {
   PieChart, Pie, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Cell, Legend,
 } from "recharts";
+import ChartDetailModal from "./ChartDetailModal";
 
 // Section meta — order, label, color, and the field-name → label map for
 // each card inside the section.
@@ -264,13 +265,52 @@ function countItems(text) {
 }
 
 const ISSUE_CATEGORIES = [
-  { key: "lateFiles",    label: "Late/Missing files",          color: "#E25C5C" },
-  { key: "blockedJobs",  label: "Blocked — awaiting response", color: "#F0B947" },
-  { key: "scopeCreep",   label: "Scope creep",                 color: "#F2895A" },
-  { key: "repeatIssues", label: "Quality / Rework",            color: "#9B7EE8" },
+  // sectionKey + fieldKey tell the IssueListModal where to find the lines
+  { key: "lateFiles",    sectionKey: "workIntake", fieldKey: "lateFiles",    label: "Late/Missing files",          color: "#E25C5C" },
+  { key: "blockedJobs",  sectionKey: "workIntake", fieldKey: "blockedJobs",  label: "Blocked — awaiting response", color: "#F0B947" },
+  { key: "scopeCreep",   sectionKey: "workIntake", fieldKey: "scopeCreep",   label: "Scope creep",                 color: "#F2895A" },
+  { key: "repeatIssues", sectionKey: "quality",    fieldKey: "repeatIssues", label: "Quality / Rework",            color: "#9B7EE8" },
 ];
 
-function IssueBreakdownChart({ sections, weekRange }) {
+// Shared single-line renderer for the detail modals — colored severity
+// dot + full untruncated text + optional source-section caption.
+function IssueLine({ text, severity, sourceLabel }) {
+  const dotColor = SEVERITY_DOT_COLORS[severity] || SEVERITY_DOT_COLORS.neutral;
+  return (
+    <div style={{
+      display: "flex",
+      alignItems: "flex-start",
+      gap: 10,
+      padding: "10px 12px",
+      background: C.surface,
+      border: `1px solid ${C.border}`,
+      borderLeft: `3px solid ${dotColor}`,
+      borderRadius: 6,
+      marginBottom: 8,
+    }}>
+      <span style={{
+        width: 8,
+        height: 8,
+        borderRadius: "50%",
+        marginTop: 7,
+        flexShrink: 0,
+        background: dotColor,
+      }} />
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 13, color: C.pri, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+          {text}
+        </div>
+        {sourceLabel && (
+          <div style={{ fontSize: 10, color: C.muted, marginTop: 4, textTransform: "uppercase", letterSpacing: 0.6 }}>
+            {sourceLabel}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function IssueBreakdownChart({ sections, weekRange, onSliceClick }) {
   const data = useMemo(() => {
     const wi = sections?.workIntake || {};
     const q  = sections?.quality    || {};
@@ -298,41 +338,51 @@ function IssueBreakdownChart({ sections, weekRange }) {
           No issues logged this week.
         </div>
       ) : (
-        <ResponsiveContainer width="100%" height={180}>
-          <PieChart>
-            <Pie
-              data={pieData}
-              dataKey="count"
-              nameKey="label"
-              cx="35%"
-              cy="50%"
-              innerRadius={36}
-              outerRadius={66}
-              paddingAngle={2}
-              stroke="none"
-            >
-              {pieData.map((d, i) => (
-                <Cell key={i} fill={d.color} />
-              ))}
-            </Pie>
-            <Tooltip
-              contentStyle={{ background: "rgba(11,25,41,0.95)", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, color: C.pri }}
-              formatter={(v, n) => [`${v} (${Math.round(v * 100 / total)}%)`, n]}
-            />
-            <Legend
-              layout="vertical"
-              align="right"
-              verticalAlign="middle"
-              wrapperStyle={{ fontSize: 11, color: C.sec, lineHeight: "1.6em" }}
-              iconType="circle"
-              iconSize={8}
-              formatter={(value, entry) => {
-                const c = entry?.payload?.count ?? 0;
-                return `${value} · ${c}`;
-              }}
-            />
-          </PieChart>
-        </ResponsiveContainer>
+        <>
+          <ResponsiveContainer width="100%" height={180}>
+            <PieChart>
+              <Pie
+                data={pieData}
+                dataKey="count"
+                nameKey="label"
+                cx="35%"
+                cy="50%"
+                innerRadius={36}
+                outerRadius={66}
+                paddingAngle={2}
+                stroke="none"
+                cursor="pointer"
+                onClick={(slice) => {
+                  const p = slice?.payload || slice;
+                  if (p && p.key && onSliceClick) onSliceClick(p);
+                }}
+              >
+                {pieData.map((d, i) => (
+                  <Cell key={i} fill={d.color} />
+                ))}
+              </Pie>
+              <Tooltip
+                contentStyle={{ background: "rgba(11,25,41,0.95)", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, color: C.pri }}
+                formatter={(v, n) => [`${v} (${Math.round(v * 100 / total)}%)`, n]}
+              />
+              <Legend
+                layout="vertical"
+                align="right"
+                verticalAlign="middle"
+                wrapperStyle={{ fontSize: 11, color: C.sec, lineHeight: "1.6em" }}
+                iconType="circle"
+                iconSize={8}
+                formatter={(value, entry) => {
+                  const c = entry?.payload?.count ?? 0;
+                  return `${value} · ${c}`;
+                }}
+              />
+            </PieChart>
+          </ResponsiveContainer>
+          <div style={{ fontSize: 10, color: C.muted, marginTop: 4, textAlign: "center", letterSpacing: 0.3 }}>
+            Click any slice for details
+          </div>
+        </>
       )}
     </ChartCard>
   );
@@ -344,7 +394,7 @@ const COMMITMENT_CATEGORIES = [
   { key: "iOweUS",      label: "US",      color: "#F2895A" },
 ];
 
-function PendingCommitmentsChart({ sections, weekRange, commitmentCounts }) {
+function PendingCommitmentsChart({ sections, weekRange, commitmentCounts, onCategoryClick }) {
   const data = useMemo(() => {
     const c = sections?.commitments || {};
     return COMMITMENT_CATEGORIES.map((cat) => {
@@ -405,7 +455,16 @@ function PendingCommitmentsChart({ sections, weekRange, commitmentCounts }) {
               formatter={(v) => [`${v} promise${v === 1 ? "" : "s"}`, ""]}
               labelFormatter={(l) => `I owe — ${l}`}
             />
-            <Bar dataKey="count" radius={[0, 4, 4, 0]} maxBarSize={22}>
+            <Bar
+              dataKey="count"
+              radius={[0, 4, 4, 0]}
+              maxBarSize={22}
+              cursor="pointer"
+              onClick={(entry) => {
+                const p = entry?.payload || entry;
+                if (p && p.key && onCategoryClick) onCategoryClick(p);
+              }}
+            >
               {data.map((d, i) => (
                 <Cell key={i} fill={d.color} />
               ))}
@@ -413,11 +472,16 @@ function PendingCommitmentsChart({ sections, weekRange, commitmentCounts }) {
           </BarChart>
         </ResponsiveContainer>
       )}
+      {!empty && (
+        <div style={{ fontSize: 10, color: C.muted, marginTop: 4, textAlign: "center", letterSpacing: 0.3 }}>
+          Click any bar for details
+        </div>
+      )}
     </ChartCard>
   );
 }
 
-function ClientMentionsChart({ mentions, weekRange }) {
+function ClientMentionsChart({ mentions, weekRange, onClientClick }) {
   const data = Array.isArray(mentions) ? mentions : [];
   return (
     <ChartCard
@@ -448,13 +512,27 @@ function ClientMentionsChart({ mentions, weekRange }) {
               formatter={(v) => [`${v} mention${v === 1 ? "" : "s"}`, ""]}
               labelFormatter={(l) => l}
             />
-            <Bar dataKey="count" radius={[0, 4, 4, 0]} maxBarSize={20}>
+            <Bar
+              dataKey="count"
+              radius={[0, 4, 4, 0]}
+              maxBarSize={20}
+              cursor="pointer"
+              onClick={(entry) => {
+                const p = entry?.payload || entry;
+                if (p && p.client && onClientClick) onClientClick(p);
+              }}
+            >
               {data.map((_, i) => (
                 <Cell key={i} fill="#E25C5C" />
               ))}
             </Bar>
           </BarChart>
         </ResponsiveContainer>
+      )}
+      {data.length > 0 && (
+        <div style={{ fontSize: 10, color: C.muted, marginTop: 4, textAlign: "center", letterSpacing: 0.3 }}>
+          Click any bar for details
+        </div>
       )}
     </ChartCard>
   );
@@ -497,6 +575,10 @@ export default function WeeklyReviewSection({ teamId, embedded = false }) {
   const [loading, setLoading] = useState(true);
   const [weekOffset, setWeekOffset] = useState(0);
   const [error, setError]     = useState(null);
+  // Three chart-click drill-down modals — all share ChartDetailModal as base.
+  const [selectedIssueType,    setSelectedIssueType]    = useState(null);  // {key, label, color}
+  const [selectedIssueClient,  setSelectedIssueClient]  = useState(null);  // {name, color}
+  const [selectedCommitment,   setSelectedCommitment]   = useState(null);  // {key, label, color}
 
   useEffect(() => {
     let cancelled = false;
@@ -602,9 +684,22 @@ export default function WeeklyReviewSection({ teamId, embedded = false }) {
           )}
           {!embedded && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-              <IssueBreakdownChart sections={sections} weekRange={data?.weekRange} />
-              <ClientMentionsChart mentions={data?.clientMentions} weekRange={data?.weekRange} />
-              <PendingCommitmentsChart sections={sections} weekRange={data?.weekRange} commitmentCounts={data?.commitmentCounts} />
+              <IssueBreakdownChart
+                sections={sections}
+                weekRange={data?.weekRange}
+                onSliceClick={(slice) => setSelectedIssueType(slice)}
+              />
+              <ClientMentionsChart
+                mentions={data?.clientMentions}
+                weekRange={data?.weekRange}
+                onClientClick={(p) => setSelectedIssueClient(p)}
+              />
+              <PendingCommitmentsChart
+                sections={sections}
+                weekRange={data?.weekRange}
+                commitmentCounts={data?.commitmentCounts}
+                onCategoryClick={(p) => setSelectedCommitment(p)}
+              />
             </div>
           )}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
@@ -614,6 +709,141 @@ export default function WeeklyReviewSection({ teamId, embedded = false }) {
           </div>
         </div>
       )}
+
+      {/* Chart-click detail modals (frontend-only, all share ChartDetailModal) */}
+      <IssueListModal
+        open={!!selectedIssueType}
+        onClose={() => setSelectedIssueType(null)}
+        category={selectedIssueType}
+        sections={sections}
+        weekRange={data?.weekRange}
+      />
+      <ClientIssueDetailModal
+        open={!!selectedIssueClient}
+        onClose={() => setSelectedIssueClient(null)}
+        clientEntry={selectedIssueClient}
+        sections={sections}
+        weekRange={data?.weekRange}
+      />
+      <CommitmentDetailModal
+        open={!!selectedCommitment}
+        onClose={() => setSelectedCommitment(null)}
+        category={selectedCommitment}
+        sections={sections}
+        weekRange={data?.weekRange}
+      />
     </div>
+  );
+}
+
+// ── Detail modals (Task 2 D/E/F) ────────────────────────────────────
+
+// D: Issue Type donut click → lists every line in that category's source field
+function IssueListModal({ open, onClose, category, sections, weekRange }) {
+  if (!open || !category) return null;
+  const sec   = sections?.[category.sectionKey] || {};
+  const field = sec[category.fieldKey];
+  const lines = fieldLines(field);
+  return (
+    <ChartDetailModal
+      open={open}
+      onClose={onClose}
+      title={`Issues of type: ${category.label}`}
+      subtitle={`${lines.length} item${lines.length === 1 ? "" : "s"}${weekRange ? ` · Week of ${weekRange}` : ""}`}
+      accent={category.color}
+      icon="🥧"
+    >
+      {lines.length === 0 ? (
+        <div style={{ padding: "24px 8px", color: C.muted, fontSize: 12, fontStyle: "italic", textAlign: "center" }}>
+          No items in this category for this week.
+        </div>
+      ) : (
+        <div>
+          {lines.map((ln, i) => (
+            <IssueLine key={i} text={ln.text} severity={ln.severity} sourceLabel={category.label} />
+          ))}
+        </div>
+      )}
+    </ChartDetailModal>
+  );
+}
+
+// E: Issues-per-Client bar click → lists every section line that mentions
+// the client (substring match, case-insensitive). Searches across all 7
+// sections so a client mentioned in Quality or Patterns also surfaces.
+function ClientIssueDetailModal({ open, onClose, clientEntry, sections, weekRange }) {
+  const matches = useMemo(() => {
+    if (!open || !clientEntry || !sections) return [];
+    const needle = (clientEntry.client || "").toLowerCase().trim();
+    if (!needle) return [];
+    const hits = [];
+    for (const sec of SECTIONS) {
+      const secContent = sections[sec.key] || {};
+      for (const [fk, flabel] of sec.fields) {
+        const lns = fieldLines(secContent[fk]);
+        for (const ln of lns) {
+          if (ln.text && ln.text.toLowerCase().includes(needle)) {
+            hits.push({ ...ln, sourceLabel: `${sec.label} · ${flabel}` });
+          }
+        }
+      }
+    }
+    return hits;
+  }, [open, clientEntry, sections]);
+
+  if (!open || !clientEntry) return null;
+  return (
+    <ChartDetailModal
+      open={open}
+      onClose={onClose}
+      title={`Issues mentioning: ${clientEntry.client}`}
+      subtitle={`${matches.length} mention${matches.length === 1 ? "" : "s"}${weekRange ? ` · Week of ${weekRange}` : ""}`}
+      accent="#E25C5C"
+      icon="👥"
+    >
+      {matches.length === 0 ? (
+        <div style={{ padding: "24px 8px", color: C.muted, fontSize: 12, fontStyle: "italic", textAlign: "center" }}>
+          No lines mentioning {clientEntry.client} in this week's sections.
+        </div>
+      ) : (
+        <div>
+          {matches.map((m, i) => (
+            <IssueLine key={i} text={m.text} severity={m.severity} sourceLabel={m.sourceLabel} />
+          ))}
+        </div>
+      )}
+    </ChartDetailModal>
+  );
+}
+
+// F: Commitments bar click → shows the actual commitment items for that
+// I-owe category (Clients / Staff / US).
+function CommitmentDetailModal({ open, onClose, category, sections, weekRange }) {
+  if (!open || !category) return null;
+  const c = sections?.commitments || {};
+  const lines = fieldLines(c[category.key]);
+  const labelMap = { iOweClients: "Clients", iOweStaff: "Staff", iOweUS: "US Contacts" };
+  const human = labelMap[category.key] || category.label;
+  return (
+    <ChartDetailModal
+      open={open}
+      onClose={onClose}
+      title={`Commitments — I owe ${human}`}
+      subtitle={`${lines.length} promise${lines.length === 1 ? "" : "s"}${weekRange ? ` · Week of ${weekRange}` : ""}`}
+      accent={category.color}
+      icon="📋"
+    >
+      {lines.length === 0 ? (
+        <div style={{ padding: "24px 8px", color: C.muted, fontSize: 12, fontStyle: "italic", textAlign: "center" }}>
+          No commitments tracked in this category.
+        </div>
+      ) : (
+        <div>
+          {lines.map((ln, i) => (
+            <IssueLine key={i} text={ln.text} severity={ln.severity} sourceLabel={human} />
+          ))}
+        </div>
+      )}
+    </ChartDetailModal>
   );
 }

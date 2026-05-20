@@ -54,30 +54,70 @@ function DelayRowCard({ row, isCompleted = false }) {
       </div>
 
       {/* Raised date */}
-      <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>
+      <div style={{ fontSize: 11, color: C.muted, marginBottom: 10 }}>
         Raised: {row.raisedDateFormatted || row.raisedDate}
       </div>
 
-      {/* Query text (full, not truncated) */}
-      {row.queryText && (
-        <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 10, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600 }}>
-            Query Details
-          </div>
+      {/* Question (Posted Query Details) — bold label + full untruncated text */}
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ fontSize: 11, color: C.sec, marginBottom: 4, fontWeight: 700 }}>
+          ❓ Question:
+        </div>
+        {row.queryText ? (
           <div style={{ fontSize: 13, lineHeight: 1.5, color: C.pri, whiteSpace: "pre-wrap" }}>
             {row.queryText}
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: C.muted, fontStyle: "italic" }}>
+            Question text not recorded
+          </div>
+        )}
+      </div>
+
+      {/* Status Details (column M) — full text */}
+      {row.notes && row.notes !== row.queryText && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: C.sec, marginBottom: 4, fontWeight: 700 }}>
+            📝 Status Details:
+          </div>
+          <div style={{ fontSize: 12, lineHeight: 1.5, color: C.sec, whiteSpace: "pre-wrap" }}>
+            {row.notes}
           </div>
         </div>
       )}
 
-      {/* Notes (status details) — full text */}
-      {row.notes && row.notes !== row.queryText && (
-        <div style={{ marginTop: 8 }}>
-          <div style={{ fontSize: 10, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600 }}>
-            Status Details
+      {/* Resolution / Answer — completed items only. We don't currently
+          have a dedicated "Delay Questions tab > Resolution Notes" feed,
+          so we surface the status-details / notes as the resolution
+          (with a fallback line when both are empty). */}
+      {isCompleted && (
+        <div
+          style={{
+            marginTop: 10,
+            padding: "10px 12px",
+            background: "rgba(61,197,139,0.08)",
+            border: `1px solid rgba(61,197,139,0.25)`,
+            borderLeft: `3px solid #3DC58B`,
+            borderRadius: 6,
+          }}
+        >
+          <div style={{ fontSize: 11, color: "#3DC58B", marginBottom: 4, fontWeight: 700 }}>
+            ✓ Resolution / Answer:
           </div>
-          <div style={{ fontSize: 12, lineHeight: 1.5, color: C.sec, whiteSpace: "pre-wrap" }}>
-            {row.notes}
+          {row.notes ? (
+            <div style={{ fontSize: 12, lineHeight: 1.5, color: C.pri, whiteSpace: "pre-wrap" }}>
+              {row.notes}
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: C.muted, fontStyle: "italic" }}>
+              Resolution notes not recorded
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 14, fontSize: 11, color: C.muted, marginTop: 6, fontFamily: "'DM Mono', monospace" }}>
+            {row.resolvedOnFormatted && <span>Resolved on: {row.resolvedOnFormatted}</span>}
+            {row.resolvedInDays != null && (
+              <span>Resolved in {row.resolvedInDays} day{row.resolvedInDays === 1 ? "" : "s"}</span>
+            )}
           </div>
         </div>
       )}

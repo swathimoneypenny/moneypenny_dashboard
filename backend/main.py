@@ -1756,6 +1756,17 @@ def compute_delays_aging(eod_rows: list[dict], period_start: str, period_end: st
                 row_payload["resolvedInDays"] = _estimate_resolved_in_days(
                     r, eod_rows, cur,
                 )
+                # Derive a resolved-on date for the modal. raisedDate is
+                # YYYY-MM-DD; offset by the estimated resolved-in-days.
+                rid = row_payload.get("resolvedInDays")
+                if rid is not None:
+                    try:
+                        raised_dt = datetime.strptime(key, "%Y-%m-%d")
+                        resolved_dt = raised_dt + timedelta(days=int(rid))
+                        row_payload["resolvedOnDate"]      = resolved_dt.strftime("%Y-%m-%d")
+                        row_payload["resolvedOnFormatted"] = resolved_dt.strftime("%b %d, %Y")
+                    except Exception:
+                        pass
             all_rows_payload.append(row_payload)
 
         delays_by_day.append({
