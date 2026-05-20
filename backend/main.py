@@ -1070,6 +1070,7 @@ WEEKLY_REVIEW_SHEET_ID = os.getenv(
 )
 WEEKLY_REVIEW_CACHE_SECS = 300   # 5 min per spec
 _WEEKLY_TAB_MATCH_TTL    = 3600  # 1 h per spec — cache positive matches
+_ACTION_ITEMS_CACHE_TTL  = 3600  # 1 h per spec — cache Groq responses
 
 # Module-level cache: { (team_id, week_offset): {"at": datetime, "data": dict} }
 _weekly_review_cache: dict[tuple[str, int], dict] = {}
@@ -1077,6 +1078,8 @@ _weekly_review_cache: dict[tuple[str, int], dict] = {}
 # We cache negatives ("tab: None") with a shorter TTL window below so a lead
 # adding their tab is picked up within minutes, not an hour.
 _weekly_tab_match_cache: dict[str, dict] = {}
+# AI action-items: { (team_id, weekRange): {"at": datetime, "items": list[str]} }
+_action_items_cache: dict[tuple[str, str], dict] = {}
 # Kept for backward compat with /clear-cache callers.
 _weekly_review_tab_resolved: dict[str, str] = {}
 
@@ -1242,8 +1245,58 @@ def _row_is_filled(row: dict) -> bool:
     return False
 
 
+_SEVERITY_HIGH_KEYWORDS = (
+    "waiting for", "blocked", "stuck", "urgent", "escalat",
+    "delay", "overdue", "missing", "pending for", "not provided",
+    "5+ days", "weeks", "month", "issue", "problem", "failure",
+    "high priority", "critical",
+)
+_SEVERITY_COMPLETED_KEYWORDS = (
+    "all work completed", "completed on time", "no issues",
+    "no concerns", "all done", "everything fine", "running smoothly",
+    "no work", "nil",
+)
+_SEVERITY_MEDIUM_KEYWORDS = (
+    "working on", "in progress", "ongoing", "review",
+    "pending", "training", "preparing", "need to",
+)
+
+
+def _classify_issue_severity(line: str) -> str:
+    """Best-effort severity tag for a single line of weekly-review text.
+    Keyword-driven; defaults to 'neutral' when no signal fires.
+    """
+    if not line or not line.strip():
+        return "neutral"
+    t = line.lower()
+    if any(kw in t for kw in _SEVERITY_HIGH_KEYWORDS):
+        return "high"
+    if any(kw in t for kw in _SEVERITY_COMPLETED_KEYWORDS):
+        return "completed"
+    if any(kw in t for kw in _SEVERITY_MEDIUM_KEYWORDS):
+        return "medium"
+    return "neutral"
+
+
+def _classify_field_lines(text: str) -> list[dict]:
+    """Split free-text into non-empty trimmed lines and attach a severity tag."""
+    if not text or not text.strip():
+        return []
+    out: list[dict] = []
+    for ln in text.split("\n"):
+        ln = ln.strip()
+        if ln:
+            out.append({"text": ln, "severity": _classify_issue_severity(ln)})
+    return out
+
+
 def _build_review_payload(row: dict | None) -> dict:
-    """Turn a flat row dict into the section-grouped response shape."""
+    """Turn a flat row dict into the section-grouped response shape.
+
+    Each section field is emitted as {text, lines}, where `lines` is a list
+    of {text, severity} entries (one per non-empty line). `text` keeps the
+    raw multi-line string for callers that still want a single blob.
+    """
     if not row:
         return {
             "weekRange":  None,
@@ -1251,9 +1304,15 @@ def _build_review_payload(row: dict | None) -> dict:
             "reviewedBy": None,
             "sections":   None,
         }
-    sections: dict[str, dict[str, str]] = {}
+    sections: dict[str, dict[str, dict]] = {}
     for sec_name, fields in _WEEKLY_REVIEW_SECTIONS.items():
-        sections[sec_name] = {f: (row.get(f) or "") for f in fields}
+        sections[sec_name] = {}
+        for f in fields:
+            raw = (row.get(f) or "").strip()
+            sections[sec_name][f] = {
+                "text":  raw,
+                "lines": _classify_field_lines(raw),
+            }
     return {
         "weekRange":   row.get("weekRange") or "",
         "isFilled":    _row_is_filled(row),
@@ -1261,6 +1320,16 @@ def _build_review_payload(row: dict | None) -> dict:
         "teamClient":  row.get("teamClient") or "",
         "sections":    sections,
     }
+
+
+def _section_field_text(section_field) -> str:
+    """Accessor for the new {text, lines} field shape that also tolerates
+    the legacy plain-string form."""
+    if isinstance(section_field, dict):
+        return (section_field.get("text") or "").strip()
+    if isinstance(section_field, str):
+        return section_field.strip()
+    return ""
 
 
 def _resolve_weekly_tab(team_id: str) -> tuple[str | None, str | None, list[str]]:
@@ -1344,9 +1413,9 @@ def _compute_client_mentions(team_id: str, work_intake: dict | None) -> list[dic
     if not clients:
         return []
     blob = " ".join([
-        work_intake.get("lateFiles")    or "",
-        work_intake.get("blockedJobs")  or "",
-        work_intake.get("scopeCreep")   or "",
+        _section_field_text(work_intake.get("lateFiles")),
+        _section_field_text(work_intake.get("blockedJobs")),
+        _section_field_text(work_intake.get("scopeCreep")),
     ]).lower()
     if not blob.strip():
         return []
@@ -1362,6 +1431,113 @@ def _compute_client_mentions(team_id: str, work_intake: dict | None) -> list[dic
             out.append({"client": c.get("name") or "", "count": seen_count})
     out.sort(key=lambda x: (-x["count"], x["client"]))
     return out
+
+
+def _generate_action_items(payload: dict) -> list[str]:
+    """Call Groq to produce 1-3 concrete next-week action items from this
+    week's review. Returns [] if anything goes wrong (Groq error, bad JSON,
+    non-list shape). Only runs when isFilled is true — avoids 15 LLM calls
+    on the admin-hour fan-out for empty weeks.
+    """
+    if not payload or not payload.get("isFilled"):
+        return []
+    sections = payload.get("sections") or {}
+
+    def _t(sec: str, field: str) -> str:
+        return _section_field_text((sections.get(sec) or {}).get(field))
+
+    review_lines = [
+        f"WORK INTAKE — Late files: {_t('workIntake', 'lateFiles')}",
+        f"WORK INTAKE — Blocked jobs: {_t('workIntake', 'blockedJobs')}",
+        f"WORK INTAKE — Scope creep: {_t('workIntake', 'scopeCreep')}",
+        f"HOURS — Delivered vs contracted: {_t('hoursCapacity', 'deliveredVsContracted')}",
+        f"HOURS — Client-blocked: {_t('hoursCapacity', 'clientBlockedHours')}",
+        f"HOURS — Training/PTO: {_t('hoursCapacity', 'trainingPto')}",
+        f"QUALITY — US notes: {_t('quality', 'usNotes')}",
+        f"QUALITY — Repeat issues: {_t('quality', 'repeatIssues')}",
+        f"QUALITY — Question volume: {_t('quality', 'questionVolume')}",
+        f"STAFF — Needs conversation: {_t('staffNotes', 'needsConversation')}",
+        f"STAFF — Span of control: {_t('staffNotes', 'spanOfControl')}",
+        f"PATTERNS — SOP gap: {_t('patterns', 'sopGap')}",
+        f"PATTERNS — Complaint theme: {_t('patterns', 'complaintTheme')}",
+        f"PATTERNS — Single-point failure: {_t('patterns', 'singlePointFailure')}",
+        f"COMMITMENTS — I owe clients: {_t('commitments', 'iOweClients')}",
+        f"COMMITMENTS — I owe staff: {_t('commitments', 'iOweStaff')}",
+        f"COMMITMENTS — I owe US: {_t('commitments', 'iOweUS')}",
+    ]
+    review_text = "\n".join(l for l in review_lines if l.split(": ", 1)[-1].strip())
+    if not review_text.strip():
+        return []
+
+    system = (
+        "You read a Team Lead's weekly review and produce 1-3 concrete action "
+        "items for next week. Output ONLY a JSON array of short strings — one "
+        "sentence each, max 120 characters, no markdown, no code fences, no "
+        "commentary. Focus on the highest-urgency unresolved items: blocked "
+        "work, missing files, single-point-of-failure risks, SOP gaps, and "
+        "open commitments. Skip anything already completed."
+    )
+    user = (
+        f"Review for {payload.get('leadName') or ''} — week of "
+        f"{payload.get('weekRange') or ''}:\n\n{review_text}\n\n"
+        "Return JSON array now."
+    )
+
+    try:
+        resp = groq_client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user",   "content": user},
+            ],
+            max_tokens=300,
+            temperature=0.3,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        print(f"[actionItems] Groq error: {e}")
+        return []
+
+    # Tolerate a stray ```json fence around the JSON array
+    if content.startswith("```"):
+        inner = content.strip("`").strip()
+        if inner.lower().startswith("json"):
+            inner = inner[4:].lstrip()
+        content = inner
+
+    try:
+        parsed = json.loads(content)
+    except Exception as e:
+        print(f"[actionItems] JSON parse error: {e} content={content[:200]!r}")
+        return []
+
+    if not isinstance(parsed, list):
+        return []
+    out: list[str] = []
+    for item in parsed[:3]:
+        if isinstance(item, str):
+            s = item.strip()
+            if s:
+                out.append(s[:160])
+    return out
+
+
+def _get_action_items(payload: dict) -> list[str]:
+    """Cache wrapper around _generate_action_items, keyed by (team_id,
+    weekRange) so the same week's items aren't re-generated every fetch."""
+    if not payload or not payload.get("isFilled"):
+        return []
+    team_id    = payload.get("teamId")
+    week_range = (payload.get("weekRange") or "").strip()
+    if not team_id or not week_range:
+        return _generate_action_items(payload)
+    key = (team_id, week_range)
+    entry = _action_items_cache.get(key)
+    if entry and (datetime.now() - entry["at"]).total_seconds() < _ACTION_ITEMS_CACHE_TTL:
+        return entry["items"]
+    items = _generate_action_items(payload)
+    _action_items_cache[key] = {"at": datetime.now(), "items": items}
+    return items
 
 
 def get_weekly_review(team_id: str, week_offset: int = 0) -> dict:
@@ -1402,6 +1578,9 @@ def get_weekly_review(team_id: str, week_offset: int = 0) -> dict:
         "availableWeeks": available_weeks,
         "clientMentions": _compute_client_mentions(team_id, work_intake),
     })
+    # AI action items come last because the generator reads fields off the
+    # populated payload (teamId, weekRange, leadName).
+    payload["actionItems"] = _get_action_items(payload)
     _weekly_review_cache[cache_key] = {"at": datetime.now(), "data": payload}
     return payload
 
@@ -4387,6 +4566,7 @@ async def clear_cache():
     _weekly_review_cache.clear()
     _weekly_tab_match_cache.clear()
     _weekly_review_tab_resolved.clear()
+    _action_items_cache.clear()
     return {"ok": True, "status": "all caches cleared", "time": datetime.now().isoformat()}
 
 

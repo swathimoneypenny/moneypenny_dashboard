@@ -88,15 +88,123 @@ const SECTIONS = [
   },
 ];
 
+// Backend now returns each section field as { text, lines } where lines is
+// an array of { text, severity }. Older callers passed plain strings, so
+// fieldText/fieldLines tolerate both shapes.
+function fieldText(v) {
+  if (!v) return "";
+  if (typeof v === "string") return v;
+  return (v.text || "").trim();
+}
+function fieldLines(v) {
+  if (!v) return [];
+  if (typeof v === "string") {
+    return v.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+      .map((t) => ({ text: t, severity: "neutral" }));
+  }
+  if (Array.isArray(v.lines) && v.lines.length) return v.lines;
+  return fieldText(v)
+    .split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+    .map((t) => ({ text: t, severity: "neutral" }));
+}
+
+const SEVERITY_DOT_COLORS = {
+  high:      "#EF4444",
+  medium:    "#F59E0B",
+  completed: "#10B981",
+  neutral:   "#6B7280",
+};
+
 function ReviewField({ label, value }) {
-  const v = (value || "").trim();
+  const lines = fieldLines(value);
   return (
     <div style={{ marginBottom: 10 }}>
       <div style={{ fontSize: 10, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600 }}>
         {label}
       </div>
-      <div style={{ fontSize: 12, color: v ? C.pri : C.muted, lineHeight: 1.5, whiteSpace: "pre-wrap", fontStyle: v ? "normal" : "italic" }}>
-        {v || "—"}
+      {lines.length === 0 ? (
+        <div style={{ fontSize: 12, color: C.muted, fontStyle: "italic" }}>—</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {lines.map((ln, j) => (
+            <div key={j} style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: "50%",
+                  marginTop: 7,
+                  flexShrink: 0,
+                  background: SEVERITY_DOT_COLORS[ln.severity] || SEVERITY_DOT_COLORS.neutral,
+                }}
+              />
+              <span style={{ fontSize: 12, color: C.pri, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+                {ln.text}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function KeyActionsCard({ actionItems }) {
+  if (!Array.isArray(actionItems) || actionItems.length === 0) return null;
+  return (
+    <div style={{
+      background: "linear-gradient(135deg, rgba(124,58,237,0.15), rgba(59,130,246,0.10))",
+      border: "1px solid #7C3AED40",
+      borderLeft: "4px solid #7C3AED",
+      borderRadius: 8,
+      padding: 20,
+    }}>
+      <div style={{
+        fontSize: 14,
+        fontWeight: 600,
+        color: "#A78BFA",
+        marginBottom: 12,
+        letterSpacing: 1,
+        textTransform: "uppercase",
+      }}>
+        Key Actions This Week
+      </div>
+      <div style={{ display: "grid", gap: 10 }}>
+        {actionItems.map((action, i) => (
+          <div key={i} style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 12,
+            fontSize: 14,
+            lineHeight: 1.5,
+            color: C.pri,
+          }}>
+            <span style={{
+              display: "inline-flex",
+              justifyContent: "center",
+              alignItems: "center",
+              minWidth: 24,
+              height: 24,
+              borderRadius: "50%",
+              background: "#7C3AED",
+              color: "white",
+              fontSize: 12,
+              fontWeight: 700,
+              flexShrink: 0,
+            }}>
+              {i + 1}
+            </span>
+            <span>{action}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{
+        fontSize: 11,
+        color: C.muted,
+        marginTop: 12,
+        fontStyle: "italic",
+      }}>
+        Auto-generated from this week's review · Updates when review is refreshed
       </div>
     </div>
   );
@@ -162,10 +270,10 @@ function IssueBreakdownChart({ sections, weekRange }) {
     const wi = sections?.workIntake || {};
     const q  = sections?.quality    || {};
     const sourceMap = {
-      lateFiles:    wi.lateFiles,
-      blockedJobs:  wi.blockedJobs,
-      scopeCreep:   wi.scopeCreep,
-      repeatIssues: q.repeatIssues,
+      lateFiles:    fieldText(wi.lateFiles),
+      blockedJobs:  fieldText(wi.blockedJobs),
+      scopeCreep:   fieldText(wi.scopeCreep),
+      repeatIssues: fieldText(q.repeatIssues),
     };
     return ISSUE_CATEGORIES.map((c) => ({
       ...c,
@@ -236,7 +344,7 @@ function PendingCommitmentsChart({ sections, weekRange }) {
     const c = sections?.commitments || {};
     return COMMITMENT_CATEGORIES.map((cat) => ({
       ...cat,
-      count: countItems(c[cat.key]),
+      count: countItems(fieldText(c[cat.key])),
     }));
   }, [sections]);
   const total = data.reduce((a, d) => a + d.count, 0);
@@ -335,7 +443,7 @@ function ClientMentionsChart({ mentions, weekRange }) {
 }
 
 function SectionCard({ section, content }) {
-  const fieldsWithValues = section.fields.filter(([k]) => (content?.[k] || "").trim());
+  const fieldsWithValues = section.fields.filter(([k]) => fieldText(content?.[k]));
   return (
     <div
       style={{
@@ -467,6 +575,7 @@ export default function WeeklyReviewSection({ teamId, embedded = false }) {
       )}
       {!error && !loading && filled && sections && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <KeyActionsCard actionItems={data?.actionItems} />
           {data?.reviewedBy && (
             <div style={{ fontSize: 11, color: C.muted }}>
               Reviewed by <span style={{ color: C.sec, fontWeight: 600 }}>{data.reviewedBy}</span>
