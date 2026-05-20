@@ -1601,6 +1601,13 @@ def get_weekly_review(team_id: str, week_offset: int = 0) -> dict:
     payload = _build_review_payload(selected_row)
     work_intake = (payload.get("sections") or {}).get("workIntake") if payload.get("isFilled") else None
     commitments_section = (payload.get("sections") or {}).get("commitments") if payload.get("isFilled") else None
+    # Debug logging to diagnose "Commitments chart empty despite text" reports.
+    # Visible in Railway logs; cheap to leave in.
+    if commitments_section:
+        for _f in ("iOweClients", "iOweStaff", "iOweUS"):
+            _raw = _section_field_text(commitments_section.get(_f))
+            _ct  = _count_commitments(_raw)
+            print(f"[admin-review] team={team_id} {_f} count={_ct} raw={_raw[:120]!r}")
     payload.update({
         "teamId":           team_id,
         "teamLabel":        cfg.get("label", team_id),
@@ -4341,6 +4348,57 @@ async def debug_delays_tab_endpoint(team_id: str, client: str):
     the discovered schema + first 10 parsed rows. Defensive: always returns
     JSON with a structured `error` field rather than a 500."""
     return await asyncio.to_thread(_debug_delays_tab, team_id, client)
+
+
+def _debug_commitment_counts(team_id: str, week_offset: int) -> dict:
+    """Diagnostic for Bug 3 — surfaces the raw commitment text per field
+    alongside what _count_commitments produced. If a field shows substantive
+    text but count=0, the counter rules need tuning."""
+    base = {"team_id": team_id, "week_offset": week_offset}
+    try:
+        if team_id not in TEAM_LETTER_MAP:
+            return {**base, "error": "unknown_team",
+                    "error_detail": f"team_id {team_id!r} not in TEAM_LETTER_MAP"}
+        payload = get_weekly_review(team_id, week_offset)
+        if not payload.get("isFilled"):
+            return {**base,
+                    "isFilled":  False,
+                    "weekRange": payload.get("weekRange"),
+                    "note":      "Row is not marked filled, so no commitments to count."}
+        sections    = payload.get("sections") or {}
+        commitments = sections.get("commitments") or {}
+        fields      = ("iOweClients", "iOweStaff", "iOweUS")
+        raw_values  = {f: _section_field_text(commitments.get(f)) for f in fields}
+        counts      = {f: _count_commitments(raw_values[f]) for f in fields}
+        return {**base,
+                "isFilled":         True,
+                "weekRange":        payload.get("weekRange"),
+                "matchedTab":       payload.get("matchedTab"),
+                "raw_values":       raw_values,
+                "computed_counts":  counts,
+                "backend_payload":  payload.get("commitmentCounts"),
+                "total":            sum(counts.values()),
+                "interpretation":   {
+                    f: (
+                        "empty"            if not raw_values[f]
+                        else "dash_only"   if raw_values[f].strip() in ("-", "—", "—-")
+                        else "no_only"     if raw_values[f].strip().lower() in ("no", "none", "n/a", "na")
+                        else f"counted_{counts[f]}"
+                    ) for f in fields
+                }}
+    except Exception as e:
+        import traceback
+        return {**base,
+                "error":          "unhandled_exception",
+                "error_detail":   f"{type(e).__name__}: {e}",
+                "traceback_tail": traceback.format_exc().splitlines()[-6:]}
+
+
+@app.get("/api/debug/commitment-counts")
+async def debug_commitment_counts_endpoint(team_id: str, week_offset: int = 0):
+    """Returns the raw I-owe text + computed counts so we can see why a
+    counter is showing 0 despite the section card being filled."""
+    return await asyncio.to_thread(_debug_commitment_counts, team_id, week_offset)
 
 
 @app.get("/api/debug/weekly-review")

@@ -406,6 +406,33 @@ export default function DelayDetailModal({ day, onClose }) {
           </div>
         )}
 
+        {/* Soft hint: there ARE main-tab delay rows but no per-client Delays-tab
+            questions were found for this date. Probably means the team has
+            no Delays tab configured (or its name doesn't match our probes),
+            or no questions were posted on this date. */}
+        {(openRows.length > 0 || completedRows.length > 0) && delayQuestions.length === 0 && (
+          <div style={{
+            marginTop: 16,
+            padding: "10px 14px",
+            background: "rgba(240,185,71,0.06)",
+            border: `1px solid rgba(240,185,71,0.25)`,
+            borderLeft: `3px solid #F0B947`,
+            borderRadius: 6,
+            color: C.sec,
+            fontSize: 12,
+            lineHeight: 1.5,
+          }}>
+            <strong style={{ color: "#F0B947" }}>⚠ No delay questions tracked in Delays tab for this date.</strong>
+            <div style={{ marginTop: 4, color: C.muted, fontSize: 11 }}>
+              Showing status notes from the main EOD tab only. If you expected
+              question text here, verify the "{`{Client Name}`} Delays" tab
+              exists in this team's sheet — try
+              <code style={{ background: C.surface, padding: "1px 5px", margin: "0 4px", borderRadius: 3, fontSize: 10 }}>/api/debug/delays-tab?team_id=…&client=…</code>
+              to diagnose.
+            </div>
+          </div>
+        )}
+
         {/* Empty state */}
         {openRows.length === 0 && completedRows.length === 0 && delayQuestions.length === 0 && (
           <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>
