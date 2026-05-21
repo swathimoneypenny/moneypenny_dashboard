@@ -22,6 +22,10 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from groq import Groq
 
+# Whale (usewhale.io) SOPs API client. Reads WHALE_API_TOKEN +
+# WHALE_WORKSPACE_ID env vars; gracefully degrades when unset.
+from whale_api import WhaleAPI, WhaleAPIError, get_all_sops_cached, clear_sops_cache
+
 load_dotenv()
 
 
@@ -5435,6 +5439,110 @@ async def admin_hour_endpoint(week_offset: int = 0):
         },
         "teams":       teams,
     }
+
+
+# ── Whale (usewhale.io) SOPs ──────────────────────────────────
+# Auth: protected by the global require_auth middleware on /api/* —
+# no explicit Depends(verify_token) needed. Graceful errors: every
+# endpoint returns a structured JSON `error` field on failure rather
+# than raising HTTPException, so the frontend banner can stay parseable.
+
+@app.get("/api/whale/status")
+async def whale_status_endpoint():
+    """Reports whether the Whale API credentials are set and reachable."""
+    api = WhaleAPI()
+    configured = api._is_configured()
+    if not configured:
+        return {
+            "configured":       False,
+            "token_set":        api.token        not in ("", "PENDING", None),
+            "workspace_id_set": api.workspace_id not in ("", "PENDING", None),
+            "message":          "WHALE_API_TOKEN and WHALE_WORKSPACE_ID env vars not set on the server. Awaiting credentials.",
+        }
+    try:
+        health = await asyncio.to_thread(api.get_health)
+        return {"configured": True, "reachable": True, "health": health}
+    except WhaleAPIError as e:
+        return {"configured": True, "reachable": False, "error": str(e)}
+    except Exception as e:
+        return {"configured": True, "reachable": False, "error": f"{type(e).__name__}: {e}"}
+
+
+@app.get("/api/whale/boards")
+async def whale_boards_endpoint():
+    """Lists all Whale boards (root containers of libraries → playbooks → cards)."""
+    api = WhaleAPI()
+    try:
+        boards = await asyncio.to_thread(api.get_boards)
+        return {"boards": boards, "count": len(boards)}
+    except WhaleAPIError as e:
+        return {"error": "whale_api_error", "error_detail": str(e), "boards": [], "count": 0}
+    except Exception as e:
+        return {"error": "unhandled", "error_detail": f"{type(e).__name__}: {e}", "boards": [], "count": 0}
+
+
+@app.get("/api/whale/sops")
+async def whale_sops_endpoint(refresh: bool = False):
+    """Returns the flattened list of every SOP card across every board/library/
+    playbook. Cached for 1 h; pass ?refresh=true to bust the cache."""
+    try:
+        sops = await asyncio.to_thread(get_all_sops_cached, refresh)
+        return {"sops": sops, "count": len(sops), "cached": not refresh}
+    except WhaleAPIError as e:
+        return {"error": "whale_api_error", "error_detail": str(e), "sops": [], "count": 0}
+    except Exception as e:
+        return {"error": "unhandled", "error_detail": f"{type(e).__name__}: {e}", "sops": [], "count": 0}
+
+
+@app.get("/api/whale/audit/outdated")
+async def whale_audit_outdated_endpoint(months: int = 6):
+    """Returns SOPs whose last_updated is older than `months` ago. Sorted by
+    days_old desc. Cached via the shared SOPs cache."""
+    try:
+        all_sops = await asyncio.to_thread(get_all_sops_cached, False)
+    except WhaleAPIError as e:
+        return {"error": "whale_api_error", "error_detail": str(e),
+                "outdated_sops": [], "count": 0, "cutoff_months": months}
+    except Exception as e:
+        return {"error": "unhandled", "error_detail": f"{type(e).__name__}: {e}",
+                "outdated_sops": [], "count": 0, "cutoff_months": months}
+
+    cutoff = datetime.now() - timedelta(days=max(1, months) * 30)
+    outdated: list[dict] = []
+    for sop in all_sops:
+        ts = sop.get("last_updated")
+        if not ts:
+            continue
+        try:
+            last_updated = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+            # strip tz so we can compare with a naive datetime.now()
+            last_updated_naive = last_updated.replace(tzinfo=None)
+            if last_updated_naive < cutoff:
+                outdated.append({
+                    **sop,
+                    "days_old": (datetime.now() - last_updated_naive).days,
+                })
+        except (ValueError, TypeError):
+            continue
+    outdated.sort(key=lambda s: -(s.get("days_old") or 0))
+    return {
+        "outdated_sops": outdated,
+        "count":         len(outdated),
+        "cutoff_months": months,
+    }
+
+
+@app.post("/api/whale/refresh-cache")
+async def whale_refresh_cache_endpoint():
+    """Force-refresh the SOPs cache. Returns the new count."""
+    try:
+        clear_sops_cache()
+        sops = await asyncio.to_thread(get_all_sops_cached, True)
+        return {"refreshed": True, "count": len(sops)}
+    except WhaleAPIError as e:
+        return {"refreshed": False, "error": "whale_api_error", "error_detail": str(e)}
+    except Exception as e:
+        return {"refreshed": False, "error": "unhandled", "error_detail": f"{type(e).__name__}: {e}"}
 
 
 @app.get("/api/analysis/client-departure/{client_slug}")

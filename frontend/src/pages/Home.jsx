@@ -49,7 +49,7 @@ const today = new Date().toLocaleDateString("en-US", {
   day: "numeric",
 });
 
-function Header({ onOpenAdminHour }) {
+function Header({ onOpenAdminHour, onOpenWhale }) {
   function signOut() {
     clearToken();
     if (typeof window !== "undefined") window.location.reload();
@@ -95,6 +95,28 @@ function Header({ onOpenAdminHour }) {
             onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.sec; }}
           >
             ⏰ Admin Hour
+          </button>
+        )}
+        {onOpenWhale && (
+          <button
+            onClick={onOpenWhale}
+            title="Whale SOPs (programmatic browse + audit)"
+            style={{
+              background: "transparent",
+              border: `1px solid ${C.border}`,
+              color: C.sec,
+              borderRadius: 8,
+              padding: "8px 14px",
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: 600,
+              fontFamily: "'DM Sans', sans-serif",
+              transition: "all 0.15s",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#4A8FE7"; e.currentTarget.style.color = "#4A8FE7"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.sec; }}
+          >
+            📚 Whale SOPs
           </button>
         )}
         <div style={{ textAlign: "right" }}>
@@ -624,12 +646,12 @@ function ClientTab({ onSelectClient }) {
   );
 }
 
-export default function Home({ onSelectTeam, onSelectClient, onOpenAdminHour }) {
+export default function Home({ onSelectTeam, onSelectClient, onOpenAdminHour, onOpenWhale }) {
   const [tab, setTab] = useState("team");
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, display: "flex", flexDirection: "column" }}>
-      <Header onOpenAdminHour={onOpenAdminHour} />
+      <Header onOpenAdminHour={onOpenAdminHour} onOpenWhale={onOpenWhale} />
 
       <div style={{ padding: "28px 32px", flex: 1 }}>
         {/* Tab toggle */}

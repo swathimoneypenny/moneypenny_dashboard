@@ -5,6 +5,7 @@ import ClientDashboard from "./pages/ClientDashboard";
 import EmployeeProfile from "./pages/EmployeeProfile";
 import AdminHourPage from "./pages/AdminHourPage";
 import ClientDepartureAnalysisPage from "./pages/ClientDepartureAnalysisPage";
+import WhaleSOPsPage from "./pages/WhaleSOPsPage";
 import LoginPage from "./pages/LoginPage";
 import Chatbot from "./components/Chatbot";
 import { API_BASE, getToken, clearToken } from "./config";
@@ -58,6 +59,7 @@ export default function App() {
     if (view.page === "team")                return `Viewing team: ${view.teamName}`;
     if (view.page === "admin_hour")          return "Viewing Admin Hour cross-team overview";
     if (view.page === "departure_analysis")  return `Viewing departure analysis: ${view.clientSlug}`;
+    if (view.page === "whale_sops")          return "Viewing Whale SOPs library";
     return "Viewing MoneyPenny Dashboard home screen";
   })();
 
@@ -168,6 +170,15 @@ export default function App() {
     );
   }
 
+  if (view.page === "whale_sops") {
+    return (
+      <>
+        <WhaleSOPsPage onBack={() => setView({ page: "home" })} />
+        <Chatbot context={context} viewHint={viewHint} />
+      </>
+    );
+  }
+
   return (
     <>
       <Home
@@ -180,6 +191,7 @@ export default function App() {
           setView({ page: "client", clientName: client.name });
         }}
         onOpenAdminHour={() => setView({ page: "admin_hour" })}
+        onOpenWhale={() => setView({ page: "whale_sops" })}
       />
       <Chatbot context={context} viewHint={viewHint} />
     </>
