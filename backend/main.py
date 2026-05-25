@@ -243,7 +243,9 @@ TEAM_ROSTERS: dict[str, list[str]] = {
     "team_h": ["deepali", "yashika", "madu"],
     "team_i": ["radhika", "aparna s", "jeevitha", "sakthi s"],
     "team_j": ["logeswari", "nisha m", "dhana", "sindhu", "monikaa"],
-    "team_k": ["karthika", "akshaya devi", "keerthana", "jani priya", "rohitha", "abinaya"],
+    # Note: Janipriya's timesheet FULLNAME is "Janipriya Saravanan" (one word),
+    # not "Jani Priya" — kept both spellings so a future rename still matches.
+    "team_k": ["karthika", "akshaya devi", "keerthana", "jani priya", "janipriya", "rohitha", "abinaya"],
     "team_l": ["nasreen", "krishna", "swathi", "sarika", "razia"],
     "team_m": ["pavithra", "bhuva", "Reshma Lakshmanaboopathi"],
     "team_n": ["vino", "shivani", "snega"],
@@ -3284,21 +3286,26 @@ async def _team_response(team_id: str, period: str):
         if customer:
             bucket["matchedCustomers"].add(customer)
 
+    org_per_preparer = PER_PREPARER_TARGET.get(period, PER_PREPARER_TARGET["monthly"])
     clients_data = []
     for org_name, h in orgs.items():
         actual = h["billable"] + h["nonBillable"]
-        committed = h["estHrs"] or 0
+        # Period-aware committed: org_committed = (preparers on this org) ×
+        # per-preparer target for the period. Falls back to the implied count
+        # from the configured monthly estHrs (estHrs / 320, min 1) when no one
+        # has logged hours yet — otherwise day-0 of a period would show 0h
+        # committed and make the row useless.
+        staff_count = len(h["staff"])
+        if staff_count == 0 and h["isConfig"] and (h["estHrs"] or 0) > 0:
+            implied_members = max(1, int(round((h["estHrs"] or 0) / 320)))
+            org_member_count = implied_members
+        else:
+            org_member_count = staff_count
+        committed = round(org_member_count * org_per_preparer, 1) if org_member_count > 0 else 0
         util = round(actual / committed * 100, 1) if committed > 0 else 0
         gap  = round(actual - committed, 1) if committed > 0 else 0.0
         if committed > 0:
-            if util > 95:
-                status = "OVER TARGET"
-            elif util >= 75:
-                status = "ON TARGET"
-            elif util < 50:
-                status = "CRITICAL"
-            else:
-                status = "BELOW TARGET"
+            status = target_status_label(util)
         else:
             status = "PLACEHOLDER" if h["isConfig"] else "OTHER"
         clients_data.append({
@@ -3312,7 +3319,10 @@ async def _team_response(team_id: str, period: str):
             "efficiency":  util,
             "utilPct":     util,
             "gap":         gap,
-            "staffCount":  len(h["staff"]),
+            "staffCount":  staff_count,
+            "memberCount": org_member_count,
+            "perPreparerTarget": org_per_preparer,
+            "monthlyEstHrs":     h["estHrs"] or 0,
             "rowsMatched":     h["rowsMatched"],
             "matchedCustomers": sorted(h["matchedCustomers"]),
             "delays":      0,
