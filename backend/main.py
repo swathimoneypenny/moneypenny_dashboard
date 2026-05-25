@@ -3403,9 +3403,20 @@ async def _team_response(team_id: str, period: str):
         for k, v in sorted(monthly_buckets.items())
     ]
 
+    # Period-aware team-level target. Members come from the matched staff for
+    # this period — if zero (e.g. nobody logged hours today), fall back to the
+    # configured roster/admin count so the target isn't 0.
+    team_member_count = max(len(staff_names_found), _team_member_count(team_id), 1)
+    per_preparer_target = PER_PREPARER_TARGET.get(period, PER_PREPARER_TARGET["monthly"])
+    team_target = round(per_preparer_target * team_member_count, 1)
+    target_util_pct = round(total_b / team_target * 100, 1) if team_target > 0 else 0.0
+    team_target_status = target_status_label(target_util_pct)
+
     print(f"[_team_response] team={team_id} period={period} "
           f"rosterCount={len(roster)} totalRows={total_rows} matchedRows={matched_rows} "
-          f"orgs={len(clients_data)} eodRows={len(eod_rows)} months={len(monthly_trend)}")
+          f"orgs={len(clients_data)} eodRows={len(eod_rows)} months={len(monthly_trend)} "
+          f"members={team_member_count} perPreparer={per_preparer_target} target={team_target} "
+          f"utilPct={target_util_pct}% status={team_target_status}")
 
     if roster and len(roster) == 1 and matched_rows == 0 and total_rows > 0:
         print(f"[WARN] {team_id} roster has only 1 entry {roster!r} but matched 0 rows. "
@@ -3427,10 +3438,17 @@ async def _team_response(team_id: str, period: str):
         "clients":          clients_data,
         "organizations":    [{**c, "org": c["name"]} for c in clients_data],
         "summary": {
-            "totalCommitted":    round(eod_committed, 1),
+            "totalCommitted":    team_target,
+            "eodCommitted":      round(eod_committed, 1),
             "totalBillable":     total_b,
             "totalNonBillable":  total_nb,
-            "overallEfficiency": round(total_b / total * 100, 1) if total > 0 else 0,
+            "totalUtilized":     total_b,
+            "totalTarget":       team_target,
+            "perPreparerTarget": per_preparer_target,
+            "memberCount":       team_member_count,
+            "targetUtilPct":     target_util_pct,
+            "targetStatus":      team_target_status,
+            "overallEfficiency": target_util_pct,
             "totalDelays":       total_delays,
         },
         "monthlyTrend":       monthly_trend,
@@ -4028,23 +4046,45 @@ def _team_member_count(team_id: str) -> int:
     return 1  # Avoid div-by-zero downstream
 
 
+# Fixed per-preparer utilization targets (in hours).
+# Daily = 16h, Weekly = 16 × 5 working days = 80h, Monthly = 16 × 20 working days = 320h.
+# 142h is the MAX cap per preparer per week (not a target) and is enforced elsewhere.
+PER_PREPARER_TARGET: dict[str, float] = {
+    "today":   16.0,
+    "weekly":  80.0,
+    "monthly": 320.0,
+}
+
+
 def get_employee_committed_hours(team_id: str, period: str) -> float:
-    """Per-employee target hours for the period.
-    Monthly = (sum of TEAM_CLIENTS[team_id].estHrs) / member_count.
-    Weekly = monthly / 4.33, today = monthly / today.day.
-    Returns 0.0 if the team has no estHrs configured."""
-    clients_cfg = TEAM_CLIENTS.get(team_id) or []
-    total_est = sum(float(c.get("estHrs") or 0) for c in clients_cfg)
-    if total_est <= 0:
-        return 0.0
-    members = max(1, _team_member_count(team_id))
-    monthly = total_est / members
-    if period == "weekly":
-        return round(monthly / 4.33, 1)
-    if period == "today":
-        day = max(1, datetime.now().day)
-        return round(monthly / day, 1)
-    return round(monthly, 1)
+    """Per-preparer target hours for the period.
+    Fixed: today=16h, weekly=80h, monthly=320h. team_id is accepted for
+    signature compatibility but not used — the target is uniform across teams.
+    """
+    return PER_PREPARER_TARGET.get(period, PER_PREPARER_TARGET["monthly"])
+
+
+def get_team_target_hours(team_id: str, period: str) -> float:
+    """Team-level target = per-preparer target × member count for the period."""
+    per_preparer = PER_PREPARER_TARGET.get(period, PER_PREPARER_TARGET["monthly"])
+    members      = max(1, _team_member_count(team_id))
+    return round(per_preparer * members, 1)
+
+
+def target_status_label(util_pct: float) -> str:
+    """TL-approved status thresholds (verified 2026-05-25):
+      <80%      → BELOW TARGET
+      80-100%   → ON TRACK
+      100-120%  → ABOVE TARGET
+      >=120%    → CRITICAL
+    """
+    if util_pct < 80:
+        return "BELOW TARGET"
+    if util_pct < 100:
+        return "ON TRACK"
+    if util_pct < 120:
+        return "ABOVE TARGET"
+    return "CRITICAL"
 
 
 def _employee_match(row_name: str, query: str) -> bool:
@@ -5582,6 +5622,142 @@ async def clear_cache():
     _team_delay_questions_cache.clear()
     _departure_analysis_cache.clear()
     return {"ok": True, "status": "all caches cleared", "time": datetime.now().isoformat()}
+
+
+@app.post("/api/team/{team_id}/refresh")
+async def refresh_team(team_id: str):
+    """Force-clear all caches that affect this team's dashboard so the next
+    fetch hits the timesheet API fresh. Used by the dashboard's Refresh button
+    when displayed hours diverge from the source timesheet."""
+    if team_id not in TEAM_LETTER_MAP:
+        return {"ok": False, "error": f"unknown team_id {team_id}"}
+    cleared: list[str] = []
+    for p in ("today", "weekly", "monthly"):
+        if _team_cache.pop(f"{team_id}_{p}", None) is not None:
+            cleared.append(f"team:{p}")
+        if _leaderboard_cache.pop(f"{team_id}_{p}", None) is not None:
+            cleared.append(f"leaderboard:{p}")
+    # Rows cache is shared across teams; nuking it forces a re-fetch on the
+    # next request for any team, which is the only way to pick up newly-edited
+    # timesheet entries.
+    rows_keys = list(_rows_cache.keys())
+    _rows_cache.clear()
+    cleared.extend(f"rows:{k}" for k in rows_keys)
+    return {
+        "ok":      True,
+        "team_id": team_id,
+        "cleared": cleared,
+        "time":    datetime.now().isoformat(),
+    }
+
+
+@app.get("/api/debug/user-lookup")
+def debug_user_lookup(name: str = ""):
+    """Find timesheet users whose name partially matches `name`. Returns the
+    matching user records + which team_id (if any) they map to via roster or
+    admin hierarchy. Used to diagnose missing-from-team-list bugs."""
+    q = (name or "").strip().lower()
+    if not q:
+        return {"error": "missing ?name= parameter"}
+    users = _get_users_cached() or []
+    q_squashed = q.replace(" ", "")
+    matches: list[dict] = []
+    for u in users:
+        fn = (u.get("FULLNAME", "") or "").strip()
+        first = (u.get("FIRSTNAME", "") or "").strip()
+        last  = (u.get("LASTNAME", "") or "").strip()
+        haystack = f"{fn} {first} {last}".lower()
+        if q in haystack or q_squashed in haystack.replace(" ", ""):
+            admin_id = str(u.get("ADMINUSERID") or "").strip()
+            user_id  = str(u.get("USERID") or "").strip()
+            team_via_admin: str | None = None
+            for tid, aid in TEAM_ADMIN_MAP.items():
+                if admin_id == aid or user_id == aid:
+                    team_via_admin = tid
+                    break
+            teams_via_roster: list[str] = []
+            for tid, roster in TEAM_ROSTERS.items():
+                for kw in roster or []:
+                    if _kw_matches_name(kw, fn):
+                        teams_via_roster.append(f"{tid} (kw={kw!r})")
+                        break
+            matches.append({
+                "USERID":            user_id,
+                "FULLNAME":          fn,
+                "FIRSTNAME":         first,
+                "LASTNAME":          last,
+                "EMAIL":             u.get("EMAIL", ""),
+                "ADMINUSERID":       admin_id,
+                "ACTIVE":            u.get("ACTIVE", u.get("STATUS", "")),
+                "team_via_admin":    team_via_admin,
+                "teams_via_roster":  teams_via_roster,
+            })
+    return {
+        "query":   name,
+        "userCount":  len(users),
+        "matchCount": len(matches),
+        "matches":    matches,
+        "hint":       (
+            "If a user appears with team_via_admin=null and teams_via_roster=[], "
+            "they are not assigned to any team. Add their FULLNAME (or a unique "
+            "prefix) to TEAM_ROSTERS[team_id] in backend/main.py and call "
+            "/api/team/{team_id}/refresh."
+        ),
+    }
+
+
+@app.get("/api/debug/user-hours")
+def debug_user_hours(user: str = "", date: str = ""):
+    """Raw timesheet entries for a single user on a specific date (YYYY-MM-DD).
+    Used to verify whether dashboard numbers match the upstream timesheet."""
+    q = (user or "").strip().lower()
+    d = (date or "").strip()
+    if not q or not d:
+        return {"error": "usage: /api/debug/user-hours?user=<name>&date=YYYY-MM-DD"}
+    try:
+        datetime.strptime(d, "%Y-%m-%d")
+    except ValueError:
+        return {"error": f"date must be YYYY-MM-DD, got {date!r}"}
+    rows = get_cached_rows(d, d)
+    q_tokens = [t for t in re.split(r"[\s\-\.,]+", q) if t]
+    matches: list[dict] = []
+    total = 0.0
+    billable_total = 0.0
+    for r in rows:
+        nm = (r.get("name") or "").lower().strip()
+        n_tokens = [t for t in re.split(r"[\s\-\.,]+", nm) if t]
+        if not all(any(nt.startswith(qt) for nt in n_tokens) for qt in q_tokens):
+            continue
+        h = float(r.get("hours") or 0)
+        total += h
+        if r.get("billable"):
+            billable_total += h
+        matches.append({
+            "name":          r.get("name"),
+            "date":          r.get("date"),
+            "hours":         h,
+            "billable":      bool(r.get("billable")),
+            "customer":      r.get("customer"),
+            "project":       r.get("project"),
+            "desc":          (r.get("desc") or "")[:200],
+            "lastChangedAt": r.get("lastChangedAt"),
+            "userid":        r.get("userid"),
+        })
+    return {
+        "query":         user,
+        "date":          d,
+        "rowsScanned":   len(rows),
+        "matchedRows":   len(matches),
+        "totalHours":    round(total, 2),
+        "billableHours": round(billable_total, 2),
+        "entries":       matches,
+        "hint":          (
+            "If matchedRows differs from what the user expects, the missing "
+            "entries either (a) were edited after the rows cache last refreshed "
+            "— call POST /api/team/{team_id}/refresh, or (b) are missing from "
+            "the upstream timesheet itself — instruct the user to re-log."
+        ),
+    }
 
 
 # ── EOD Sheet endpoints ───────────────────────────────────────────

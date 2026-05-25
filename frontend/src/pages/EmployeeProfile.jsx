@@ -20,11 +20,13 @@ const PERIODS = [
   { key: "monthly", label: "This Month" },
 ];
 
+// TL-approved thresholds (verified 2026-05-25):
+//   <80% yellow, 80–<100% green, 100–<120% orange, >=120% red.
 function utilColor(pct) {
-  if (pct < 75)   return C.red;
-  if (pct < 95)   return C.teal;
-  if (pct <= 120) return C.green;
-  return C.orange;
+  if (pct < 80)  return C.yellow;
+  if (pct < 100) return C.green;
+  if (pct < 120) return C.orange;
+  return C.red;
 }
 
 function initials(name) {

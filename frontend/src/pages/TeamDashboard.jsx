@@ -27,18 +27,23 @@ const PERIODS = [
   { key: "review",  label: "📋 Weekly Review" },
 ];
 
+// TL-approved thresholds (verified 2026-05-25):
+//   <80%       → BELOW TARGET  (yellow)
+//   80–<100%   → ON TRACK      (green)
+//   100–<120%  → ABOVE TARGET  (orange)
+//   >=120%     → CRITICAL      (red)
 function utilColor(pct) {
-  if (pct < 75)   return C.red;
-  if (pct < 95)   return C.teal;
-  if (pct <= 120) return C.green;
-  return C.orange;
+  if (pct < 80)   return C.yellow;
+  if (pct < 100)  return C.green;
+  if (pct < 120)  return C.orange;
+  return C.red;
 }
 
 function statusInfo(pct) {
-  if (pct < 75)   return { label: "BELOW TARGET", color: C.red,    bg: C.statusRed };
-  if (pct < 95)   return { label: "ON TARGET",    color: C.teal,   bg: C.statusGreen };
-  if (pct <= 120) return { label: "OVER TARGET",  color: C.green,  bg: C.statusGreen };
-  return { label: "CRITICAL", color: C.orange, bg: C.statusOrange };
+  if (pct < 80)   return { label: "BELOW TARGET", color: C.yellow, bg: C.statusYellow };
+  if (pct < 100)  return { label: "ON TRACK",     color: C.green,  bg: C.statusGreen };
+  if (pct < 120)  return { label: "ABOVE TARGET", color: C.orange, bg: C.statusOrange };
+  return { label: "CRITICAL", color: C.red, bg: C.statusRed };
 }
 
 function delayColor(count) {
@@ -591,10 +596,10 @@ function PerfTable({ orgs }) {
 
       <div style={{ display: "flex", gap: 16, marginTop: 14, flexWrap: "wrap" }}>
         {[
-          { color: C.red,    label: "< 75% — Below Target" },
-          { color: C.teal,   label: "75–95% — On Target" },
-          { color: C.green,  label: "95–120% — Over Target" },
-          { color: C.orange, label: "> 120% — Critical" },
+          { color: C.yellow, label: "< 80% — Below Target" },
+          { color: C.green,  label: "80–100% — On Track" },
+          { color: C.orange, label: "100–120% — Above Target" },
+          { color: C.red,    label: "≥ 120% — Critical" },
         ].map(({ color, label }) => (
           <div key={label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: C.muted }}>
             <div style={{ width: 10, height: 10, borderRadius: 2, background: color }} />
@@ -944,6 +949,8 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState(null);
+  const [forceRefreshing, setForceRefreshing] = useState(false);
+  const [refreshNotice, setRefreshNotice] = useState("");
   const abortRef = useRef(null);
 
   const fetchData = useCallback((silent = false) => {
@@ -981,6 +988,27 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
   const isLive = period === "today";
   const refreshSilent = useCallback(() => fetchData(true), [fetchData]);
   const tickNow = useAutoRefresh(refreshSilent, isLive, lastRefreshed);
+
+  // Force-refresh: clears server-side caches for this team, then re-fetches.
+  // Use when displayed hours diverge from the timesheet source.
+  const forceRefresh = useCallback(async () => {
+    setForceRefreshing(true);
+    setRefreshNotice("");
+    try {
+      const r = await authFetch(`/api/team/${teamId}/refresh`, { method: "POST" });
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok) {
+        setRefreshNotice(`✓ Cache cleared — fetching fresh data…`);
+      } else {
+        setRefreshNotice(`Refresh failed: ${j?.error || r.status}`);
+      }
+    } catch (err) {
+      setRefreshNotice(`Refresh failed: ${err?.message || String(err)}`);
+    }
+    fetchData(false);
+    setForceRefreshing(false);
+    setTimeout(() => setRefreshNotice(""), 5000);
+  }, [teamId, fetchData]);
 
   // Leaderboard for the active period (drives Team Members table).
   useEffect(() => {
@@ -1294,6 +1322,37 @@ ${clients.map((o) => (
           onRefresh={() => fetchData(false)}
         />
 
+        <button
+          onClick={forceRefresh}
+          disabled={forceRefreshing || loading}
+          title="Clear server cache and re-fetch from timesheet API. Use if displayed hours look stale."
+          style={{
+            background: forceRefreshing ? C.surface : "transparent",
+            border: `1px solid ${C.border}`,
+            color: forceRefreshing ? C.muted : C.sec,
+            borderRadius: 8,
+            padding: "6px 12px",
+            cursor: forceRefreshing || loading ? "not-allowed" : "pointer",
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: "'DM Sans', sans-serif",
+            transition: "all 0.15s",
+            opacity: forceRefreshing || loading ? 0.6 : 1,
+          }}
+          onMouseEnter={(e) => {
+            if (forceRefreshing || loading) return;
+            e.currentTarget.style.borderColor = C.teal;
+            e.currentTarget.style.color = C.teal;
+          }}
+          onMouseLeave={(e) => {
+            if (forceRefreshing || loading) return;
+            e.currentTarget.style.borderColor = C.border;
+            e.currentTarget.style.color = C.sec;
+          }}
+        >
+          {forceRefreshing ? "⟳ Refreshing…" : "⟳ Refresh"}
+        </button>
+
         <div style={{ textAlign: "right", marginLeft: "auto" }}>
           <div
             style={{
@@ -1355,6 +1414,22 @@ ${clients.map((o) => (
             }}
           >
             <strong style={{ color: C.red }}>Error:</strong> {data.error}
+          </div>
+        )}
+
+        {refreshNotice && (
+          <div
+            style={{
+              background: `${C.teal}14`,
+              border: `1px solid ${C.teal}55`,
+              borderLeft: `3px solid ${C.teal}`,
+              borderRadius: 8,
+              padding: "8px 14px",
+              fontSize: 12,
+              color: C.pri,
+            }}
+          >
+            {refreshNotice}
           </div>
         )}
 
@@ -1564,6 +1639,13 @@ ${clients.map((o) => (
             <PerfTable orgs={clients} />
           )}
         </div>
+        )}
+
+        {!data?.needsRosterSetup && (
+          <UserSelectorDropdown
+            members={leaderboard?.members ?? null}
+            onSelect={(name) => onSelectEmployee && onSelectEmployee({ teamId, employeeName: name, teamName: displayLabel })}
+          />
         )}
 
         {!data?.needsRosterSetup && (
@@ -1791,6 +1873,81 @@ function CurrentlyActiveWidget({ members, onSelect }) {
 
 
 // ── Team Members table ────────────────────────────────────────────
+// ── User dropdown selector ─────────────────────────────────────────
+// TL-requested shortcut: pick a member from a dropdown to jump straight to
+// their detail view. Augments the table below (does not replace it).
+function UserSelectorDropdown({ members, onSelect }) {
+  const [selected, setSelected] = useState("");
+  const sorted = useMemo(() => {
+    if (!Array.isArray(members)) return [];
+    return [...members].sort((a, b) =>
+      String(a.name || "").localeCompare(String(b.name || ""))
+    );
+  }, [members]);
+
+  if (members === null) {
+    return (
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+        <div className="kpi-skeleton" style={{ height: 40 }} />
+      </div>
+    );
+  }
+  if (sorted.length === 0) return null;
+
+  function handleChange(e) {
+    const name = e.target.value;
+    setSelected(name);
+    if (name && onSelect) onSelect(name);
+  }
+
+  return (
+    <div
+      style={{
+        background: C.card,
+        border: `1px solid ${C.border}`,
+        borderRadius: 12,
+        padding: "16px 20px",
+        display: "flex",
+        alignItems: "center",
+        gap: 14,
+        flexWrap: "wrap",
+      }}
+    >
+      <span style={{ fontSize: 11, fontWeight: 600, color: C.muted, textTransform: "uppercase", letterSpacing: 0.8 }}>
+        Select User
+      </span>
+      <select
+        value={selected}
+        onChange={handleChange}
+        style={{
+          background: C.surface,
+          border: `1px solid ${C.border}`,
+          borderRadius: 8,
+          color: C.pri,
+          padding: "8px 14px",
+          fontSize: 13,
+          fontFamily: "'DM Sans', sans-serif",
+          minWidth: 260,
+          cursor: "pointer",
+          outline: "none",
+        }}
+      >
+        <option value="">— Pick a member to open their profile —</option>
+        {sorted.map((m) => (
+          <option key={m.name} value={m.name}>
+            {m.name}
+            {typeof m.utilPct === "number" ? ` (${m.utilPct.toFixed(0)}% util)` : ""}
+          </option>
+        ))}
+      </select>
+      <span style={{ fontSize: 11, color: C.muted, marginLeft: "auto" }}>
+        {sorted.length} member{sorted.length === 1 ? "" : "s"} · click table row or use dropdown
+      </span>
+    </div>
+  );
+}
+
+
 function TeamMembersTable({ members, onSelect }) {
   const [sort, setSort] = useState({ col: "utilPct", dir: "asc" });
   const sorted = useMemo(() => {
