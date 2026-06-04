@@ -28,3 +28,8 @@ Thumbs.db
 
 # Build artifacts
 *.parquet
+
+# AWS deployment artifacts — never commit private keys
+deploy/aws/*.pem
+deploy/aws/.env
+deploy/aws/instance-info.txt

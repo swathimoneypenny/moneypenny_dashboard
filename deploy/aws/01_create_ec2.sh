@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────────
+# 01_create_ec2.sh — Provision an EC2 instance for the MoneyPenny Dashboard
+#
+# Run this ONCE on your local machine after `aws configure`. It creates:
+#   • Security group  : moneypenny-dashboard-sg  (ports 22 / 80 / 443 / 8000 / 5173)
+#   • Key pair        : moneypenny-key           (private key → ~/.ssh/moneypenny-key.pem)
+#   • EC2 instance    : t2.micro, Ubuntu 22.04 LTS, 30 GB gp3
+#
+# Idempotent: re-running re-uses existing security group / key pair, but will
+# launch a NEW instance each time (the previous one keeps running). To launch
+# only one, terminate the old one first via the AWS console or `aws ec2`.
+# ─────────────────────────────────────────────────────────────────────────────
+set -euo pipefail
+
+REGION="${AWS_REGION:-ap-southeast-2}"
+SG_NAME="moneypenny-dashboard-sg"
+KEY_NAME="moneypenny-key"
+KEY_PATH="${HOME}/.ssh/${KEY_NAME}.pem"
+INSTANCE_NAME="moneypenny-dashboard"
+INSTANCE_TYPE="t2.micro"
+VOLUME_SIZE_GB=30
+INFO_FILE="$(dirname "$0")/instance-info.txt"
+
+echo "▶ Region: ${REGION}"
+echo "▶ Verifying AWS CLI auth…"
+aws sts get-caller-identity --region "${REGION}" --output text >/dev/null
+
+# ── Security group ──────────────────────────────────────────────────────────
+echo "▶ Ensuring security group ${SG_NAME} exists…"
+SG_ID=$(aws ec2 describe-security-groups \
+  --region "${REGION}" \
+  --filters "Name=group-name,Values=${SG_NAME}" \
+  --query 'SecurityGroups[0].GroupId' \
+  --output text 2>/dev/null || echo "None")
+
+if [[ "${SG_ID}" == "None" || -z "${SG_ID}" ]]; then
+  echo "  · creating new security group"
+  SG_ID=$(aws ec2 create-security-group \
+    --region "${REGION}" \
+    --group-name "${SG_NAME}" \
+    --description "MoneyPenny Dashboard — web + API ports" \
+    --query 'GroupId' --output text)
+  # Ingress rules — backend (8000) and Vite dev (5173) are opened per spec;
+  # in production the user can later restrict 8000/5173 to the VPC once nginx
+  # is the only public-facing entry point.
+  for PORT in 22 80 443 8000 5173; do
+    aws ec2 authorize-security-group-ingress \
+      --region "${REGION}" \
+      --group-id "${SG_ID}" \
+      --protocol tcp --port "${PORT}" --cidr 0.0.0.0/0 \
+      --output text >/dev/null
+  done
+  echo "  · security group created: ${SG_ID}"
+else
+  echo "  · re-using existing security group: ${SG_ID}"
+fi
+
+# ── Key pair ────────────────────────────────────────────────────────────────
+echo "▶ Ensuring key pair ${KEY_NAME} exists…"
+mkdir -p "${HOME}/.ssh"
+if aws ec2 describe-key-pairs --region "${REGION}" --key-names "${KEY_NAME}" \
+    --output text >/dev/null 2>&1; then
+  echo "  · key pair already exists in AWS"
+  if [[ ! -f "${KEY_PATH}" ]]; then
+    echo "  ✖ ABORT: ${KEY_PATH} missing locally but AWS already has ${KEY_NAME}."
+    echo "    Either restore the .pem file from backup, or delete the AWS key:"
+    echo "    aws ec2 delete-key-pair --region ${REGION} --key-name ${KEY_NAME}"
+    echo "    and re-run this script to generate a fresh pair."
+    exit 1
+  fi
+else
+  echo "  · creating new key pair → ${KEY_PATH}"
+  aws ec2 create-key-pair \
+    --region "${REGION}" \
+    --key-name "${KEY_NAME}" \
+    --query 'KeyMaterial' --output text > "${KEY_PATH}"
+  chmod 400 "${KEY_PATH}"
+  echo "  · key saved (chmod 400 applied)"
+fi
+
+# ── Latest Ubuntu 22.04 LTS AMI for this region ─────────────────────────────
+echo "▶ Resolving latest Ubuntu 22.04 LTS AMI…"
+AMI_ID=$(aws ssm get-parameter \
+  --region "${REGION}" \
+  --name "/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id" \
+  --query 'Parameter.Value' --output text)
+echo "  · AMI: ${AMI_ID}"
+
+# ── Launch instance ─────────────────────────────────────────────────────────
+echo "▶ Launching ${INSTANCE_TYPE} instance…"
+INSTANCE_ID=$(aws ec2 run-instances \
+  --region "${REGION}" \
+  --image-id "${AMI_ID}" \
+  --instance-type "${INSTANCE_TYPE}" \
+  --key-name "${KEY_NAME}" \
+  --security-group-ids "${SG_ID}" \
+  --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"VolumeSize\":${VOLUME_SIZE_GB},\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}]" \
+  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${INSTANCE_NAME}}]" \
+  --query 'Instances[0].InstanceId' --output text)
+echo "  · instance id: ${INSTANCE_ID}"
+
+echo "▶ Waiting for instance to reach 'running' state (≈30-60s)…"
+aws ec2 wait instance-running --region "${REGION}" --instance-ids "${INSTANCE_ID}"
+
+PUBLIC_IP=$(aws ec2 describe-instances \
+  --region "${REGION}" \
+  --instance-ids "${INSTANCE_ID}" \
+  --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+PUBLIC_DNS=$(aws ec2 describe-instances \
+  --region "${REGION}" \
+  --instance-ids "${INSTANCE_ID}" \
+  --query 'Reservations[0].Instances[0].PublicDnsName' --output text)
+
+cat > "${INFO_FILE}" <<EOF
+# Generated by 01_create_ec2.sh — do not commit (covered by .gitignore)
+INSTANCE_ID=${INSTANCE_ID}
+PUBLIC_IP=${PUBLIC_IP}
+PUBLIC_DNS=${PUBLIC_DNS}
+REGION=${REGION}
+SECURITY_GROUP=${SG_ID}
+KEY_PATH=${KEY_PATH}
+EOF
+
+echo
+echo "═══════════════════════════════════════════════════════════════"
+echo " ✓ EC2 instance ready"
+echo "═══════════════════════════════════════════════════════════════"
+echo " Instance ID : ${INSTANCE_ID}"
+echo " Public IP   : ${PUBLIC_IP}"
+echo " Public DNS  : ${PUBLIC_DNS}"
+echo " Region      : ${REGION}"
+echo " Key file    : ${KEY_PATH}"
+echo " Info saved  : ${INFO_FILE}"
+echo
+echo " Connect with:"
+echo "   ssh -i ${KEY_PATH} ubuntu@${PUBLIC_IP}"
+echo
+echo " Next: copy 02_setup_server.sh up there and run it (see README.md)."
+echo "═══════════════════════════════════════════════════════════════"
