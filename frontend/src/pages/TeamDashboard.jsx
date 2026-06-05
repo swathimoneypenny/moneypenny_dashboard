@@ -1656,7 +1656,7 @@ ${clients.map((o) => (
         )}
         </>)}
       </div>
-      <DelayDetailModal day={selectedDay} onClose={() => setSelectedDay(null)} />
+      <DelayDetailModal day={selectedDay} teamId={teamId} onClose={() => setSelectedDay(null)} />
     </div>
   );
 }

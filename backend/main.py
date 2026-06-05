@@ -1965,12 +1965,135 @@ def get_weekly_review(team_id: str, week_offset: int = 0) -> dict:
 
 
 # ── Per-client "Delays" tab integration ────────────────────────────
-# Each team's main EOD sheet has one tab per configured client (e.g.
-# "Bookkeeping Doctor") with day-level batch totals. The actual delay
-# questions live in a SEPARATE tab named "{client} Delays" (e.g.
-# "Bookkeeping Doctor Delays") with one row per posted question and a
-# resolution-notes column for completed items.
-_DELAYS_TAB_MATCH_TTL = 3600  # 1 h
+# Each team's main EOD sheet has one tab per client with day-level batch
+# totals. The actual delay questions live in SEPARATE tabs whose GIDs are
+# documented below (TLs gave us the canonical mapping — relying on tab
+# *name* probes was unreliable because leads renamed tabs frequently).
+#
+# Column layout in every Delays tab (TL-confirmed 2026-06-05):
+#   0 Date  1 S.No.  2 File Name  3 Workflow Status  4 Reason
+#   5 Question Posted  6 Client reply  7 MP reply  8 Status  9 Close date
+#
+# `DELAYS_TAB_GIDS[team_id][client_key]` → gid string. client_key is a
+# free-form lowercase label the TL recognizes; it surfaces in the API
+# response as `client_name` after we Title-Case it.
+DELAYS_TAB_COLUMNS = {
+    "date":             0,
+    "serial_no":        1,
+    "file_name":        2,
+    "workflow_status":  3,
+    "reason":           4,
+    "question":         5,
+    "client_reply":     6,
+    "mp_reply":         7,
+    "status":           8,
+    "close_date":       9,
+}
+
+DELAYS_TAB_GIDS: dict[str, dict[str, str]] = {
+    "team_a": {
+        "bookkeeping doctor":   "1721105744",
+        "ollin balance":        "213832720",
+        "24HR Bookkeeper":      "1240442985",
+    },
+    "team_b": {
+        "Nisivoccia":           "146469907",
+        "Katy Advisors":        "1349962771",
+        "cbms":                 "2018676923",
+        "back office people":   "426401586",
+    },
+    "team_c": {
+        "financial synergy":    "1911560805",
+        "neve":                 "1323234528",
+        "radicle sci":          "1626887593",
+        "rdg tax":              "456000129",
+        "sambrono service":     "1911560805",
+        "stay rafa":            "1713393298",
+    },
+    "team_d": {
+        "financly":             "736413282",
+        "ais solutions":        "1283683586",
+        "smith bookkeeping":    "1173306991",
+    },
+    "team_e": {
+        "acs":                  "1718260091",
+    },
+    # team_f: TL supplied client name "Pereira Azevedo" but no GID — left
+    # empty until the GID is provided. _build_team_delays will simply skip
+    # this team's Delays section.
+    "team_f": {},
+    "team_g": {
+        "manzelli":             "1255292486",
+        "putman accounting":    "897073748",
+        "ezledger":             "568156373",
+        "propertrust":          "1972853558",
+        "artesani":             "1327466892",
+        "mintage":              "1972095391",
+        "oh my roi":            "1845759061",
+    },
+    "team_h": {
+        "jb advisory":          "79293325",
+    },
+    "team_i": {
+        "core4":                "1733835502",
+        "redmond":              "227530337",
+        "soco":                 "1560685342",
+    },
+    "team_j": {
+        "gfa":                  "652109970",
+    },
+    "team_k": {
+        "portnoy":              "1016105895",
+        "empower accounting":   "692364230",
+        "modern cpa":           "1054202184",
+    },
+    "team_l": {
+        "lah":                  "641886372",
+        "taxsense":             "1595692974",
+        "officeheads":          "419095802",
+        "sdc groups":           "1187817497",
+        "webbooks":             "1536427229",
+        "baker books":          "2133646169",
+    },
+    "team_m": {
+        "abs":                  "1912713326",
+        "equity camps":         "717863282",
+        "daa cpa":              "2126486701",
+        "porkorny":             "1265454301",
+        "tax with jones":       "872413982",
+        "kacey":                "1881407505",
+        "happy soul":           "992676495",
+        "shane butler":         "250473014",
+        "sibylline":            "516412081",
+        "helvitica":            "2057092751",
+    },
+    "team_n": {
+        "tim thomson":          "131850060",
+        "fit profit solution":  "1658682498",
+        "beacon advisor":       "971993840",
+    },
+    "team_t": {
+        "wiebe":                "1773308048",
+    },
+}
+
+# Rows whose Status / Workflow Status / Question text contains any of these
+# tokens are placeholder noise and never make it into the API response.
+_DELAYS_PLACEHOLDER_TOKENS = (
+    "no query to post",
+    "no query posted",
+    "no question to post",
+    "no question posted",
+)
+
+# CSV cache keyed by (sheet_id, gid) — 5 min TTL per spec.
+_delays_csv_cache: dict[tuple[str, str], dict] = {}
+_DELAYS_CSV_TTL = 300
+
+
+
+_DELAYS_TAB_MATCH_TTL = 3600  # 1 h — resolver cache (which tab name matched)
+_DELAYS_QUESTIONS_TTL = 300   # 5 min — aggregated questions cache, matches spec
 # (team_id, client_name) -> {at, tab_name | None, csv_text | None, candidates}
 _delays_tab_match_cache: dict[tuple[str, str], dict] = {}
 # team_id -> {at, questions: list[dict]} — flattened across all configured clients
@@ -2213,7 +2336,7 @@ def _get_team_delay_questions(team_id: str) -> list[dict]:
     for the team. Each entry carries a `clientName` field so the modal can
     show provenance. Cached per team for 1 h."""
     cached = _team_delay_questions_cache.get(team_id)
-    if cached and (datetime.now() - cached["at"]).total_seconds() < _DELAYS_TAB_MATCH_TTL:
+    if cached and (datetime.now() - cached["at"]).total_seconds() < _DELAYS_QUESTIONS_TTL:
         return cached["questions"]
 
     clients = TEAM_CLIENTS.get(team_id) or []
@@ -4758,6 +4881,408 @@ async def debug_delays_tab_endpoint(team_id: str | None = None, client: str | No
         }, status_code=200)
 
 
+_DELAY_COMPLETION_KEYWORDS = ("done", "fixed", "closed", "completed", "resolved")
+
+
+def _reply_indicates_completion(text: str) -> bool:
+    """True iff a reply field starts with (or equals) one of the completion
+    keywords. Conservative — long replies that merely *mention* 'done' in the
+    middle of a sentence don't qualify."""
+    s = (text or "").lower().strip()
+    if not s:
+        return False
+    for kw in _DELAY_COMPLETION_KEYWORDS:
+        if s == kw or s.startswith(kw + " ") or s.startswith(kw + "."):
+            return True
+    return False
+
+
+def _normalize_delay_status(
+    raw_status: str,
+    close_date: str = "",
+    client_reply: str = "",
+    mp_reply: str = "",
+    workflow_status: str = "",
+) -> str:
+    """Map a Delays-tab row → one of: completed / in_progress / open.
+
+    Priority order (TL-confirmed 2026-06-05):
+      1. close_date present → completed (most authoritative signal)
+      2. Explicit Status column text matches a known token
+      3. workflow_status column says closed/done/completed
+      4. Client reply or MP reply starts with a completion keyword
+         (done / fixed / closed / completed / resolved)
+      5. Non-empty unknown Status text → in_progress
+      6. Default → open
+    """
+    # 1. Closure date wins regardless of what the Status column says.
+    if close_date and str(close_date).strip():
+        return "completed"
+
+    # 2. Explicit Status column.
+    s = (raw_status or "").lower().strip()
+    if s in ("closed", "done", "completed"):
+        return "completed"
+    if s in ("responsed", "responded", "response received"):
+        return "completed"
+    if s in ("waiting on client", "waiting on cleint", "waiting", "pending client"):
+        return "open"
+    if s == "no response":
+        return "open"
+
+    # 3. Workflow status column.
+    ws = (workflow_status or "").lower().strip()
+    if ws in ("closed", "done", "completed"):
+        return "completed"
+
+    # 4. Reply fields starting with a completion keyword.
+    if _reply_indicates_completion(client_reply) or _reply_indicates_completion(mp_reply):
+        return "completed"
+
+    # 5. Unknown but non-empty Status text → treat as in-progress.
+    if s:
+        return "in_progress"
+
+    # 6. Default.
+    return "open"
+
+
+def _delays_csv_url(sheet_id: str, gid: str) -> str:
+    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
+
+
+def _fetch_delays_csv(sheet_id: str, gid: str) -> str:
+    """Cached CSV fetch for a specific Delays tab (sheet_id + gid). Returns
+    the raw CSV text, or "" on any failure. 5-min cache per (sheet, gid)."""
+    if not sheet_id or not gid:
+        return ""
+    key = (sheet_id, gid)
+    entry = _delays_csv_cache.get(key)
+    now = datetime.now()
+    if entry and (now - entry["at"]).total_seconds() < _DELAYS_CSV_TTL:
+        return entry["csv"]
+    url = _delays_csv_url(sheet_id, gid)
+    try:
+        resp = requests.get(url, timeout=15, allow_redirects=True)
+        if resp.status_code != 200:
+            print(f"[delaysTab] fetch {gid} returned {resp.status_code}")
+            _delays_csv_cache[key] = {"at": now, "csv": ""}
+            return ""
+        csv_text = resp.text or ""
+    except Exception as e:
+        print(f"[delaysTab] fetch {gid} error: {e}")
+        _delays_csv_cache[key] = {"at": now, "csv": ""}
+        return ""
+    _delays_csv_cache[key] = {"at": now, "csv": csv_text}
+    return csv_text
+
+
+def _is_placeholder_delay_row(question: str, status_raw: str, workflow_status: str) -> bool:
+    """Skip 'No query to post' style sentinel rows that leads use to keep
+    the day's row count consistent. Matches any column where the token
+    appears."""
+    blob = " ".join((question or "", status_raw or "", workflow_status or "")).lower()
+    return any(t in blob for t in _DELAYS_PLACEHOLDER_TOKENS)
+
+
+def _client_display_name(client_key: str) -> str:
+    """Convert the lowercase mapping key into the form shown in the UI.
+    Conservative: only title-case lowercase entries; preserve mixed/upper
+    spellings the TL supplied verbatim (e.g. '24HR Bookkeeper')."""
+    if not client_key:
+        return ""
+    if any(c.isupper() for c in client_key):
+        return client_key
+    return client_key.title()
+
+
+def _shape_delay_entry_fixed(row: list[str], client_name: str, tab_gid: str) -> dict:
+    """Convert a raw CSV row (already validated to be a data row) into the
+    public API shape. Column positions come from DELAYS_TAB_COLUMNS."""
+    def col(name: str) -> str:
+        idx = DELAYS_TAB_COLUMNS[name]
+        return (row[idx] if idx < len(row) else "" or "").strip()
+
+    serial_raw   = col("serial_no")
+    date_posted  = col("date")
+    reason       = col("reason")
+    question     = col("question")
+    client_reply = col("client_reply")
+    mp_reply     = col("mp_reply")
+    status_raw   = col("status")
+    close_date   = col("close_date")
+    workflow     = col("workflow_status")
+    file_name    = col("file_name")
+
+    posted_norm   = _normalize_eod_date(date_posted)
+    closed_norm   = _normalize_eod_date(close_date)
+    status_norm   = _normalize_delay_status(
+        status_raw,
+        close_date=close_date,
+        client_reply=client_reply,
+        mp_reply=mp_reply,
+        workflow_status=workflow,
+    )
+
+    # Aging: completed → closed - posted; else today - posted.
+    days_aging = None
+    try:
+        posted_dt = _parse_eod_date(posted_norm) if posted_norm else None
+        if posted_dt:
+            if status_norm == "completed" and closed_norm:
+                closed_dt = _parse_eod_date(closed_norm)
+                if closed_dt:
+                    days_aging = max(0, (closed_dt - posted_dt).days)
+            if days_aging is None:
+                days_aging = max(0, (datetime.now() - posted_dt).days)
+    except Exception:
+        days_aging = None
+
+    try:
+        serial_no = int(float(serial_raw)) if serial_raw else None
+    except (ValueError, TypeError):
+        serial_no = serial_raw or None
+
+    return {
+        "serial_no":       serial_no,
+        "date_posted":     date_posted,
+        "date_posted_iso": posted_norm or None,
+        "reason":          reason,
+        "question":        question,
+        "client_reply":    client_reply,
+        "mp_reply":        mp_reply,
+        "status":          status_norm,
+        "status_raw":      status_raw,
+        "workflow_status": workflow,
+        "file_name":       file_name,
+        "close_date":      close_date,
+        "close_date_iso":  closed_norm or None,
+        "days_aging":      days_aging,
+        "client_name":     client_name,
+        "tab_gid":         tab_gid,
+    }
+
+
+def _parse_delays_csv_fixed(csv_text: str, client_name: str, tab_gid: str) -> list[dict]:
+    """Parse a Delays tab CSV using the fixed column layout. Skips the first
+    rows whose Question cell is empty / non-data (handles title rows AND the
+    column-header row regardless of how many header rows precede the data)."""
+    if not csv_text:
+        return []
+    reader = csv.reader(io.StringIO(csv_text))
+    rows = list(reader)
+    out: list[dict] = []
+    for row in rows:
+        if not row or not any((c or "").strip() for c in row):
+            continue
+        q_idx = DELAYS_TAB_COLUMNS["question"]
+        question = (row[q_idx] if q_idx < len(row) else "").strip()
+        if not question:
+            continue
+        # Skip the header row (case-insensitive match on "question posted" or
+        # similar) — it has a question column but it's the label, not data.
+        if question.lower() in ("question posted", "question", "questions posted", "query posted"):
+            continue
+        date_idx = DELAYS_TAB_COLUMNS["date"]
+        date_val = (row[date_idx] if date_idx < len(row) else "").strip()
+        # Title rows put non-date strings ("Delays Log" etc.) in column 0.
+        # Require either a parseable date OR a numeric serial number before
+        # accepting the row.
+        serial_idx = DELAYS_TAB_COLUMNS["serial_no"]
+        serial_val = (row[serial_idx] if serial_idx < len(row) else "").strip()
+        looks_like_data = False
+        if date_val and _parse_eod_date(date_val):
+            looks_like_data = True
+        else:
+            try:
+                float(serial_val)
+                looks_like_data = True
+            except (ValueError, TypeError):
+                pass
+        if not looks_like_data:
+            continue
+        status_idx     = DELAYS_TAB_COLUMNS["status"]
+        workflow_idx   = DELAYS_TAB_COLUMNS["workflow_status"]
+        status_raw     = (row[status_idx]   if status_idx   < len(row) else "").strip()
+        workflow_status = (row[workflow_idx] if workflow_idx < len(row) else "").strip()
+        if _is_placeholder_delay_row(question, status_raw, workflow_status):
+            continue
+        out.append(_shape_delay_entry_fixed(row, client_name, tab_gid))
+    return out
+
+
+_STATUS_SORT_ORDER = {"open": 0, "in_progress": 1, "completed": 2}
+
+
+def _sort_delays(delays: list[dict]) -> list[dict]:
+    """Spec sort order:
+      1. Open delays first (oldest first by days_aging desc)
+      2. In progress (oldest first by days_aging desc)
+      3. Completed last (newest first by days_aging asc — recently-closed wins)
+    """
+    def key(d: dict):
+        bucket = _STATUS_SORT_ORDER.get(d.get("status") or "open", 0)
+        age = d.get("days_aging")
+        age = age if isinstance(age, (int, float)) else 0
+        # For open / in_progress: oldest first → invert age. For completed:
+        # newest first → straight age (smaller age comes first).
+        if bucket == 2:
+            return (bucket, age)
+        return (bucket, -age)
+    return sorted(delays, key=key)
+
+
+def _build_team_delays(team_id: str, date: str | None, client: str | None) -> dict:
+    """Read every configured Delays tab for the team, filter to ?date and/or
+    ?client, and return one section per client. Result shape per spec:
+
+        {team_id, team_label, date_filter, totals: {...}, clients: [
+            {client_name, tab_gid, delays: [...]}, ...
+        ]}
+
+    Always returns 200 with a structured `error` on misconfiguration so the
+    modal renders a useful message instead of a generic 500.
+    """
+    cfg = TEAM_LETTER_MAP.get(team_id)
+    if not cfg:
+        return {
+            "team_id":  team_id,
+            "error":    "unknown_team",
+            "error_detail": f"team_id {team_id!r} is not configured",
+            "clients":  [],
+            "totals":   {"total": 0, "open": 0, "in_progress": 0, "completed": 0},
+        }
+    sheet_id = cfg.get("sheetId")
+    if not sheet_id:
+        return {
+            "team_id":     team_id,
+            "team_label":  cfg.get("label", team_id),
+            "error":       "no_sheet_id",
+            "error_detail": (
+                f"Team {team_id!r} has no Google Sheet configured. "
+                f"Set SHEET_{team_id.upper()} env var or add sheetId in TEAM_LETTER_MAP."
+            ),
+            "clients":    [],
+            "totals":     {"total": 0, "open": 0, "in_progress": 0, "completed": 0},
+        }
+    gid_map = DELAYS_TAB_GIDS.get(team_id) or {}
+    if not gid_map:
+        return {
+            "team_id":     team_id,
+            "team_label":  cfg.get("label", team_id),
+            "sheet_id":    sheet_id,
+            "error":       "no_delays_tabs_configured",
+            "error_detail": (
+                f"No Delays-tab GIDs registered for {team_id!r}. "
+                f"Add an entry to DELAYS_TAB_GIDS in backend/main.py."
+            ),
+            "clients":    [],
+            "totals":     {"total": 0, "open": 0, "in_progress": 0, "completed": 0},
+        }
+
+    norm_date = _normalize_eod_date(date) if date else ""
+    client_filter_lc = (client or "").strip().lower()
+
+    sections: list[dict] = []
+    tab_errors: list[dict] = []
+    grand_total = 0
+    open_count = 0
+    in_progress_count = 0
+    completed_count = 0
+
+    for client_key, gid in gid_map.items():
+        display_name = _client_display_name(client_key)
+        if client_filter_lc and (
+            client_filter_lc != client_key.lower()
+            and client_filter_lc != display_name.lower()
+        ):
+            continue
+        csv_text = _fetch_delays_csv(sheet_id, gid)
+        if not csv_text:
+            tab_errors.append({
+                "client_name": display_name,
+                "tab_gid":     gid,
+                "error":       "fetch_failed_or_empty",
+            })
+            continue
+        try:
+            parsed = _parse_delays_csv_fixed(csv_text, display_name, gid)
+        except Exception as e:
+            print(f"[delaysTab] parse {gid} error: {e}")
+            tab_errors.append({
+                "client_name": display_name,
+                "tab_gid":     gid,
+                "error":       f"parse_error: {type(e).__name__}",
+            })
+            continue
+
+        if norm_date:
+            parsed = [
+                d for d in parsed
+                if (d.get("date_posted_iso") or "") == norm_date
+            ]
+        if not parsed:
+            sections.append({
+                "client_name": display_name,
+                "tab_gid":     gid,
+                "delays":      [],
+                "count":       0,
+            })
+            continue
+        parsed = _sort_delays(parsed)
+        for d in parsed:
+            grand_total += 1
+            s = d.get("status")
+            if s == "open":          open_count += 1
+            elif s == "in_progress": in_progress_count += 1
+            elif s == "completed":   completed_count += 1
+        sections.append({
+            "client_name": display_name,
+            "tab_gid":     gid,
+            "delays":      parsed,
+            "count":       len(parsed),
+        })
+
+    return {
+        "team_id":      team_id,
+        "team_label":   cfg.get("label", team_id),
+        "sheet_id":     sheet_id,
+        "date_filter":  norm_date or None,
+        "client_filter": client or None,
+        "totals": {
+            "total":        grand_total,
+            "open":         open_count,
+            "in_progress":  in_progress_count,
+            "completed":    completed_count,
+        },
+        "clients":     sections,
+        "tab_errors":  tab_errors,
+    }
+
+
+@app.get("/api/team/{team_id}/delays")
+async def team_delays_endpoint(
+    team_id: str,
+    date: str | None = None,
+    client: str | None = None,
+):
+    """Per-team question/answer feed pulled from the per-client `{Client} Delays`
+    tabs on the team's Google Sheet. Optional filters: ?date=YYYY-MM-DD and
+    ?client=<client-name>. Cached for 5 min via _DELAYS_QUESTIONS_TTL."""
+    try:
+        return await asyncio.to_thread(_build_team_delays, team_id, date, client)
+    except Exception as e:
+        import traceback
+        return JSONResponse({
+            "team_id":        team_id,
+            "error":          "unhandled_exception",
+            "error_class":    type(e).__name__,
+            "error_detail":   str(e),
+            "traceback_tail": traceback.format_exc().splitlines()[-6:],
+            "delays":         [],
+        }, status_code=200)
+
+
 def _debug_commitment_counts(team_id: str, week_offset: int) -> dict:
     """Diagnostic for Bug 3 — surfaces the raw commitment text per field
     alongside what _count_commitments produced. If a field shows substantive
@@ -5630,6 +6155,7 @@ async def clear_cache():
     _action_items_cache.clear()
     _delays_tab_match_cache.clear()
     _team_delay_questions_cache.clear()
+    _delays_csv_cache.clear()
     _departure_analysis_cache.clear()
     return {"ok": True, "status": "all caches cleared", "time": datetime.now().isoformat()}
 

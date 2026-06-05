@@ -80,8 +80,11 @@ else
 fi
 
 # ── Latest Ubuntu 22.04 LTS AMI for this region ─────────────────────────────
-echo "▶ Using Ubuntu 22.04 LTS AMI..."
-AMI_ID="ami-0d2d31ebb11ba8f8c"
+echo "▶ Resolving latest Ubuntu 22.04 LTS AMI…"
+AMI_ID=$(aws ssm get-parameter \
+  --region "${REGION}" \
+  --name "/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id" \
+  --query 'Parameter.Value' --output text)
 echo "  · AMI: ${AMI_ID}"
 
 # ── Launch instance ─────────────────────────────────────────────────────────
@@ -97,6 +100,12 @@ INSTANCE_ID=$(aws ec2 run-instances \
   --query 'Instances[0].InstanceId' --output text)
 echo "  · instance id: ${INSTANCE_ID}"
 
+echo "▶ Resolving latest Ubuntu 22.04 LTS AMI…"
+AMI_ID=$(aws ssm get-parameter \
+  --region "${REGION}" \
+  --name "/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id" \
+  --query 'Parameter.Value' --output text)
+echo "  · AMI: ${AMI_ID}"
 echo "▶ Waiting for instance to reach 'running' state (≈30-60s)…"
 aws ec2 wait instance-running --region "${REGION}" --instance-ids "${INSTANCE_ID}"
 

@@ -1,261 +1,244 @@
-import { useEffect } from "react";
-import { C } from "../config";
+import { useEffect, useMemo, useState } from "react";
+import { C, authFetch } from "../config";
 
-const STATUS_META = {
-  awaiting_response: { color: "#E25C5C", label: "Awaiting Response" },
-  in_progress:       { color: "#F0B947", label: "In Progress" },
-  completed:         { color: "#3DC58B", label: "Completed" },
+// TL-confirmed status palette (2026-06-05):
+//   open        → red    #EF4444
+//   in_progress → yellow #F59E0B
+//   completed   → green  #10B981
+const STATUS_PALETTE = {
+  open:        { color: "#EF4444", label: "🔴 Open",        bg: "rgba(239, 68, 68, 0.10)", border: "rgba(239, 68, 68, 0.45)" },
+  in_progress: { color: "#F59E0B", label: "🟡 In Progress", bg: "rgba(245, 158, 11, 0.10)", border: "rgba(245, 158, 11, 0.45)" },
+  completed:   { color: "#10B981", label: "✅ Closed",      bg: "rgba(16, 185, 129, 0.10)", border: "rgba(16, 185, 129, 0.45)" },
 };
 
-function ageColor(age) {
-  if (age >= 8) return "#E25C5C";
+function statusMeta(status) {
+  return STATUS_PALETTE[status] || STATUS_PALETTE.open;
+}
+
+function ageColor(age, status) {
+  if (status === "completed") return "#10B981";
+  if (age >= 8) return "#EF4444";
   if (age >= 3) return "#F2895A";
   return "#F0B947";
 }
 
-function DelayRowCard({ row, isCompleted = false }) {
-  const meta = STATUS_META[row.statusNorm] || { color: C.muted, label: row.eodStatus || "Unknown" };
-  const ac = ageColor(row.ageDays || 0);
+function formatHeaderDate(dateStr) {
+  if (!dateStr) return "—";
+  const s = String(dateStr);
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (!m) return s;
+  const dt = new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00`);
+  if (Number.isNaN(dt.getTime())) return s;
+  return dt.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+}
+
+const SHOW_MORE_THRESHOLD = 200;
+
+function ExpandableText({ text, color }) {
+  const [expanded, setExpanded] = useState(false);
+  const safe = (text || "").trim();
+  if (!safe) return null;
+  const isLong = safe.length > SHOW_MORE_THRESHOLD;
+  const shown = !isLong || expanded ? safe : `${safe.slice(0, SHOW_MORE_THRESHOLD)}…`;
   return (
-    <div
-      style={{
-        background: C.surface,
-        border: `1px solid ${C.border}`,
-        borderRadius: 8,
-        padding: 14,
-        marginBottom: 10,
-        opacity: isCompleted ? 0.75 : 1,
-      }}
-    >
-      {/* Top row: status badge + age */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <div
+    <>
+      <div style={{ fontSize: 13, lineHeight: 1.5, color: color || C.pri, whiteSpace: "pre-wrap" }}>
+        {shown}
+      </div>
+      {isLong && (
+        <button
+          onClick={() => setExpanded((v) => !v)}
           style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
+            marginTop: 6,
+            background: "transparent",
+            border: "none",
+            color: C.teal,
+            padding: 0,
             fontSize: 11,
-            padding: "3px 10px",
-            borderRadius: 12,
-            background: `${meta.color}22`,
-            color: meta.color,
             fontWeight: 600,
-            letterSpacing: 0.3,
+            cursor: "pointer",
+            fontFamily: "'DM Sans', sans-serif",
           }}
         >
-          <span style={{ width: 6, height: 6, borderRadius: "50%", background: meta.color }} />
-          {meta.label}
-        </div>
-        <div style={{ fontSize: 12, color: ac, fontWeight: 600, fontFamily: "'DM Mono', monospace" }}>
-          {isCompleted && row.resolvedInDays != null
-            ? `Resolved in ${row.resolvedInDays} day${row.resolvedInDays === 1 ? "" : "s"}`
-            : `${row.ageDays} day${row.ageDays === 1 ? "" : "s"} old`}
-        </div>
-      </div>
-
-      {/* Raised date */}
-      <div style={{ fontSize: 11, color: C.muted, marginBottom: 10 }}>
-        Raised: {row.raisedDateFormatted || row.raisedDate}
-      </div>
-
-      {/* Question (Posted Query Details) — bold label + full untruncated text */}
-      <div style={{ marginBottom: 10 }}>
-        <div style={{ fontSize: 11, color: C.sec, marginBottom: 4, fontWeight: 700 }}>
-          ❓ Question:
-        </div>
-        {row.queryText ? (
-          <div style={{ fontSize: 13, lineHeight: 1.5, color: C.pri, whiteSpace: "pre-wrap" }}>
-            {row.queryText}
-          </div>
-        ) : (
-          <div style={{ fontSize: 12, color: C.muted, fontStyle: "italic" }}>
-            Question text not recorded
-          </div>
-        )}
-      </div>
-
-      {/* Status Details (column M) — full text */}
-      {row.notes && row.notes !== row.queryText && (
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 11, color: C.sec, marginBottom: 4, fontWeight: 700 }}>
-            📝 Status Details:
-          </div>
-          <div style={{ fontSize: 12, lineHeight: 1.5, color: C.sec, whiteSpace: "pre-wrap" }}>
-            {row.notes}
-          </div>
-        </div>
+          {expanded ? "Show less" : "Show more"}
+        </button>
       )}
-
-      {/* Resolution / Answer — completed items only. We don't currently
-          have a dedicated "Delay Questions tab > Resolution Notes" feed,
-          so we surface the status-details / notes as the resolution
-          (with a fallback line when both are empty). */}
-      {isCompleted && (
-        <div
-          style={{
-            marginTop: 10,
-            padding: "10px 12px",
-            background: "rgba(61,197,139,0.08)",
-            border: `1px solid rgba(61,197,139,0.25)`,
-            borderLeft: `3px solid #3DC58B`,
-            borderRadius: 6,
-          }}
-        >
-          <div style={{ fontSize: 11, color: "#3DC58B", marginBottom: 4, fontWeight: 700 }}>
-            ✓ Resolution / Answer:
-          </div>
-          {row.notes ? (
-            <div style={{ fontSize: 12, lineHeight: 1.5, color: C.pri, whiteSpace: "pre-wrap" }}>
-              {row.notes}
-            </div>
-          ) : (
-            <div style={{ fontSize: 12, color: C.muted, fontStyle: "italic" }}>
-              Resolution notes not recorded
-            </div>
-          )}
-          <div style={{ display: "flex", gap: 14, fontSize: 11, color: C.muted, marginTop: 6, fontFamily: "'DM Mono', monospace" }}>
-            {row.resolvedOnFormatted && <span>Resolved on: {row.resolvedOnFormatted}</span>}
-            {row.resolvedInDays != null && (
-              <span>Resolved in {row.resolvedInDays} day{row.resolvedInDays === 1 ? "" : "s"}</span>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Hours context (when committed > 0) */}
-      {(row.committed || 0) > 0 && (
-        <div
-          style={{
-            marginTop: 10,
-            paddingTop: 10,
-            borderTop: `1px solid ${C.border}`,
-            display: "flex",
-            gap: 16,
-            fontSize: 11,
-            color: C.muted,
-            fontFamily: "'DM Mono', monospace",
-          }}
-        >
-          <span>Committed: {Number(row.committed).toFixed(1)}h</span>
-          <span>Booked: {Number(row.booked || 0).toFixed(1)}h</span>
-          <span>Util: {Number(row.utilPct || 0).toFixed(0)}%</span>
-        </div>
-      )}
-
-      {/* Status source — only show when we inferred it from notes (not from
-          explicit column L), so a manager can spot heuristic classifications */}
-      {row.statusNormSource === "notes_heuristic" && (
-        <div style={{ marginTop: 8, fontSize: 10, color: C.muted, fontStyle: "italic" }}>
-          ⓘ Status inferred from notes — column L was blank
-        </div>
-      )}
-    </div>
+    </>
   );
 }
 
-// Card for a Delays-tab question row (separate from the EOD-tab batch row).
-// Uses the per-client "{client} Delays" tab fields exposed by backend
-// _parse_delays_tab_csv.
-function DelayQuestionCard({ q }) {
-  const isResolved = !!q.isResolved;
-  const ageColorOpen = (q.ageDays || 0) >= 8 ? "#E25C5C" : (q.ageDays || 0) >= 3 ? "#F2895A" : "#F0B947";
-  const meta = isResolved
-    ? { color: "#3DC58B", label: "Resolved" }
-    : { color: ageColorOpen, label: (q.status && q.status.trim()) || "Open" };
+function DelayCard({ d }) {
+  const meta = statusMeta(d.status);
+  const age = d.days_aging ?? 0;
+  const ac  = ageColor(age, d.status);
   return (
     <div
       style={{
-        background: C.surface,
-        border: `1px solid ${C.border}`,
+        background: meta.bg,
+        border: `1px solid ${meta.border}`,
         borderLeft: `3px solid ${meta.color}`,
         borderRadius: 8,
         padding: 14,
         marginBottom: 10,
-        opacity: isResolved ? 0.85 : 1,
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <div
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            fontSize: 11,
-            padding: "3px 10px",
-            borderRadius: 12,
-            background: `${meta.color}22`,
-            color: meta.color,
-            fontWeight: 600,
-            letterSpacing: 0.3,
-          }}
-        >
-          <span style={{ width: 6, height: 6, borderRadius: "50%", background: meta.color }} />
-          {meta.label}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 10,
+          flexWrap: "wrap",
+          marginBottom: 8,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          {d.serial_no != null && (
+            <span
+              style={{
+                fontSize: 11,
+                fontFamily: "'DM Mono', monospace",
+                color: C.muted,
+                background: C.surface,
+                padding: "2px 7px",
+                borderRadius: 4,
+                fontWeight: 600,
+              }}
+            >
+              #{d.serial_no}
+            </span>
+          )}
+          {d.reason && (
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                color: C.sec,
+                background: `${C.blue}22`,
+                padding: "3px 8px",
+                borderRadius: 12,
+                letterSpacing: 0.5,
+                textTransform: "uppercase",
+              }}
+            >
+              {d.reason}
+            </span>
+          )}
+          <span
+            style={{
+              fontSize: 11,
+              padding: "3px 10px",
+              borderRadius: 12,
+              background: `${meta.color}22`,
+              color: meta.color,
+              fontWeight: 700,
+              letterSpacing: 0.3,
+            }}
+          >
+            {meta.label}
+          </span>
         </div>
-        <div style={{ fontSize: 12, color: isResolved ? "#3DC58B" : ageColorOpen, fontWeight: 600, fontFamily: "'DM Mono', monospace" }}>
-          {isResolved && q.resolvedInDays != null
-            ? `Resolved in ${q.resolvedInDays} day${q.resolvedInDays === 1 ? "" : "s"}`
-            : q.ageDays != null
-              ? `${q.ageDays} day${q.ageDays === 1 ? "" : "s"} old`
-              : ""}
-        </div>
+        <span style={{ fontSize: 12, fontWeight: 600, color: ac, fontFamily: "'DM Mono', monospace" }}>
+          {age} day{age === 1 ? "" : "s"}{d.status === "completed" ? " to close" : " old"}
+        </span>
       </div>
-      <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, display: "flex", gap: 14, flexWrap: "wrap" }}>
-        {q.clientName && <span>Client: <span style={{ color: C.sec, fontWeight: 600 }}>{q.clientName}</span></span>}
-        {q.datePosted && <span>Posted: {q.datePosted}</span>}
-        {q.postedTo && <span>To: {q.postedTo}</span>}
-        {q.fileReference && <span>Ref: {q.fileReference}</span>}
+
+      <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, fontFamily: "'DM Mono', monospace" }}>
+        Posted: {d.date_posted || "—"}
+        {d.close_date && <> · Closed: {d.close_date}</>}
       </div>
-      <div style={{ marginBottom: 8 }}>
+
+      <div style={{ marginBottom: 10 }}>
         <div style={{ fontSize: 11, color: C.sec, marginBottom: 4, fontWeight: 700 }}>
           ❓ Question:
         </div>
-        {q.questionText ? (
-          <div style={{ fontSize: 13, lineHeight: 1.5, color: C.pri, whiteSpace: "pre-wrap" }}>
-            {q.questionText}
-          </div>
+        {d.question ? (
+          <ExpandableText text={d.question} />
         ) : (
           <div style={{ fontSize: 12, color: C.muted, fontStyle: "italic" }}>
-            Question text not recorded in Delays tab
+            No question text recorded
           </div>
         )}
       </div>
-      {isResolved && (
+
+      {d.client_reply && (
         <div
           style={{
-            marginTop: 10,
+            marginBottom: 10,
             padding: "10px 12px",
-            background: "rgba(61,197,139,0.08)",
-            border: `1px solid rgba(61,197,139,0.25)`,
-            borderLeft: `3px solid #3DC58B`,
+            background: "rgba(74,143,231,0.08)",
+            border: `1px solid rgba(74,143,231,0.25)`,
+            borderLeft: `3px solid ${C.blue}`,
             borderRadius: 6,
           }}
         >
-          <div style={{ fontSize: 11, color: "#3DC58B", marginBottom: 4, fontWeight: 700 }}>
-            ✓ Resolution / Answer:
+          <div style={{ fontSize: 11, color: C.blue, marginBottom: 4, fontWeight: 700 }}>
+            💬 Client Reply:
           </div>
-          {q.resolutionNotes ? (
-            <div style={{ fontSize: 12, lineHeight: 1.5, color: C.pri, whiteSpace: "pre-wrap" }}>
-              {q.resolutionNotes}
-            </div>
-          ) : (
-            <div style={{ fontSize: 12, color: C.muted, fontStyle: "italic" }}>
-              Resolution notes not recorded
-            </div>
-          )}
-          {q.dateAnswered && (
-            <div style={{ fontSize: 11, color: C.muted, marginTop: 6, fontFamily: "'DM Mono', monospace" }}>
-              Answered on: {q.dateAnswered}
-            </div>
-          )}
+          <ExpandableText text={d.client_reply} />
+        </div>
+      )}
+
+      {d.mp_reply && (
+        <div
+          style={{
+            padding: "10px 12px",
+            background: "rgba(16, 185, 129, 0.08)",
+            border: `1px solid rgba(16, 185, 129, 0.30)`,
+            borderLeft: `3px solid #10B981`,
+            borderRadius: 6,
+          }}
+        >
+          <div style={{ fontSize: 11, color: "#10B981", marginBottom: 4, fontWeight: 700 }}>
+            ✅ MP Response:
+          </div>
+          <ExpandableText text={d.mp_reply} />
         </div>
       )}
     </div>
   );
 }
 
-export default function DelayDetailModal({ day, onClose }) {
-  // ESC closes
+function ClientSection({ section, date }) {
+  const delays = Array.isArray(section.delays) ? section.delays : [];
+  const headerColor = delays.length > 0 ? C.pri : C.muted;
+  return (
+    <div style={{ marginBottom: 22 }}>
+      <div
+        style={{
+          fontSize: 13,
+          fontWeight: 700,
+          color: headerColor,
+          letterSpacing: 0.2,
+          marginBottom: 10,
+          paddingBottom: 8,
+          borderBottom: `1px solid ${C.border}`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+          flexWrap: "wrap",
+        }}
+      >
+        <span>🏢 {section.client_name}</span>
+        <span style={{ fontSize: 11, color: C.muted, fontWeight: 500, fontFamily: "'DM Mono', monospace" }}>
+          gid {section.tab_gid} · {delays.length} item{delays.length === 1 ? "" : "s"}
+        </span>
+      </div>
+      {delays.length === 0 ? (
+        <div style={{ fontSize: 12, color: C.muted, fontStyle: "italic", padding: "8px 4px" }}>
+          ✓ No delays for {section.client_name}{date ? " on this date" : ""}.
+        </div>
+      ) : (
+        delays.map((d, i) => (
+          <DelayCard key={`${section.tab_gid}-${d.serial_no || i}`} d={d} />
+        ))
+      )}
+    </div>
+  );
+}
+
+export default function DelayDetailModal({ day, teamId, onClose }) {
   useEffect(() => {
     if (!day) return;
     function onKey(e) {
@@ -265,7 +248,6 @@ export default function DelayDetailModal({ day, onClose }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [day, onClose]);
 
-  // Body scroll lock while open
   useEffect(() => {
     if (!day) return;
     const prev = document.body.style.overflow;
@@ -273,16 +255,43 @@ export default function DelayDetailModal({ day, onClose }) {
     return () => { document.body.style.overflow = prev; };
   }, [day]);
 
-  if (!day) return null;
+  const [fetchState, setFetchState] = useState({ loading: false, data: null, error: null });
+  const dayDate = day?.fullDate || day?.date || "";
 
-  const allRows = Array.isArray(day.allRows) ? day.allRows : [];
-  const openRows      = allRows.filter((r) => !r.isCompleted);
-  const completedRows = allRows.filter((r) => r.isCompleted);
-  const delayQuestions = Array.isArray(day.delayQuestionsForDay) ? day.delayQuestionsForDay : [];
-  const openQuestions      = delayQuestions.filter((q) => !q.isResolved);
-  const resolvedQuestions  = delayQuestions.filter((q) =>  q.isResolved);
-  const headerDate = day.fullDateLabel || day.date || "—";
-  const total = day.total ?? allRows.length;
+  useEffect(() => {
+    if (!day || !teamId || !dayDate) {
+      setFetchState({ loading: false, data: null, error: null });
+      return;
+    }
+    const ctrl = new AbortController();
+    setFetchState({ loading: true, data: null, error: null });
+    const isoDate = String(dayDate).slice(0, 10);
+    authFetch(`/api/team/${teamId}/delays?date=${encodeURIComponent(isoDate)}`, { signal: ctrl.signal })
+      .then((r) => r.json())
+      .then((j) => {
+        if (ctrl.signal.aborted) return;
+        setFetchState({ loading: false, data: j, error: j?.error || null });
+      })
+      .catch((err) => {
+        if (err?.name === "AbortError") return;
+        setFetchState({ loading: false, data: null, error: err?.message || String(err) });
+      });
+    return () => ctrl.abort();
+  }, [day, teamId, dayDate]);
+
+  // Only render visible non-empty sections — but always show at least one
+  // "✓ No delays for X" row if filter matched at least one client.
+  const sections = useMemo(() => {
+    const all = fetchState.data?.clients || [];
+    if (!all.length) return [];
+    const withDelays = all.filter((s) => (s.delays || []).length > 0);
+    return withDelays.length > 0 ? withDelays : all;
+  }, [fetchState.data]);
+
+  const totals = fetchState.data?.totals || { total: 0, open: 0, in_progress: 0, completed: 0 };
+  const tabErrors = fetchState.data?.tab_errors || [];
+
+  if (!day) return null;
 
   return (
     <div
@@ -308,10 +317,10 @@ export default function DelayDetailModal({ day, onClose }) {
           border: `1px solid ${C.border}`,
           borderRadius: 12,
           padding: 24,
-          maxWidth: 720,
+          maxWidth: 760,
           maxHeight: "85vh",
           overflow: "auto",
-          width: "90%",
+          width: "92%",
           boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
           fontFamily: "'DM Sans', sans-serif",
         }}
@@ -329,14 +338,15 @@ export default function DelayDetailModal({ day, onClose }) {
           }}
         >
           <div>
-            <div style={{ fontSize: 20, fontWeight: 600, color: C.pri, letterSpacing: -0.3, marginBottom: 4 }}>
-              {headerDate} Delays
+            <div style={{ fontSize: 20, fontWeight: 700, color: C.pri, letterSpacing: -0.3, marginBottom: 4 }}>
+              📋 Open Questions &amp; Delays
             </div>
-            <div style={{ fontSize: 13, color: C.muted }}>
-              {total} total · {openRows.length} open · {completedRows.length} completed
-              {delayQuestions.length > 0 && (
-                <> · {delayQuestions.length} question{delayQuestions.length === 1 ? "" : "s"} from Delays tab</>
-              )}
+            <div style={{ fontSize: 13, color: C.sec, marginBottom: 4 }}>
+              {totals.open} open · {totals.in_progress} in progress · {totals.completed} completed
+              {totals.total > 0 && <> · {totals.total} total</>}
+            </div>
+            <div style={{ fontSize: 12, color: C.muted, fontFamily: "'DM Mono', monospace" }}>
+              {formatHeaderDate(dayDate)}
             </div>
           </div>
           <button
@@ -352,93 +362,111 @@ export default function DelayDetailModal({ day, onClose }) {
               fontFamily: "'DM Sans', sans-serif",
               transition: "all 0.15s",
             }}
-            onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#E25C5C"; e.currentTarget.style.color = "#E25C5C"; }}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#EF4444"; e.currentTarget.style.color = "#EF4444"; }}
             onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.sec; }}
           >
             ✕ Close
           </button>
         </div>
 
-        {/* Open delays section */}
-        {openRows.length > 0 && (
-          <div style={{ marginBottom: 22 }}>
-            <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, textTransform: "uppercase", letterSpacing: 1, fontWeight: 600 }}>
-              🔴 Open Delays ({openRows.length})
-            </div>
-            {openRows.map((row, i) => (
-              <DelayRowCard key={`open-${i}`} row={row} />
-            ))}
+        {/* Loading */}
+        {fetchState.loading && (
+          <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 12 }}>
+            <span
+              style={{
+                display: "inline-block",
+                width: 16,
+                height: 16,
+                border: `2px solid ${C.border}`,
+                borderTopColor: C.teal,
+                borderRadius: "50%",
+                animation: "spin 0.8s linear infinite",
+                marginRight: 10,
+                verticalAlign: "middle",
+              }}
+            />
+            Loading delays from Google Sheet…
           </div>
         )}
 
-        {/* Completed delays section */}
-        {completedRows.length > 0 && (
-          <div>
-            <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, textTransform: "uppercase", letterSpacing: 1, fontWeight: 600 }}>
-              ✅ Completed Delays ({completedRows.length})
-            </div>
-            {completedRows.map((row, i) => (
-              <DelayRowCard key={`done-${i}`} row={row} isCompleted />
-            ))}
+        {/* Hard error from backend */}
+        {!fetchState.loading && fetchState.error && (
+          <div
+            style={{
+              padding: "12px 14px",
+              background: "rgba(239,68,68,0.08)",
+              border: `1px solid rgba(239,68,68,0.30)`,
+              borderLeft: `3px solid #EF4444`,
+              borderRadius: 6,
+              color: C.sec,
+              fontSize: 12,
+              lineHeight: 1.5,
+              marginBottom: 16,
+            }}
+          >
+            <strong style={{ color: "#EF4444" }}>Couldn't load delays:</strong>{" "}
+            {fetchState.data?.error_detail || fetchState.error}
+            {fetchState.data?.error === "no_delays_tabs_configured" && (
+              <div style={{ marginTop: 6, color: C.muted, fontSize: 11 }}>
+                Add this team to <code style={{ background: C.surface, padding: "1px 5px", borderRadius: 3, fontSize: 10 }}>DELAYS_TAB_GIDS</code> in <code style={{ background: C.surface, padding: "1px 5px", borderRadius: 3, fontSize: 10 }}>backend/main.py</code>.
+              </div>
+            )}
           </div>
         )}
 
-        {/* Delay questions from the per-client "{client} Delays" tab —
-            this is where the actual question + resolution text lives. */}
-        {openQuestions.length > 0 && (
-          <div style={{ marginBottom: 22, marginTop: openRows.length || completedRows.length ? 22 : 0 }}>
-            <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, textTransform: "uppercase", letterSpacing: 1, fontWeight: 600 }}>
-              ❓ Open Questions from Delays Tab ({openQuestions.length})
-            </div>
-            {openQuestions.map((q, i) => (
-              <DelayQuestionCard key={`q-open-${i}`} q={q} />
-            ))}
-          </div>
-        )}
-        {resolvedQuestions.length > 0 && (
-          <div style={{ marginTop: 16 }}>
-            <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, textTransform: "uppercase", letterSpacing: 1, fontWeight: 600 }}>
-              ✅ Resolved Questions from Delays Tab ({resolvedQuestions.length})
-            </div>
-            {resolvedQuestions.map((q, i) => (
-              <DelayQuestionCard key={`q-done-${i}`} q={q} />
-            ))}
-          </div>
-        )}
-
-        {/* Soft hint: there ARE main-tab delay rows but no per-client Delays-tab
-            questions were found for this date. Probably means the team has
-            no Delays tab configured (or its name doesn't match our probes),
-            or no questions were posted on this date. */}
-        {(openRows.length > 0 || completedRows.length > 0) && delayQuestions.length === 0 && (
-          <div style={{
-            marginTop: 16,
-            padding: "10px 14px",
-            background: "rgba(240,185,71,0.06)",
-            border: `1px solid rgba(240,185,71,0.25)`,
-            borderLeft: `3px solid #F0B947`,
-            borderRadius: 6,
-            color: C.sec,
-            fontSize: 12,
-            lineHeight: 1.5,
-          }}>
-            <strong style={{ color: "#F0B947" }}>⚠ No delay questions tracked in Delays tab for this date.</strong>
-            <div style={{ marginTop: 4, color: C.muted, fontSize: 11 }}>
-              Showing status notes from the main EOD tab only. If you expected
-              question text here, verify the "{`{Client Name}`} Delays" tab
-              exists in this team's sheet — try
-              <code style={{ background: C.surface, padding: "1px 5px", margin: "0 4px", borderRadius: 3, fontSize: 10 }}>/api/debug/delays-tab?team_id=…&client=…</code>
-              to diagnose.
-            </div>
+        {/* Per-tab errors — partial failure (some clients loaded, others didn't) */}
+        {!fetchState.loading && !fetchState.error && tabErrors.length > 0 && (
+          <div
+            style={{
+              padding: "10px 14px",
+              background: "rgba(240,185,71,0.06)",
+              border: `1px solid rgba(240,185,71,0.25)`,
+              borderLeft: `3px solid #F0B947`,
+              borderRadius: 6,
+              color: C.sec,
+              fontSize: 11,
+              lineHeight: 1.5,
+              marginBottom: 14,
+            }}
+          >
+            <strong style={{ color: "#F0B947" }}>Some Delays tabs failed to load:</strong>
+            <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+              {tabErrors.map((te, i) => (
+                <li key={i}>
+                  {te.client_name} (gid {te.tab_gid}) — {te.error}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
-        {/* Empty state */}
-        {openRows.length === 0 && completedRows.length === 0 && delayQuestions.length === 0 && (
-          <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: 13 }}>
-            No delay details available for this day.
-            <div style={{ marginTop: 8, fontSize: 11, fontStyle: "italic" }}>
-              (Delay questions tab not found, or no rows for this date.)
+        {/* Client sections */}
+        {!fetchState.loading && !fetchState.error && sections.map((section) => (
+          <ClientSection
+            key={section.tab_gid}
+            section={section}
+            date={fetchState.data?.date_filter}
+          />
+        ))}
+
+        {/* No data at all */}
+        {!fetchState.loading && !fetchState.error && sections.length === 0 && (
+          <div
+            style={{
+              padding: "12px 14px",
+              background: "rgba(240,185,71,0.06)",
+              border: `1px solid rgba(240,185,71,0.25)`,
+              borderLeft: `3px solid #F0B947`,
+              borderRadius: 6,
+              color: C.sec,
+              fontSize: 12,
+              lineHeight: 1.5,
+            }}
+          >
+            <strong style={{ color: "#F0B947" }}>No questions or delays tracked for this date.</strong>
+            <div style={{ marginTop: 6, color: C.muted, fontSize: 11 }}>
+              All configured Delays tabs returned zero rows for {formatHeaderDate(dayDate)}.
+              If you expected entries, verify the Date column in the team's Delays tab.
             </div>
           </div>
         )}
