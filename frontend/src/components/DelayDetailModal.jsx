@@ -238,7 +238,7 @@ function ClientSection({ section, date }) {
   );
 }
 
-export default function DelayDetailModal({ day, teamId, onClose }) {
+export default function DelayDetailModal({ day, teamId, clientName, onClose }) {
   useEffect(() => {
     if (!day) return;
     function onKey(e) {
@@ -259,14 +259,22 @@ export default function DelayDetailModal({ day, teamId, onClose }) {
   const dayDate = day?.fullDate || day?.date || "";
 
   useEffect(() => {
-    if (!day || !teamId || !dayDate) {
+    // Need a day + a source key (team or client) + a date to fetch.
+    const haveSource = !!teamId || !!clientName;
+    if (!day || !haveSource || !dayDate) {
       setFetchState({ loading: false, data: null, error: null });
       return;
     }
     const ctrl = new AbortController();
     setFetchState({ loading: true, data: null, error: null });
     const isoDate = String(dayDate).slice(0, 10);
-    authFetch(`/api/team/${teamId}/delays?date=${encodeURIComponent(isoDate)}`, { signal: ctrl.signal })
+    // Team view → team endpoint (returns sections grouped by every client).
+    // Client view → client endpoint (server resolves to the owning team and
+    // filters to just that client). Both endpoints return the same shape.
+    const url = teamId
+      ? `/api/team/${teamId}/delays?date=${encodeURIComponent(isoDate)}`
+      : `/api/client/${encodeURIComponent(clientName)}/delays?date=${encodeURIComponent(isoDate)}`;
+    authFetch(url, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((j) => {
         if (ctrl.signal.aborted) return;
@@ -277,7 +285,7 @@ export default function DelayDetailModal({ day, teamId, onClose }) {
         setFetchState({ loading: false, data: null, error: err?.message || String(err) });
       });
     return () => ctrl.abort();
-  }, [day, teamId, dayDate]);
+  }, [day, teamId, clientName, dayDate]);
 
   // Only render visible non-empty sections — but always show at least one
   // "✓ No delays for X" row if filter matched at least one client.

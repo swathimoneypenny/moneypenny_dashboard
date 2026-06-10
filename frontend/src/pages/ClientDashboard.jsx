@@ -1041,7 +1041,11 @@ ${Object.entries(staffObj).map(([name, v]) => {
           )}
         </div>
       </div>
-      <DelayDetailModal day={selectedDay} onClose={() => setSelectedDay(null)} />
+      <DelayDetailModal
+        day={selectedDay}
+        clientName={clientName}
+        onClose={() => setSelectedDay(null)}
+      />
     </div>
   );
 }

@@ -5709,6 +5709,159 @@ async def team_delays_endpoint(
         }, status_code=200)
 
 
+# ── Client-view delays lookup ──────────────────────────────────────
+# The Client dashboard doesn't know which team owns the client it's
+# rendering — its modal calls /api/client/{name}/delays and we route
+# to the right team's Delays tab here. Matching is lenient: case-folded,
+# punctuation-stripped, and common business suffixes (CPA, LLC, Inc, etc.)
+# removed so "Portnoy CPA, P.C." resolves to "portnoy".
+_CLIENT_NAME_SUFFIXES = (
+    " cpa, p.c.", " cpa pc", " cpa p.c.", " cpa, pc", " cpa",
+    ", p.c.", " p.c.", " pc",
+    ", llc", " llc",
+    ", inc.", " inc.", ", inc", " inc",
+    ", ltd", " ltd",
+    ", corp", " corp", " corporation",
+    " group", " advisors", " advisory", " accounting",
+)
+
+
+def _normalize_client_name(name: str) -> str:
+    """Strip the common business suffixes, lowercase, collapse whitespace."""
+    if not name:
+        return ""
+    n = " ".join(str(name).lower().split())
+    # Apply suffix stripping repeatedly so "Foo CPA, P.C." → "foo cpa" → "foo".
+    changed = True
+    while changed:
+        changed = False
+        for suf in _CLIENT_NAME_SUFFIXES:
+            if n.endswith(suf):
+                n = n[:-len(suf)].strip()
+                changed = True
+                break
+    # Strip trailing period that some sheets carry over.
+    return n.rstrip(".").strip()
+
+
+def _find_team_for_client(client_name: str) -> tuple[str | None, str | None]:
+    """Resolve a free-form client name → (team_id, client_key) by matching
+    against DELAYS_TAB_GIDS.
+
+    Strategy (each tier returns on first match):
+      1. Exact normalized match → highest priority.
+      2. Either normalized name is a substring of the other (handles
+         "Portnoy CPA" vs "portnoy" both ways).
+      3. Token-set overlap on the canonical TEAM_CLIENTS aliases — covers
+         "Bookkeeping Doctor" → "bookkeeping doctor" via tsMatch aliases.
+    """
+    target = _normalize_client_name(client_name)
+    if not target:
+        return None, None
+
+    # Tier 1: exact normalized
+    for tid, cmap in DELAYS_TAB_GIDS.items():
+        if not cmap:
+            continue
+        for key in cmap.keys():
+            if _normalize_client_name(key) == target:
+                return tid, key
+
+    # Tier 2: substring containment (either direction). Sort by key length
+    # descending so longer / more-specific matches win.
+    candidates: list[tuple[int, str, str]] = []
+    for tid, cmap in DELAYS_TAB_GIDS.items():
+        if not cmap:
+            continue
+        for key in cmap.keys():
+            nk = _normalize_client_name(key)
+            if not nk:
+                continue
+            if target in nk or nk in target:
+                candidates.append((len(nk), tid, key))
+    if candidates:
+        candidates.sort(key=lambda kv: -kv[0])
+        _, tid, key = candidates[0]
+        return tid, key
+
+    # Tier 3: match via the TEAM_CLIENTS aliases — the canonical client list
+    # carries `tsMatch` keywords (e.g. ["BKP Doctor", "Bookkeeping Doctor"])
+    # that often line up with how the UI labels the client.
+    target_tokens = set(target.split())
+    for tid, clients in (TEAM_CLIENTS or {}).items():
+        if tid not in DELAYS_TAB_GIDS:
+            continue
+        for c in clients or []:
+            aliases = [c.get("name") or ""] + list(c.get("tsMatch") or [])
+            for alias in aliases:
+                na = _normalize_client_name(alias)
+                if not na:
+                    continue
+                if na == target:
+                    return tid, _first_delays_key(tid, c.get("name") or alias) or alias
+                # token-set overlap (>=2 shared meaningful tokens)
+                if len(target_tokens & set(na.split())) >= 2:
+                    return tid, _first_delays_key(tid, c.get("name") or alias) or alias
+    return None, None
+
+
+def _first_delays_key(team_id: str, hint: str) -> str | None:
+    """Given a team_id and a client name hint, return the DELAYS_TAB_GIDS
+    key that best matches — used by the alias path so we hand back a key
+    the delays builder will actually recognize."""
+    cmap = DELAYS_TAB_GIDS.get(team_id) or {}
+    if not cmap:
+        return None
+    hint_norm = _normalize_client_name(hint)
+    for key in cmap.keys():
+        if _normalize_client_name(key) == hint_norm:
+            return key
+    for key in cmap.keys():
+        nk = _normalize_client_name(key)
+        if nk and (hint_norm in nk or nk in hint_norm):
+            return key
+    return next(iter(cmap.keys()), None)
+
+
+@app.get("/api/client/{client_name}/delays")
+async def client_delays_endpoint(client_name: str, date: str | None = None):
+    """Client-view wrapper for the delays modal. Resolves the client to
+    (team_id, client_key) via _find_team_for_client and forwards to
+    _build_team_delays. Returns the same shape as the team endpoint so the
+    DelayDetailModal can stay one component."""
+    try:
+        team_id, client_key = await asyncio.to_thread(_find_team_for_client, client_name)
+        if not team_id or not client_key:
+            return {
+                "client_name":  client_name,
+                "error":        "client_not_found",
+                "error_detail": (
+                    f"No team's DELAYS_TAB_GIDS contains a client matching "
+                    f"{client_name!r}. Update the mapping in backend/main.py."
+                ),
+                "clients":      [],
+                "tab_errors":   [],
+                "totals":       {"total": 0, "open": 0, "in_progress": 0, "completed": 0},
+                "available_weeks": [],
+            }
+        result = await asyncio.to_thread(_build_team_delays, team_id, date, client_key)
+        result["client_name"] = client_name
+        result["matched_to"]  = {"team_id": team_id, "client_key": client_key}
+        return result
+    except Exception as e:
+        import traceback
+        return JSONResponse({
+            "client_name":    client_name,
+            "error":          "unhandled_exception",
+            "error_class":    type(e).__name__,
+            "error_detail":   str(e),
+            "traceback_tail": traceback.format_exc().splitlines()[-6:],
+            "clients":        [],
+            "tab_errors":     [],
+            "totals":         {"total": 0, "open": 0, "in_progress": 0, "completed": 0},
+        }, status_code=200)
+
+
 def _build_team_checklist(team_id: str) -> dict:
     """Fetch + parse + summarize the Weekly Admin Checklist tab for a team.
     Returns a structured response (always 200, with `error` key on failure)."""
