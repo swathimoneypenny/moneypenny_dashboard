@@ -2151,17 +2151,36 @@ _checklist_csv_cache: dict[tuple[str, str], dict] = {}
 _CHECKLIST_CSV_TTL = 600
 
 
+_YES_PREFIX_RE = re.compile(r"^yes[\s,.\-:;()]")
+
+
 def _normalize_yes_no(text: str) -> str:
-    """Map any cell value → 'yes' / 'no' / 'na' / 'other'."""
+    """Map any cell value → 'yes' / 'no' / 'na' / 'other'.
+
+    Handles compound forms TLs actually type into the sheet — "No Escalation",
+    "No quiz this week", "Yes - updated", "N/A this period" — instead of just
+    the bare tokens. Without this, those cells render as 'other' (a grey
+    fallback glyph) in the heatmap and never count toward compliance.
+    """
     s = (text or "").strip().lower()
     if not s:
         return "na"
-    if s in ("yes", "y", "✓", "true", "x"):
-        return "yes"
-    if s in ("no", "n", "✗", "false"):
-        return "no"
-    if s in ("n/a", "na", "nil", "-", "—"):
+    # N/A placeholders (exact + substring)
+    if s in ("n/a", "na", "nil", "-", "—", "none", "not applicable"):
         return "na"
+    if "n/a" in s or "not applicable" in s:
+        return "na"
+    # Exact yes / no tokens
+    if s in ("yes", "y", "✓", "true", "x", "done", "completed", "checked"):
+        return "yes"
+    if s in ("no", "n", "✗", "false", "not done", "pending"):
+        return "no"
+    # Compound "no X" — "no escalation", "no quiz needed", etc.
+    if s.startswith("no ") and len(s) > 3:
+        return "no"
+    # Compound "yes X" — "yes - updated", "yes (rev'd)", "yes: done"
+    if _YES_PREFIX_RE.match(s):
+        return "yes"
     return "other"
 
 
@@ -2545,12 +2564,27 @@ def _compute_checklist_summary(weeks: list[dict]) -> dict:
     nil_flags:  list[dict] = []
     field_totals: dict[str, dict[str, int]] = {f: {"yes": 0, "no": 0, "na": 0, "other": 0} for f in _CHECKLIST_BOOL_FIELDS}
 
+    # Multi-client CSV rows get exploded into one entry per sibling. For
+    # counts that describe the SHEET (Whale updates, flags), credit each
+    # multi-client row only once — otherwise a single Whale-link cell shared
+    # across 3 siblings inflates the "Whale updates" stat by 3×.
+    seen_multi_sigs: set[tuple] = set()
+
     for w in weeks:
         for e in w.get("entries") or []:
             total_entries += 1
             client_name = (e.get("client") or "").strip()
             if client_name:
                 distinct_clients.add(client_name.lower())
+
+            is_multi = bool(e.get("is_multi_client_row"))
+            sibs     = tuple(sorted(e.get("siblings") or [])) if is_multi else ()
+            multi_sig = (w.get("week"), sibs) if is_multi else None
+            is_first_of_multi = (multi_sig is not None and multi_sig not in seen_multi_sigs)
+            if multi_sig is not None:
+                seen_multi_sigs.add(multi_sig)
+            credit_once = (not is_multi) or is_first_of_multi
+
             for f in _CHECKLIST_BOOL_FIELDS:
                 v = e.get(f) or "na"
                 field_totals[f][v if v in field_totals[f] else "other"] += 1
@@ -2561,27 +2595,30 @@ def _compute_checklist_summary(weeks: list[dict]) -> dict:
             flag_text = (e.get("flag_tm_ops") or "").strip()
             # Real flag = non-empty, not a NIL/N/A/None placeholder, and not
             # the column-header / instruction-prompt text leads sometimes
-            # forget to clear.
-            if _is_valid_flag(flag_text):
+            # forget to clear. Multi-client siblings share the same flag cell —
+            # only credit the first sibling so a single "NIL" doesn't show as
+            # 3 NIL entries in the Open Flags list.
+            if _is_valid_flag(flag_text) and credit_once:
                 if _is_nil_flag(flag_text):
                     nil_flags.append({
                         "week":   w.get("week"),
-                        "client": e.get("client"),
+                        "client": (", ".join(e.get("siblings") or []) if is_multi else e.get("client")),
                         "flag":   flag_text,
                         "is_placeholder": True,
                     })
                 else:
                     real_flags.append({
                         "week":   w.get("week"),
-                        "client": e.get("client"),
+                        "client": (", ".join(e.get("siblings") or []) if is_multi else e.get("client")),
                         "flag":   flag_text,
                         "is_placeholder": False,
                     })
-            whale_links += len(e.get("whale_links") or [])
-            for raw, bucket in ((e.get("training_preparers"), preparer_topics),
-                                (e.get("training_myself"),   myself_topics)):
-                for topic in _split_training_topics(raw):
-                    bucket[topic] = bucket.get(topic, 0) + 1
+            if credit_once:
+                whale_links += len(e.get("whale_links") or [])
+                for raw, bucket in ((e.get("training_preparers"), preparer_topics),
+                                    (e.get("training_myself"),   myself_topics)):
+                    for topic in _split_training_topics(raw):
+                        bucket[topic] = bucket.get(topic, 0) + 1
 
     denom = yes_count + no_count
     compliance_pct = round(yes_count / denom * 100, 1) if denom > 0 else 0.0

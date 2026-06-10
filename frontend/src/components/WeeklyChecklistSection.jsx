@@ -282,56 +282,86 @@ function WhaleLinkCell({ urls, url }) {
 // ── Per-client view helpers ─────────────────────────────────────────
 // The /api/team/{id}/checklist payload is week-major (weeks[].entries[]).
 // TLs reason client-major ("what happened on Portnoy this week?"). This
-// helper inverts the shape: one rollup per client across every visible
+// helper inverts the shape: one rollup per logical "row" across every visible
 // week, with the LATEST status winning per bool column.
+//
+// "Logical row" = one client for solo entries; ALL siblings collapsed into one
+// row for multi-client entries (where the upstream CSV row listed 3 clients
+// in one cell). That way the heatmap, procedure cards, and training table all
+// show a single combined entry — "EZ Ledger, Putman, Manzelli" — instead of
+// three identical rows.
 function buildPerClientView(weeks) {
   const map = new Map();
   for (const w of weeks || []) {
     for (const e of w.entries || []) {
-      const rawClient = (e.client || "").trim();
-      const client    = rawClient || "(Team-wide)";
-      const isTeamWide = !rawClient;
-      let row = map.get(client);
+      const rawClient   = (e.client || "").trim();
+      const clientLabel = rawClient || "(Team-wide)";
+      const isTeamWide  = !rawClient;
+      const isMulti     = !!e.is_multi_client_row
+                          && Array.isArray(e.siblings)
+                          && e.siblings.length > 1;
+
+      // Multi-client siblings share one logical row (keyed by the sorted
+      // sibling set so order in the cell doesn't fragment the grouping).
+      const key = isMulti
+        ? `MULTI__${[...e.siblings].sort().join("||")}`
+        : clientLabel;
+
+      let row = map.get(key);
       if (!row) {
+        const clientList = isMulti ? e.siblings.slice() : [clientLabel];
         row = {
-          client,
-          isTeamWide,
+          // Display label — combined names for multi, plain name for solo.
+          client:        isMulti ? clientList.join(", ") : clientLabel,
+          clientList,
+          isMultiClient: isMulti,
+          isTeamWide:    !isMulti && isTeamWide,
+          siblings:      isMulti ? clientList.slice() : [],
           weeks: [],
           tasks: {},
+          // Per-week list of per-client update blocks. Used by
+          // ProcedureUpdatesCards to render one block per client inside the
+          // combined multi-client card. Shape: {week: [{client, updated, new}]}
+          weekUpdatesMap: {},
+          // Flat list kept so the "has any updates" filter still works.
+          updates: [],
           trainingPreparers: [],
           trainingTL: [],
-          updates: [],
           whaleLinks: [],
-          // Multi-client provenance — populated when the upstream CSV row
-          // listed multiple clients in one cell. Used by the training
-          // table to collapse N rows that share identical training text
-          // into a single "EZ Ledger, Putman, Manzelli (×3)" row.
-          isMultiClient: !!e.is_multi_client_row,
-          siblings: Array.isArray(e.siblings) ? e.siblings.slice() : [],
         };
-        map.set(client, row);
+        map.set(key, row);
       }
-      if (e.is_multi_client_row) {
-        row.isMultiClient = true;
-        if (Array.isArray(e.siblings)) {
-          for (const s of e.siblings) {
-            if (s && !row.siblings.includes(s)) row.siblings.push(s);
-          }
-        }
-      }
+
       if (!row.weeks.includes(w.week)) row.weeks.push(w.week);
+
+      // Bool columns: multi-client siblings come from the same CSV row so
+      // their values agree (the parser broadcasts). For solo clients across
+      // multiple weeks, the latest entry wins (later iteration overwrites).
       for (const col of BOOL_COLUMNS) {
         row.tasks[col.key] = e[col.key] || "na";
       }
+
+      // Per-client update text — preserve which client got which slice when
+      // _split_numbered_updates produced distinct chunks.
       const upd = (e.updated_procedure || "").trim();
       const nu  = (e.new_procedure || "").trim();
       if (upd || nu) {
+        if (!row.weekUpdatesMap[w.week]) row.weekUpdatesMap[w.week] = [];
+        row.weekUpdatesMap[w.week].push({
+          client:  clientLabel,
+          updated: upd,
+          new:     nu,
+        });
         row.updates.push({ week: w.week, updated: upd, new: nu });
       }
+
+      // Training (dedupe identical broadcasts across siblings).
       const tp = (e.training_preparers || "").trim();
       const tt = (e.training_myself || "").trim();
       if (tp && !row.trainingPreparers.includes(tp)) row.trainingPreparers.push(tp);
       if (tt && !row.trainingTL.includes(tt))        row.trainingTL.push(tt);
+
+      // Whale links — dedupe (siblings share the same Whale list).
       const links = Array.isArray(e.whale_links) ? e.whale_links
                   : (e.whale_link ? [e.whale_link] : []);
       for (const u of links) {
@@ -340,33 +370,6 @@ function buildPerClientView(weeks) {
     }
   }
   return Array.from(map.values());
-}
-
-
-// Group per-client rows by their training-text signature when the rows came
-// from a single multi-client CSV row that broadcast identical training text
-// across siblings. Returns the same row shape but with `groupedClients`
-// populated when collapsing — the caller renders the combined list there.
-function groupTrainingRows(rows) {
-  if (!Array.isArray(rows)) return [];
-  const groups = new Map();
-  const ordered = [];
-  for (const r of rows) {
-    const sig = r.isMultiClient
-      ? `MULTI|${[...r.trainingPreparers].sort().join("|")}||${[...r.trainingTL].sort().join("|")}`
-      : `SOLO|${r.client}`;
-    const existing = groups.get(sig);
-    if (existing) {
-      if (!existing.groupedClients.includes(r.client)) {
-        existing.groupedClients.push(r.client);
-      }
-    } else {
-      const copy = { ...r, groupedClients: [r.client] };
-      groups.set(sig, copy);
-      ordered.push(copy);
-    }
-  }
-  return ordered;
 }
 
 
@@ -566,7 +569,9 @@ function WhaleChipRow({ urls }) {
 }
 
 function ProcedureUpdatesCards({ rows }) {
-  // Keep only clients with at least one real update or a Whale link.
+  // Keep only rows with at least one real update or a Whale link. Multi-client
+  // rows already collapsed in buildPerClientView, so each `row` is one card
+  // group (one client OR one multi-client sibling set).
   const cards = (rows || []).filter(
     (r) =>
       r.updates.some((u) => (u.updated || "").trim() || (u.new || "").trim())
@@ -576,7 +581,7 @@ function ProcedureUpdatesCards({ rows }) {
     return (
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: C.pri, marginBottom: 4 }}>
-          📝 Procedure Updates by Client
+          📝 Procedure Updates
         </div>
         <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12, marginTop: 4 }}>
           No procedure updates recorded this period.
@@ -587,81 +592,148 @@ function ProcedureUpdatesCards({ rows }) {
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
       <div style={{ fontSize: 14, fontWeight: 700, color: C.pri, marginBottom: 12 }}>
-        📝 Procedure Updates by Client
+        📝 Procedure Updates
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {cards.flatMap((row) => {
-          // Build one card per (client × week-with-content) so the same client
-          // across multiple weeks renders as separate cards — no duplicate
-          // date rendering inside a single card.
-          const populated = row.updates.filter(
-            (u) => (u.updated || "").trim() || (u.new || "").trim(),
-          );
-          // If the client has zero update rows but has Whale links, still
-          // surface a single card so the link doesn't disappear.
-          const blocks = populated.length > 0
-            ? populated.map((u) => ({ week: u.week, updated: u.updated, new: u.new }))
-            : [{ week: row.weeks[0] || "—", updated: "", new: "" }];
-          return blocks.map((b, j) => (
-            <div
-              key={`${row.client}-${j}`}
-              style={{
-                background: C.surface,
-                border: `1px solid ${C.border}`,
-                borderRadius: 10,
-                padding: 16,
-              }}
-            >
+          // Build one card per week-with-content. Multi-client cards show one
+          // per-client block per sibling; solo cards show a single Updated/New
+          // pair. Whale links render ONCE on the first card per row group.
+          const weeksWithUpdates = Object.keys(row.weekUpdatesMap);
+          const blocks = weeksWithUpdates.length > 0
+            ? weeksWithUpdates.map((wk) => ({
+                week:         wk,
+                clientBlocks: row.weekUpdatesMap[wk],
+              }))
+            : [{ week: row.weeks[0] || "—", clientBlocks: [] }];
+
+          return blocks.map((b, j) => {
+            const headerLabel = row.isMultiClient
+              ? `🏢 ${row.clientList.join(" · ")}`
+              : `🏢 ${row.client}`;
+
+            // Detect broadcast: identical (updated, new) across siblings.
+            const first = b.clientBlocks[0];
+            const allSame = b.clientBlocks.length > 1 && first && b.clientBlocks.every(
+              (cb) => cb.updated === first.updated && cb.new === first.new,
+            );
+
+            return (
               <div
+                key={`${row.client}-${b.week}-${j}`}
                 style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  gap: 10,
-                  marginBottom: 12,
-                  flexWrap: "wrap",
+                  background: C.surface,
+                  border: `1px solid ${C.border}`,
+                  borderRadius: 10,
+                  padding: 16,
                 }}
               >
                 <div
                   style={{
-                    fontSize: 14,
-                    fontWeight: 700,
-                    color: row.isTeamWide ? C.muted : C.pri,
-                    fontStyle: row.isTeamWide ? "italic" : "normal",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 10,
+                    marginBottom: 12,
+                    flexWrap: "wrap",
                   }}
                 >
-                  🏢 {row.client}
+                  <div
+                    style={{
+                      fontSize: 14,
+                      fontWeight: 700,
+                      color: row.isTeamWide ? C.muted : C.pri,
+                      fontStyle: row.isTeamWide ? "italic" : "normal",
+                    }}
+                  >
+                    {headerLabel}
+                    {row.isMultiClient && (
+                      <span style={{ fontSize: 11, color: C.muted, fontWeight: 500, marginLeft: 8 }}>
+                        · combined entry · ×{row.clientList.length}
+                      </span>
+                    )}
+                  </div>
+                  <span
+                    style={{
+                      fontSize: 10,
+                      padding: "4px 10px",
+                      borderRadius: 12,
+                      background: C.card,
+                      color: C.sec,
+                      fontFamily: "'DM Mono', monospace",
+                      letterSpacing: 0.4,
+                    }}
+                  >
+                    {b.week}
+                  </span>
                 </div>
-                <span
-                  style={{
-                    fontSize: 10,
-                    padding: "4px 10px",
-                    borderRadius: 12,
-                    background: C.card,
-                    color: C.sec,
-                    fontFamily: "'DM Mono', monospace",
-                    letterSpacing: 0.4,
-                  }}
-                >
-                  {b.week}
-                </span>
-              </div>
 
-              <FieldRow label="Updated">
-                {b.updated ? b.updated : <span style={{ color: C.muted }}>—</span>}
-              </FieldRow>
-              <FieldRow label="New">
-                {b.new ? b.new : <span style={{ color: C.muted }}>—</span>}
-              </FieldRow>
-              {/* Whale links surface only on the FIRST card per client so we
-                  don't render them once per week. */}
-              {j === 0 && row.whaleLinks.length > 0 && (
-                <FieldRow label="Whale">
-                  <WhaleChipRow urls={row.whaleLinks} />
-                </FieldRow>
-              )}
-            </div>
-          ));
+                {row.isMultiClient && b.clientBlocks.length > 0 && !allSame ? (
+                  // Distinct per-client text — render one block per sibling.
+                  b.clientBlocks.map((cb, k) => (
+                    <div
+                      key={`${cb.client}-${k}`}
+                      style={{
+                        paddingTop: k > 0 ? 10 : 0,
+                        marginTop:  k > 0 ? 10 : 0,
+                        borderTop:  k > 0 ? `1px dashed ${C.border}` : "none",
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: 11,
+                          color: C.teal,
+                          fontWeight: 700,
+                          fontFamily: "'DM Mono', monospace",
+                          letterSpacing: 0.4,
+                          marginBottom: 6,
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        {cb.client}
+                      </div>
+                      <FieldRow label="Updated">
+                        {cb.updated ? cb.updated : <span style={{ color: C.muted }}>—</span>}
+                      </FieldRow>
+                      <FieldRow label="New">
+                        {cb.new ? cb.new : <span style={{ color: C.muted }}>—</span>}
+                      </FieldRow>
+                    </div>
+                  ))
+                ) : (
+                  // Solo client OR multi-client broadcast (identical text):
+                  // render one Updated/New pair.
+                  <>
+                    <FieldRow label="Updated">
+                      {first && first.updated
+                        ? first.updated
+                        : <span style={{ color: C.muted }}>—</span>}
+                    </FieldRow>
+                    <FieldRow label="New">
+                      {first && first.new
+                        ? first.new
+                        : <span style={{ color: C.muted }}>—</span>}
+                    </FieldRow>
+                    {row.isMultiClient && allSame && (
+                      <div style={{ fontSize: 10, color: C.muted, fontStyle: "italic", marginTop: 4 }}>
+                        (applies to all {row.clientList.length} clients)
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* Whale links surface only on the FIRST card per row so we
+                    don't repeat them per week (or per sibling). */}
+                {j === 0 && row.whaleLinks.length > 0 && (
+                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
+                    <FieldRow label="Whale">
+                      <WhaleChipRow urls={row.whaleLinks} />
+                    </FieldRow>
+                  </div>
+                )}
+              </div>
+            );
+          });
         })}
       </div>
     </div>
@@ -673,9 +745,8 @@ function TrainingTopicsByClientTable({ rows }) {
   const [hoverRow, setHoverRow] = useState(null);
   // Show every client row — even ones with no training noted — so the user
   // can scan all reviewed clients in one place. "(No training noted)" fills
-  // empty cells. Multi-client siblings that share identical training text
-  // collapse into a single row via groupTrainingRows.
-  const allRows = useMemo(() => groupTrainingRows(rows || []), [rows]);
+  // empty cells. Multi-client siblings already collapsed in buildPerClientView.
+  const allRows = rows || [];
   if (allRows.length === 0) {
     return (
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
@@ -725,18 +796,18 @@ function TrainingTopicsByClientTable({ rows }) {
           <tbody>
             {allRows.map((row, i) => {
               const both = row.trainingPreparers.length > 0 && row.trainingTL.length > 0;
-              const groupKey = (row.groupedClients || [row.client]).join("|");
-              const hover = hoverRow === groupKey;
+              const rowKey = row.client;
+              const hover = hoverRow === rowKey;
               const baseBg = hover
                 ? C.surface
                 : (i % 2 === 0 ? "transparent" : C.surface);
               const noTraining = row.trainingPreparers.length === 0 && row.trainingTL.length === 0;
-              const grouped   = (row.groupedClients || []).length > 1;
+              const isMulti = !!row.isMultiClient && (row.clientList || []).length > 1;
               return (
                 <tr
-                  key={groupKey}
-                  onMouseEnter={() => setHoverRow(groupKey)}
-                  onMouseLeave={() => setHoverRow((r) => (r === groupKey ? null : r))}
+                  key={rowKey}
+                  onMouseEnter={() => setHoverRow(rowKey)}
+                  onMouseLeave={() => setHoverRow((r) => (r === rowKey ? null : r))}
                   style={{
                     background: baseBg,
                     transition: "background 0.12s",
@@ -751,11 +822,11 @@ function TrainingTopicsByClientTable({ rows }) {
                       borderLeft: both ? `3px solid ${YN_COLOR.flag}` : "3px solid transparent",
                     }}
                   >
-                    {grouped ? (
+                    {isMulti ? (
                       <>
-                        <div>{row.groupedClients.join(", ")}</div>
+                        <div>{row.clientList.join(", ")}</div>
                         <div style={{ fontSize: 10, color: C.muted, fontWeight: 500, marginTop: 2, fontStyle: "italic" }}>
-                          combined entry · ×{row.groupedClients.length}
+                          combined entry · ×{row.clientList.length}
                         </div>
                       </>
                     ) : (
