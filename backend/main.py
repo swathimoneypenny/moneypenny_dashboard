@@ -5379,7 +5379,12 @@ def _delays_csv_url(sheet_id: str, gid: str) -> str:
 
 def _fetch_delays_csv(sheet_id: str, gid: str) -> str:
     """Cached CSV fetch for a specific Delays tab (sheet_id + gid). Returns
-    the raw CSV text, or "" on any failure. 5-min cache per (sheet, gid)."""
+    the raw CSV text, or "" on any failure. 5-min cache per (sheet, gid).
+
+    Decodes response bytes as UTF-8 explicitly — Google Sheets exports UTF-8
+    but rarely sets a charset header, so `requests` would otherwise default
+    to ISO-8859-1 and mangle smart quotes / em-dashes.
+    """
     if not sheet_id or not gid:
         return ""
     key = (sheet_id, gid)
@@ -5394,7 +5399,7 @@ def _fetch_delays_csv(sheet_id: str, gid: str) -> str:
             print(f"[delaysTab] fetch {gid} returned {resp.status_code}")
             _delays_csv_cache[key] = {"at": now, "csv": ""}
             return ""
-        csv_text = resp.text or ""
+        csv_text = resp.content.decode("utf-8", errors="replace")
     except Exception as e:
         print(f"[delaysTab] fetch {gid} error: {e}")
         _delays_csv_cache[key] = {"at": now, "csv": ""}
