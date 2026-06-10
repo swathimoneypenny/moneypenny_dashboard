@@ -2242,18 +2242,13 @@ _CHECKLIST_HEADER_CLIENT_TEXTS = (
     "clients",
     "client name",
 )
-_CHECKLIST_FLAG_PLACEHOLDERS = (
-    "",
-    "nil",
-    "n/a",
-    "na",
-    "none",
-    "-",
-    "—",
+# Only the two instruction-row strings + truly blank cells are rejected.
+# NIL / N/A / "-" are kept and surfaced as muted entries — TLs use them to
+# show they actively reviewed the row and had nothing to flag.
+_CHECKLIST_FLAG_HEADER_STRINGS = (
     "flag for training manager / ops",
-    "one item only - what it is and why it matters. leave blank if nothing this week.",
-    "one item only — what it is and why it matters. leave blank if nothing this week.",
 )
+_CHECKLIST_FLAG_INSTRUCTION_FRAGMENT = "one item only"
 
 
 def _is_valid_week_row(week_text: str, client_text: str) -> bool:
@@ -2274,10 +2269,21 @@ def _is_valid_week_row(week_text: str, client_text: str) -> bool:
     return any(w_lower.startswith(m) for m in _MONTH_PREFIXES)
 
 
-def _is_real_flag(flag_text: str) -> bool:
-    """True iff `flag_text` is a real flag (not NIL / placeholder / instruction
-    string). Used by the summary aggregator to filter `open_flags`."""
-    return (flag_text or "").strip().lower() not in _CHECKLIST_FLAG_PLACEHOLDERS
+def _is_valid_flag(flag_text: str) -> bool:
+    """True iff `flag_text` is a non-empty cell that isn't one of the two
+    instruction strings the TL sees in the column header. NIL / N/A / "-"
+    are intentionally NOT filtered — they represent an explicit "nothing
+    this week" annotation and the dashboard surfaces them muted.
+    """
+    s = (flag_text or "").strip()
+    if not s:
+        return False
+    sl = s.lower()
+    if sl in _CHECKLIST_FLAG_HEADER_STRINGS:
+        return False
+    if _CHECKLIST_FLAG_INSTRUCTION_FRAGMENT in sl:
+        return False
+    return True
 
 
 def _looks_like_checklist_header(row: list[str]) -> bool:
@@ -2400,7 +2406,7 @@ def _compute_checklist_summary(weeks: list[dict]) -> dict:
                 elif v == "no":
                     no_count += 1
             flag_text = (e.get("flag_tm_ops") or "").strip()
-            if _is_real_flag(flag_text):
+            if _is_valid_flag(flag_text):
                 open_flags += 1
                 flags.append({
                     "week":   w.get("week"),

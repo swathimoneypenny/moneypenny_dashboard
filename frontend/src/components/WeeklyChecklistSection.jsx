@@ -159,39 +159,78 @@ function TrainingNeedsBlock({ summary }) {
   );
 }
 
+// "Nothing-to-flag" values that still get shown but rendered muted (gray)
+// instead of orange — TLs use them to mark a row as actively reviewed.
+const _NIL_FLAG_TOKENS = new Set(["nil", "n/a", "na", "none", "-", "—"]);
+
+function isNilFlag(text) {
+  return _NIL_FLAG_TOKENS.has((text || "").trim().toLowerCase());
+}
+
 function OpenFlagsList({ summary }) {
   const flags = summary?.flags || [];
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: C.sec, marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.8 }}>
-        🚩 Open Flags
+      <div
+        style={{
+          fontSize: 12,
+          fontWeight: 700,
+          color: C.sec,
+          marginBottom: 10,
+          textTransform: "uppercase",
+          letterSpacing: 0.8,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+        }}
+      >
+        <span>🚩 Open Flags</span>
+        <span
+          style={{
+            fontSize: 11,
+            fontFamily: "'DM Mono', monospace",
+            background: C.surface,
+            color: flags.length > 0 ? C.pri : C.muted,
+            padding: "2px 8px",
+            borderRadius: 12,
+            fontWeight: 700,
+          }}
+        >
+          {flags.length}
+        </span>
       </div>
       {flags.length === 0 ? (
         <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12 }}>
           (none this period)
         </div>
       ) : (
-        flags.map((f, i) => (
-          <div
-            key={i}
-            style={{
-              padding: "10px 12px",
-              background: `${YN_COLOR.flag}14`,
-              border: `1px solid ${YN_COLOR.flag}55`,
-              borderLeft: `3px solid ${YN_COLOR.flag}`,
-              borderRadius: 6,
-              marginBottom: 8,
-              fontSize: 12,
-              color: C.pri,
-              lineHeight: 1.5,
-            }}
-          >
-            <div style={{ fontSize: 10, color: C.muted, fontFamily: "'DM Mono', monospace", marginBottom: 4 }}>
-              {f.week} · {f.client}
+        flags.map((f, i) => {
+          const nil = isNilFlag(f.flag);
+          const accent = nil ? YN_COLOR.na : YN_COLOR.flag;
+          return (
+            <div
+              key={i}
+              style={{
+                padding: "10px 12px",
+                background: nil ? "rgba(107, 122, 149, 0.06)" : `${YN_COLOR.flag}14`,
+                border: nil ? `1px solid ${C.border}` : `1px solid ${YN_COLOR.flag}55`,
+                borderLeft: `3px solid ${accent}`,
+                borderRadius: 6,
+                marginBottom: 8,
+                fontSize: 12,
+                color: nil ? C.muted : C.pri,
+                lineHeight: 1.5,
+              }}
+            >
+              <div style={{ fontSize: 10, color: C.muted, fontFamily: "'DM Mono', monospace", marginBottom: 4 }}>
+                {f.week} · {f.client}
+              </div>
+              <div style={{ fontWeight: nil ? 500 : 600, fontStyle: nil ? "italic" : "normal" }}>
+                {f.flag}
+              </div>
             </div>
-            <div>{f.flag}</div>
-          </div>
-        ))
+          );
+        })
       )}
     </div>
   );
