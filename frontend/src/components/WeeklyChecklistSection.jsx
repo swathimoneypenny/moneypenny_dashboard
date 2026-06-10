@@ -236,24 +236,43 @@ function OpenFlagsList({ summary }) {
   );
 }
 
-function WhaleLinkCell({ url }) {
-  if (!url || !/^https?:\/\//i.test(url)) {
-    return <span style={{ color: C.muted, fontSize: 11 }}>{url || "—"}</span>;
+// Accepts either an array of URLs (`urls={r.whale_links}`) or, for backward
+// compat, a single `url` string. Strings are split on whitespace / comma /
+// semicolon if they contain multiple URLs, so a single populated cell with
+// "https://… https://…" still renders both.
+function WhaleLinkCell({ urls, url }) {
+  let list = [];
+  if (Array.isArray(urls)) {
+    list = urls.filter((u) => typeof u === "string" && /^https?:\/\//i.test(u));
+  } else if (typeof url === "string") {
+    list = (url.match(/https?:\/\/[^\s,;'"\)]+/gi) || [])
+      .map((u) => u.replace(/[.,;:)]+$/, ""))
+      .filter(Boolean);
+  }
+  if (list.length === 0) {
+    return <span style={{ color: C.muted, fontSize: 11 }}>—</span>;
   }
   return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      style={{
-        color: C.teal,
-        fontSize: 11,
-        textDecoration: "none",
-        borderBottom: `1px dashed ${C.teal}`,
-      }}
-    >
-      🐳 Whale
-    </a>
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      {list.map((u, i) => (
+        <a
+          key={i}
+          href={u}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={u}
+          style={{
+            color: C.teal,
+            fontSize: 11,
+            textDecoration: "none",
+            borderBottom: `1px dashed ${C.teal}`,
+            whiteSpace: "nowrap",
+          }}
+        >
+          🐳 Whale{list.length > 1 ? ` ${i + 1}` : ""}
+        </a>
+      ))}
+    </div>
   );
 }
 
@@ -368,7 +387,7 @@ function ChecklistTable({ weeks, expanded, onToggle }) {
                         <span style={{ color: C.muted }}>NIL</span>
                       )}
                     </td>
-                    <td style={{ ...td, textAlign: "center" }}><WhaleLinkCell url={r.whale_link} /></td>
+                    <td style={{ ...td, textAlign: "center" }}><WhaleLinkCell urls={r.whale_links} /></td>
                   </tr>
                 );
               })}

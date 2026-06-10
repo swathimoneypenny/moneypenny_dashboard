@@ -2107,7 +2107,7 @@ WEEKLY_CHECKLIST_GIDS: dict[str, str | None] = {
     "team_h": "1391629922",
     "team_i": "704609157",
     "team_j": "1110008086",
-    "team_k": "64928295",
+    "team_k": "488571943",
     "team_l": "694721645",
     "team_m": "387054095",
     "team_n": "1515770345",
@@ -2299,6 +2299,23 @@ def _looks_like_checklist_header(row: list[str]) -> bool:
     return hits >= 3
 
 
+_WHALE_URL_RE = re.compile(r"https?://[^\s,;'\"\)]+", re.IGNORECASE)
+
+
+def _parse_whale_links(text: str) -> list[str]:
+    """Extract every URL from a free-form Whale-links cell. Handles cells
+    with multiple URLs separated by newlines, commas, spaces, or arbitrary
+    surrounding prose. Trailing punctuation (.,;:)) is stripped per-URL."""
+    if not text or not str(text).strip():
+        return []
+    urls: list[str] = []
+    for raw in _WHALE_URL_RE.findall(str(text)):
+        cleaned = raw.rstrip(".,;:)")
+        if cleaned and cleaned not in urls:
+            urls.append(cleaned)
+    return urls
+
+
 def _shape_checklist_row(row: list[str]) -> dict:
     """Convert a raw CSV row to the public-API entry shape, normalizing each
     boolean-ish field through _normalize_yes_no."""
@@ -2321,7 +2338,7 @@ def _shape_checklist_row(row: list[str]) -> dict:
         "checked_meeting_notes": _normalize_yes_no(col("checked_meeting_notes")),
         "meeting_notes_shared":  _normalize_yes_no(col("meeting_notes_shared")),
         "flag_tm_ops":           col("flag_tm_ops"),
-        "whale_link":            col("whale_links"),
+        "whale_links":           _parse_whale_links(col("whale_links")),
     }
 
 
@@ -2413,8 +2430,7 @@ def _compute_checklist_summary(weeks: list[dict]) -> dict:
                     "client": e.get("client"),
                     "flag":   flag_text,
                 })
-            if (e.get("whale_link") or "").strip():
-                whale_links += 1
+            whale_links += len(e.get("whale_links") or [])
             for raw, bucket in ((e.get("training_preparers"), preparer_topics),
                                 (e.get("training_myself"),   myself_topics)):
                 for topic in _split_training_topics(raw):
