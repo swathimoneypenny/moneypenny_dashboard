@@ -1,19 +1,23 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { C, authFetch } from "../config";
-import WeeklyReviewSection from "../components/WeeklyReviewSection";
+import { WeekDropdown } from "../components/WeeklyChecklistSection";
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList,
 } from "recharts";
 
-const WEEK_OPTIONS = [
-  { value: 0, label: "Most recent week" },
-  { value: 1, label: "1 week ago" },
-  { value: 2, label: "2 weeks ago" },
-  { value: 3, label: "3 weeks ago" },
-  { value: 4, label: "4 weeks ago" },
-];
+// TL-confirmed palette (2026-06-05):
+const COLOR_GREEN  = "#10B981";
+const COLOR_YELLOW = "#F59E0B";
+const COLOR_RED    = "#EF4444";
+const COLOR_GRAY   = "#6B7280";
 
-function SummaryCard({ label, value, sublabel, color, valueColor }) {
+function gradeColor(pct) {
+  if (pct >= 80) return COLOR_GREEN;
+  if (pct >= 50) return COLOR_YELLOW;
+  return COLOR_RED;
+}
+
+function SummaryCard({ label, value, sublabel, color }) {
   return (
     <div
       style={{
@@ -29,7 +33,7 @@ function SummaryCard({ label, value, sublabel, color, valueColor }) {
       <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8, fontWeight: 600 }}>
         {label}
       </div>
-      <div style={{ fontSize: 28, fontWeight: 700, color: valueColor || color, fontFamily: "'DM Mono', monospace", lineHeight: 1 }}>
+      <div style={{ fontSize: 28, fontWeight: 700, color, fontFamily: "'DM Mono', monospace", lineHeight: 1 }}>
         {value}
       </div>
       {sublabel && (
@@ -39,76 +43,85 @@ function SummaryCard({ label, value, sublabel, color, valueColor }) {
   );
 }
 
-function TeamAccordionRow({ entry, onNavigate, isOpen, onToggle }) {
-  const filled = !!entry.isFilled;
-  const accent = filled ? "#3DC58B" : C.muted;
+function TeamCard({ team, onOpen }) {
+  const hasData      = !!team.has_data;
+  const compliancePct = Number(team.compliance_pct || 0);
+  const accent       = hasData ? gradeColor(compliancePct) : COLOR_GRAY;
+  const flagBadge    = team.open_flags > 0;
   return (
     <div
+      onClick={() => onOpen && onOpen(team)}
       style={{
         background: C.card,
         border: `1px solid ${C.border}`,
-        borderLeft: `3px solid ${accent}`,
-        borderRadius: 8,
-        marginBottom: 8,
-        overflow: "hidden",
+        borderLeft: `4px solid ${accent}`,
+        borderRadius: 10,
+        padding: "14px 16px",
+        cursor: onOpen ? "pointer" : "default",
+        transition: "background 0.15s, transform 0.15s",
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
       }}
+      onMouseEnter={(e) => { if (onOpen) { e.currentTarget.style.background = `${accent}0A`; } }}
+      onMouseLeave={(e) => { if (onOpen) { e.currentTarget.style.background = C.card; } }}
     >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          padding: "10px 14px",
-          cursor: filled ? "pointer" : "default",
-        }}
-        onClick={() => filled && onToggle && onToggle()}
-      >
-        <button
-          onClick={(e) => { e.stopPropagation(); onNavigate && onNavigate(entry.teamId); }}
-          style={{
-            background: "transparent",
-            border: `1px solid ${C.border}`,
-            color: C.pri,
-            padding: "5px 12px",
-            borderRadius: 6,
-            cursor: "pointer",
-            fontSize: 12,
-            fontWeight: 600,
-            fontFamily: "'DM Sans', sans-serif",
-            transition: "all 0.15s",
-          }}
-          onMouseEnter={(e) => { e.currentTarget.style.borderColor = C.blue; e.currentTarget.style.color = C.blue; }}
-          onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.pri; }}
-          title="Open team dashboard"
-        >
-          {entry.teamLabel || entry.teamId}
-        </button>
-        <span style={{ fontSize: 12, color: C.sec }}>
-          {entry.leadName ? `${entry.leadName}'s team` : ""}
-        </span>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.pri }}>{team.team_label}</div>
+          {team.lead && (
+            <div style={{ fontSize: 11, color: C.muted }}>Lead: {team.lead}</div>
+          )}
+        </div>
         <span
           style={{
-            marginLeft: "auto",
-            fontSize: 11,
-            padding: "3px 10px",
-            borderRadius: 12,
-            background: filled ? "rgba(61,197,139,0.15)" : C.surface,
-            color: accent,
+            fontSize: 10,
             fontWeight: 700,
-            letterSpacing: 0.3,
+            color: hasData ? COLOR_GREEN : COLOR_GRAY,
+            background: hasData ? "rgba(16,185,129,0.15)" : C.surface,
+            padding: "3px 8px",
+            borderRadius: 12,
+            letterSpacing: 0.4,
           }}
         >
-          {filled ? "✓ Filled" : "Not filled"}
+          {hasData ? "✓ Filled" : "Not filled"}
         </span>
-        {filled && (
-          <span style={{ color: C.muted, fontSize: 14, marginLeft: 4 }}>
-            {isOpen ? "▾" : "▸"}
-          </span>
-        )}
       </div>
-      {filled && isOpen && (
-        <div style={{ padding: "8px 14px 14px", borderTop: `1px solid ${C.border}` }}>
-          <WeeklyReviewSection teamId={entry.teamId} embedded />
+
+      {hasData && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 12, marginTop: 2 }}>
+          <div>
+            <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: 0.6 }}>Compliance</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: accent, fontFamily: "'DM Mono', monospace", lineHeight: 1 }}>
+              {compliancePct.toFixed(1)}%
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 14, fontSize: 11, color: C.sec, fontFamily: "'DM Mono', monospace" }}>
+            <span title="Open flags">
+              <span style={{ color: flagBadge ? COLOR_YELLOW : C.muted, fontWeight: 700 }}>🚩 {team.open_flags}</span>
+            </span>
+            <span title="Whale updates" style={{ color: team.whale_updates > 0 ? C.teal : C.muted }}>
+              🐳 {team.whale_updates}
+            </span>
+            <span title="Clients reviewed" style={{ color: team.clients_reviewed > 0 ? C.blue : C.muted }}>
+              👥 {team.clients_reviewed}
+            </span>
+            <span title="Weeks filled" style={{ color: C.muted }}>
+              📅 {team.weeks_filled}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {hasData && team.training_topics_count > 0 && (
+        <div style={{ fontSize: 11, color: C.muted }}>
+          {team.training_topics_count} training topic{team.training_topics_count === 1 ? "" : "s"} recorded
+        </div>
+      )}
+
+      {team.error && (
+        <div style={{ fontSize: 10, color: COLOR_RED, fontStyle: "italic" }}>
+          {team.error}
         </div>
       )}
     </div>
@@ -118,21 +131,22 @@ function TeamAccordionRow({ entry, onNavigate, isOpen, onToggle }) {
 export default function AdminHourPage({ onBack, onSelectTeam }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [weekOffset, setWeekOffset] = useState(0);
   const [error, setError] = useState(null);
-  const [expanded, setExpanded] = useState({});
+  const [selectedWeek, setSelectedWeek] = useState("all");
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    setExpanded({});
-    authFetch(`/api/admin-hour?week_offset=${weekOffset}`)
+    const url = selectedWeek && selectedWeek !== "all"
+      ? `/api/checklist/cross-team?week=${encodeURIComponent(selectedWeek)}`
+      : `/api/checklist/cross-team`;
+    authFetch(url)
       .then((r) => r.json())
       .then((d) => {
         if (cancelled) return;
-        if (d?.error) { setError(d.error); setData(null); }
-        else          { setData(d); }
+        if (d?.error && !d?.teams) { setError(d.error); setData(null); }
+        else                        { setData(d); }
         setLoading(false);
       })
       .catch((err) => {
@@ -141,22 +155,29 @@ export default function AdminHourPage({ onBack, onSelectTeam }) {
         setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [weekOffset]);
+  }, [selectedWeek]);
 
-  const summary = data?.summary || {};
-  const teams   = Array.isArray(data?.teams) ? data.teams : [];
+  const summary    = data?.summary || {};
+  const teams      = Array.isArray(data?.teams) ? data.teams : [];
+  const availWeeks = data?.available_weeks || [];
 
-  // Compliance chart: one bar per team, filled = 1, not filled = 0
-  const complianceData = useMemo(
-    () => teams.map((t) => ({
-      name:     (t.teamLabel || t.teamId).replace(/^Team\s+/i, ""),
-      filled:   t.isFilled ? 1 : 0,
-      teamId:   t.teamId,
-      label:    t.teamLabel || t.teamId,
-      isFilled: t.isFilled,
-    })),
+  const complianceChartData = useMemo(
+    () => teams
+      .filter((t) => t.has_data)
+      .map((t) => ({
+        name:           (t.team_label || t.team_id || "").replace(/^Team\s+/i, ""),
+        teamId:         t.team_id,
+        label:          t.team_label,
+        compliance:     Number(t.compliance_pct || 0),
+        open_flags:     t.open_flags,
+        whale_updates:  t.whale_updates,
+      })),
     [teams],
   );
+
+  const heading = selectedWeek && selectedWeek !== "all"
+    ? `Week of ${selectedWeek}`
+    : "All weeks";
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg }}>
@@ -192,110 +213,106 @@ export default function AdminHourPage({ onBack, onSelectTeam }) {
             Admin Hour
           </div>
           <div style={{ fontSize: 12, color: C.sec, marginTop: 2 }}>
-            Cross-team weekly review · {data?.weekRange || "—"}
+            Cross-team Weekly Admin Checklist · {heading}
           </div>
         </div>
-        <select
-          value={weekOffset}
-          onChange={(e) => setWeekOffset(Number(e.target.value))}
-          style={{
-            background: C.surface,
-            border: `1px solid ${C.border}`,
-            borderRadius: 8,
-            color: C.pri,
-            padding: "6px 12px",
-            fontSize: 12,
-            fontFamily: "'DM Sans', sans-serif",
-            cursor: "pointer",
-            marginLeft: 16,
-          }}
-        >
-          {WEEK_OPTIONS.map((w) => (
-            <option key={w.value} value={w.value}>{w.label}</option>
-          ))}
-        </select>
         <div style={{ marginLeft: "auto", fontSize: 12, color: C.muted }}>
-          {loading ? "Loading…" : `${summary.teamsFilled ?? 0} of ${summary.totalTeams ?? 0} filled`}
+          {loading
+            ? "Loading…"
+            : `${summary.teams_with_data ?? 0} of ${summary.total_teams ?? 0} teams filled`}
         </div>
       </div>
 
       {/* Body */}
       <div style={{ padding: "24px 32px", display: "flex", flexDirection: "column", gap: 24 }}>
         {error && (
-          <div style={{ color: C.red, fontSize: 13, padding: 16, border: `1px solid ${C.border}`, borderRadius: 8 }}>
-            Couldn't load admin-hour data: {error}
+          <div style={{ color: COLOR_RED, fontSize: 13, padding: 16, border: `1px solid ${C.border}`, borderRadius: 8 }}>
+            Couldn't load Admin Hour data: {error}
           </div>
         )}
+
+        {/* Week dropdown */}
+        <WeekDropdown
+          weeks={availWeeks}
+          selected={selectedWeek}
+          onChange={setSelectedWeek}
+        />
 
         {/* Summary cards */}
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           <SummaryCard
-            label="Compliance"
-            value={`${summary.compliancePct ?? 0}%`}
-            sublabel={`${summary.teamsFilled ?? 0} / ${summary.totalTeams ?? 0} leads filled`}
-            color="#3DC58B"
+            label="Teams with data"
+            value={`${summary.teams_with_data ?? 0} / ${summary.total_teams ?? 0}`}
+            sublabel="Leads who filled the checklist"
+            color={COLOR_GREEN}
           />
           <SummaryCard
-            label="Issues flagged"
-            value={summary.totalIssuesFound ?? 0}
-            sublabel="Complaint themes + single-point-failure risks"
-            color="#E25C5C"
+            label="Avg compliance"
+            value={`${(summary.average_compliance_pct ?? 0).toFixed(1)}%`}
+            sublabel="Across teams with data"
+            color={gradeColor(summary.average_compliance_pct ?? 0)}
           />
           <SummaryCard
-            label="SOP gaps"
-            value={summary.totalSopGaps ?? 0}
-            sublabel="Same question asked twice"
-            color="#F2895A"
+            label="Flags raised"
+            value={summary.total_flags ?? 0}
+            sublabel="Non-empty flag cells (NIL included)"
+            color={(summary.total_flags ?? 0) > 0 ? COLOR_YELLOW : C.muted}
           />
           <SummaryCard
-            label="Commitments"
-            value={summary.totalCommitments ?? 0}
-            sublabel="Open promises across teams"
-            color="#F0B947"
+            label="Whale updates"
+            value={summary.total_whale_updates ?? 0}
+            sublabel="Total URLs across all teams"
+            color={C.teal}
+          />
+          <SummaryCard
+            label="Clients reviewed"
+            value={summary.total_clients_reviewed ?? 0}
+            sublabel="Distinct named clients"
+            color={C.blue}
+          />
+          <SummaryCard
+            label="Weeks tracked"
+            value={summary.total_weeks_tracked ?? 0}
+            sublabel="Across all teams"
+            color={C.purple}
           />
         </div>
 
-        {/* Compliance chart */}
+        {/* Per-team compliance bar chart */}
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 16px" }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: C.sec, marginBottom: 16 }}>
             Per-team Compliance
           </div>
           {loading ? (
-            <div className="kpi-skeleton" style={{ height: 200, borderRadius: 8 }} />
-          ) : complianceData.length === 0 ? (
-            <div style={{ height: 200, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontStyle: "italic", fontSize: 13 }}>
-              No teams configured.
+            <div className="kpi-skeleton" style={{ height: 220, borderRadius: 8 }} />
+          ) : complianceChartData.length === 0 ? (
+            <div style={{ height: 220, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontStyle: "italic", fontSize: 13 }}>
+              No teams have filled the checklist for {heading.toLowerCase()}.
             </div>
           ) : (
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={complianceData} margin={{ top: 4, right: 8, left: -28, bottom: 4 }}>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={complianceChartData} margin={{ top: 16, right: 12, left: -20, bottom: 4 }}>
                 <CartesianGrid vertical={false} stroke={C.border} strokeDasharray="3 3" />
                 <XAxis dataKey="name" tick={{ fill: C.sec, fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis
-                  tick={{ fill: C.muted, fontSize: 10 }}
-                  axisLine={false}
-                  tickLine={false}
-                  domain={[0, 1]}
-                  ticks={[0, 1]}
-                  tickFormatter={(v) => v ? "✓" : ""}
-                />
+                <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} domain={[0, 100]} ticks={[0, 50, 80, 100]} unit="%" />
                 <Tooltip
                   cursor={{ fill: "rgba(255,255,255,0.04)" }}
                   contentStyle={{ background: "rgba(11,25,41,0.95)", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.pri }}
-                  formatter={(_v, _k, p) => [p?.payload?.isFilled ? "Filled" : "Not filled", p?.payload?.label]}
+                  formatter={(v, _k, p) => [`${Number(v).toFixed(1)}%`, `${p?.payload?.label}`]}
                   labelFormatter={() => ""}
                 />
-                <Bar dataKey="filled" radius={[4, 4, 0, 0]}>
-                  {complianceData.map((e, i) => (
-                    <Cell key={i} fill={e.isFilled ? "#3DC58B" : "#2A3A55"} />
+                <Bar dataKey="compliance" radius={[4, 4, 0, 0]}>
+                  {complianceChartData.map((e, i) => (
+                    <Cell key={i} fill={gradeColor(e.compliance)} />
                   ))}
+                  <LabelList dataKey="compliance" position="top" formatter={(v) => `${Math.round(v)}%`} style={{ fill: C.pri, fontSize: 10 }} />
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
           )}
         </div>
 
-        {/* Per-team accordion */}
+        {/* Team grid */}
         <div>
           <div style={{ fontSize: 13, fontWeight: 600, color: C.sec, marginBottom: 12 }}>
             Teams ({teams.length})
@@ -305,15 +322,15 @@ export default function AdminHourPage({ onBack, onSelectTeam }) {
           ) : teams.length === 0 ? (
             <div style={{ color: C.muted, fontSize: 13, fontStyle: "italic" }}>No teams configured.</div>
           ) : (
-            teams.map((t) => (
-              <TeamAccordionRow
-                key={t.teamId}
-                entry={t}
-                isOpen={!!expanded[t.teamId]}
-                onToggle={() => setExpanded((prev) => ({ ...prev, [t.teamId]: !prev[t.teamId] }))}
-                onNavigate={(tid) => onSelectTeam && onSelectTeam({ id: tid, name: t.teamLabel || tid })}
-              />
-            ))
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+              {teams.map((t) => (
+                <TeamCard
+                  key={t.team_id}
+                  team={t}
+                  onOpen={onSelectTeam ? (team) => onSelectTeam({ id: team.team_id, name: team.team_label }) : null}
+                />
+              ))}
+            </div>
           )}
         </div>
       </div>

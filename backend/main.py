@@ -5772,12 +5772,58 @@ def _build_team_checklist(team_id: str) -> dict:
     }
 
 
+def _sort_weeks_desc(week_labels: list[str]) -> list[str]:
+    """Sort week labels newest → oldest by their parsed start date, dedup'd.
+    Labels we can't parse fall to the end in their original order."""
+    fallback_year = datetime.now().year
+    seen: set[str] = set()
+    parseable: list[tuple[str, str]] = []   # (iso_date, label)
+    unparseable: list[str] = []
+    for label in week_labels:
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        iso = _parse_week_label_to_iso(label, fallback_year)
+        if iso:
+            parseable.append((iso, label))
+        else:
+            unparseable.append(label)
+    parseable.sort(key=lambda kv: kv[0], reverse=True)
+    return [lbl for _, lbl in parseable] + unparseable
+
+
+def _filter_team_checklist_by_week(data: dict, week_filter: str | None) -> dict:
+    """Apply ?week=… to a team checklist payload. Always populates
+    `available_weeks` and `selected_week` so the dropdown can render even
+    when the filter narrows the response to one week. Recomputes summary
+    over the filtered subset."""
+    weeks_all = data.get("weeks") or []
+    available_weeks = _sort_weeks_desc([w.get("week") or "" for w in weeks_all if w.get("week")])
+    if not week_filter or week_filter.lower() == "all":
+        filtered = weeks_all
+        selected = "all"
+    else:
+        wf_lc = week_filter.strip().lower()
+        filtered = [w for w in weeks_all if (w.get("week") or "").strip().lower() == wf_lc]
+        selected = week_filter
+    summary = _compute_checklist_summary(filtered)
+    return {
+        **data,
+        "weeks":            filtered,
+        "summary":          summary,
+        "available_weeks":  available_weeks,
+        "selected_week":    selected,
+    }
+
+
 @app.get("/api/team/{team_id}/checklist")
-async def team_checklist_endpoint(team_id: str):
+async def team_checklist_endpoint(team_id: str, week: str | None = None):
     """Weekly Admin Checklist for one team — every week + the aggregated
-    summary block. Cached server-side via _CHECKLIST_CSV_TTL (10 min)."""
+    summary block. Cached server-side via _CHECKLIST_CSV_TTL (10 min).
+    Optional ?week=Jun%2008%20-%2012 narrows the response to one week."""
     try:
-        return await asyncio.to_thread(_build_team_checklist, team_id)
+        data = await asyncio.to_thread(_build_team_checklist, team_id)
+        return _filter_team_checklist_by_week(data, week)
     except Exception as e:
         import traceback
         return JSONResponse({
@@ -5788,6 +5834,8 @@ async def team_checklist_endpoint(team_id: str):
             "traceback_tail": traceback.format_exc().splitlines()[-6:],
             "weeks":          [],
             "summary":        {},
+            "available_weeks": [],
+            "selected_week":   week or "all",
         }, status_code=200)
 
 
@@ -5812,6 +5860,116 @@ async def team_checklist_summary_endpoint(team_id: str):
             "error_detail": str(e),
             "summary":      {},
         }, status_code=200)
+
+
+# Cross-team aggregate (10-min cache, keyed by ?week filter so each
+# distinct query gets its own slot)
+_checklist_cross_team_cache: dict[str, dict] = {}
+_CHECKLIST_CROSS_TTL = 600
+
+
+def _checklist_grade_color(pct: float) -> str:
+    if pct >= 80:   return "green"
+    if pct >= 50:   return "yellow"
+    return "red"
+
+
+@app.get("/api/checklist/cross-team")
+async def cross_team_checklist_endpoint(week: str | None = None):
+    """Aggregate Weekly Admin Checklist data across every team. Optional
+    ?week=Jun%2001%20-%2005 narrows each team's data to just that week
+    before aggregating. Always returns the full available_weeks list (union
+    across teams, deduped, sorted newest-first) so the dropdown stays
+    populated regardless of filter."""
+    cache_key = (week or "all").strip().lower()
+    cached = _checklist_cross_team_cache.get(cache_key)
+    now = datetime.now()
+    if cached and (now - cached["at"]).total_seconds() < _CHECKLIST_CROSS_TTL:
+        return cached["data"]
+
+    async def _one(tid: str) -> dict:
+        return await asyncio.to_thread(_build_team_checklist, tid)
+
+    results = await asyncio.gather(*[_one(t) for t in TEAM_LETTER_MAP.keys()])
+
+    # Build the union of available weeks (across every team, regardless of
+    # whether the current filter excludes them) so the dropdown always lists
+    # everything the user could pick.
+    all_week_labels: list[str] = []
+    for r in results:
+        for w in r.get("weeks") or []:
+            wk = w.get("week")
+            if wk:
+                all_week_labels.append(wk)
+    available_weeks = _sort_weeks_desc(all_week_labels)
+
+    selected = (week or "all").strip()
+    week_filter_lc = selected.lower() if selected.lower() != "all" else ""
+
+    team_rows: list[dict] = []
+    agg_total_clients = 0
+    agg_total_weeks   = 0
+    agg_total_flags   = 0
+    agg_total_whale   = 0
+    teams_with_data   = 0
+    teams_compliance: list[float] = []
+
+    for r in results:
+        cfg = TEAM_LETTER_MAP.get(r.get("team_id") or "") or {}
+        weeks_all = r.get("weeks") or []
+        if week_filter_lc:
+            weeks_filt = [w for w in weeks_all
+                          if (w.get("week") or "").strip().lower() == week_filter_lc]
+        else:
+            weeks_filt = weeks_all
+        team_summary = _compute_checklist_summary(weeks_filt)
+        weeks_filled = len(weeks_filt)
+        has_data = weeks_filled > 0 and not r.get("error")
+        training_topics_count = (
+            len(team_summary.get("training_preparers") or [])
+            + len(team_summary.get("training_myself") or [])
+        )
+
+        if has_data:
+            teams_with_data += 1
+            teams_compliance.append(float(team_summary.get("compliance_pct") or 0))
+            agg_total_clients += int(team_summary.get("total_clients_reviewed") or 0)
+            agg_total_weeks   += weeks_filled
+            agg_total_flags   += int(team_summary.get("open_flags") or 0)
+            agg_total_whale   += int(team_summary.get("whale_links_count") or 0)
+
+        team_rows.append({
+            "team_id":               r.get("team_id"),
+            "team_label":            r.get("team_label") or cfg.get("label"),
+            "lead":                  cfg.get("leadName") or "",
+            "has_data":              has_data,
+            "error":                 r.get("error"),
+            "weeks_filled":          weeks_filled,
+            "compliance_pct":        float(team_summary.get("compliance_pct") or 0),
+            "open_flags":            int(team_summary.get("open_flags") or 0),
+            "whale_updates":         int(team_summary.get("whale_links_count") or 0),
+            "clients_reviewed":      int(team_summary.get("total_clients_reviewed") or 0),
+            "training_topics_count": training_topics_count,
+        })
+
+    average_compliance = round(sum(teams_compliance) / len(teams_compliance), 1) if teams_compliance else 0.0
+
+    payload = {
+        "available_weeks":  available_weeks,
+        "selected_week":    selected,
+        "summary": {
+            "total_teams":            len(team_rows),
+            "teams_with_data":        teams_with_data,
+            "total_weeks_tracked":    agg_total_weeks,
+            "total_clients_reviewed": agg_total_clients,
+            "average_compliance_pct": average_compliance,
+            "total_flags":            agg_total_flags,
+            "total_whale_updates":    agg_total_whale,
+        },
+        "teams": team_rows,
+    }
+    _checklist_cross_team_cache[cache_key] = {"at": now, "data": payload}
+    return payload
 
 
 @app.get("/api/checklist/cross-team-summary")
@@ -6769,6 +6927,7 @@ async def clear_cache():
     _team_delay_questions_cache.clear()
     _delays_csv_cache.clear()
     _checklist_csv_cache.clear()
+    _checklist_cross_team_cache.clear()
     _departure_analysis_cache.clear()
     return {"ok": True, "status": "all caches cleared", "time": datetime.now().isoformat()}
 

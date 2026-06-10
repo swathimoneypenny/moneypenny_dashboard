@@ -159,6 +159,48 @@ function TrainingNeedsBlock({ summary }) {
   );
 }
 
+// Reusable dropdown — used here AND in the cross-team Admin Hour view.
+export function WeekDropdown({ weeks, selected, onChange }) {
+  const list = Array.isArray(weeks) ? weeks : [];
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+      <label
+        style={{
+          fontSize: 11,
+          color: C.muted,
+          textTransform: "uppercase",
+          letterSpacing: 0.8,
+          fontWeight: 600,
+        }}
+      >
+        Filter by week
+      </label>
+      <select
+        value={selected || "all"}
+        onChange={(e) => onChange && onChange(e.target.value)}
+        style={{
+          background: C.surface,
+          border: `1px solid ${C.border}`,
+          borderRadius: 6,
+          color: C.pri,
+          padding: "6px 12px",
+          fontSize: 13,
+          fontFamily: "'DM Sans', sans-serif",
+          cursor: "pointer",
+          minWidth: 200,
+          outline: "none",
+        }}
+      >
+        <option value="all">All weeks</option>
+        {list.map((w) => (
+          <option key={w} value={w}>{w}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+
 // "Nothing-to-flag" values that still get shown but rendered muted (gray)
 // instead of orange — TLs use them to mark a row as actively reviewed.
 const _NIL_FLAG_TOKENS = new Set(["nil", "n/a", "na", "none", "-", "—"]);
@@ -407,12 +449,16 @@ function ChecklistTable({ weeks, expanded, onToggle }) {
 export default function WeeklyChecklistSection({ teamId }) {
   const [state, setState] = useState({ loading: true, data: null, error: null });
   const [tableOpen, setTableOpen] = useState(false);
+  const [selectedWeek, setSelectedWeek] = useState("all");
 
   useEffect(() => {
     if (!teamId) return;
     const ctrl = new AbortController();
-    setState({ loading: true, data: null, error: null });
-    authFetch(`/api/team/${teamId}/checklist`, { signal: ctrl.signal })
+    setState((s) => ({ ...s, loading: true, error: null }));
+    const url = selectedWeek && selectedWeek !== "all"
+      ? `/api/team/${teamId}/checklist?week=${encodeURIComponent(selectedWeek)}`
+      : `/api/team/${teamId}/checklist`;
+    authFetch(url, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((j) => {
         if (ctrl.signal.aborted) return;
@@ -423,7 +469,7 @@ export default function WeeklyChecklistSection({ teamId }) {
         setState({ loading: false, data: null, error: err?.message || String(err) });
       });
     return () => ctrl.abort();
-  }, [teamId]);
+  }, [teamId, selectedWeek]);
 
   const data = state.data;
   const summary = data?.summary;
@@ -437,6 +483,12 @@ export default function WeeklyChecklistSection({ teamId }) {
       <div style={{ fontSize: 11, color: C.muted, marginBottom: 16 }}>
         Sourced from the per-team checklist tab (cached server-side for 10 min).
       </div>
+
+      <WeekDropdown
+        weeks={data?.available_weeks || []}
+        selected={selectedWeek}
+        onChange={setSelectedWeek}
+      />
 
       {state.loading && (
         <div style={{ padding: 30, textAlign: "center", color: C.muted, fontSize: 12 }}>
