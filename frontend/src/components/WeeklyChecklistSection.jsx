@@ -117,70 +117,120 @@ function isNilFlag(text) {
   return _NIL_FLAG_TOKENS.has((text || "").trim().toLowerCase());
 }
 
+function FlagCard({ flag, nil }) {
+  const accent = nil ? "#6B7280" : YN_COLOR.flag;
+  const icon   = nil ? "○" : "⚠️";
+  return (
+    <div
+      style={{
+        padding: "12px 14px",
+        background: nil ? "rgba(107, 122, 149, 0.06)" : `${YN_COLOR.flag}14`,
+        border: nil ? `1px solid ${C.border}` : `1px solid ${YN_COLOR.flag}55`,
+        borderLeft: `3px solid ${accent}`,
+        borderRadius: 8,
+        marginBottom: 8,
+        lineHeight: 1.5,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          color: C.muted,
+          fontFamily: "'DM Mono', monospace",
+          marginBottom: 4,
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+        }}
+      >
+        <span style={{ color: accent }}>{icon}</span>
+        <span>{flag.week} · {flag.client}</span>
+      </div>
+      <div
+        style={{
+          fontSize: 13,
+          fontWeight: nil ? 500 : 600,
+          fontStyle: nil ? "italic" : "normal",
+          color: nil ? C.muted : C.pri,
+        }}
+      >
+        {nil ? `${flag.flag} (no issues this week)` : flag.flag}
+      </div>
+    </div>
+  );
+}
+
 function OpenFlagsList({ summary }) {
-  const flags = summary?.flags || [];
+  const flags     = summary?.flags || [];
+  const realFlags = flags.filter((f) => !isNilFlag(f.flag));
+  const nilFlags  = flags.filter((f) => isNilFlag(f.flag));
+  const [showNil, setShowNil] = useState(false);
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
       <div
         style={{
-          fontSize: 12,
+          fontSize: 14,
           fontWeight: 700,
-          color: C.sec,
-          marginBottom: 10,
-          textTransform: "uppercase",
-          letterSpacing: 0.8,
+          color: C.pri,
+          marginBottom: 12,
           display: "flex",
           alignItems: "center",
-          gap: 8,
+          gap: 10,
+          flexWrap: "wrap",
         }}
       >
         <span>🚩 Open Flags</span>
-        <span
-          style={{
-            fontSize: 11,
-            fontFamily: "'DM Mono', monospace",
-            background: C.surface,
-            color: flags.length > 0 ? C.pri : C.muted,
-            padding: "2px 8px",
-            borderRadius: 12,
-            fontWeight: 700,
-          }}
-        >
-          {flags.length}
+        <span style={{ fontSize: 11, color: C.muted, fontWeight: 500 }}>
+          {realFlags.length} real{nilFlags.length > 0 ? ` · ${nilFlags.length} NIL` : ""}
         </span>
       </div>
-      {flags.length === 0 ? (
+
+      {realFlags.length === 0 && nilFlags.length === 0 && (
         <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12 }}>
           (none this period)
         </div>
-      ) : (
-        flags.map((f, i) => {
-          const nil = isNilFlag(f.flag);
-          const accent = nil ? YN_COLOR.na : YN_COLOR.flag;
-          return (
-            <div
-              key={i}
-              style={{
-                padding: "10px 12px",
-                background: nil ? "rgba(107, 122, 149, 0.06)" : `${YN_COLOR.flag}14`,
-                border: nil ? `1px solid ${C.border}` : `1px solid ${YN_COLOR.flag}55`,
-                borderLeft: `3px solid ${accent}`,
-                borderRadius: 6,
-                marginBottom: 8,
-                fontSize: 12,
-                color: nil ? C.muted : C.pri,
-                lineHeight: 1.5,
-              }}
-            >
-              <div style={{ fontSize: 10, color: C.muted, fontFamily: "'DM Mono', monospace", marginBottom: 4 }}>
-                {f.week} · {f.client}
-              </div>
-              <div style={{ fontWeight: nil ? 500 : 600, fontStyle: nil ? "italic" : "normal" }}>
-                {f.flag}
-              </div>
+      )}
+
+      {realFlags.length > 0 && (
+        <div style={{ marginBottom: nilFlags.length > 0 ? 12 : 0 }}>
+          {realFlags.map((f, i) => (
+            <FlagCard key={`real-${i}`} flag={f} nil={false} />
+          ))}
+        </div>
+      )}
+
+      {realFlags.length === 0 && nilFlags.length > 0 && (
+        <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12, marginBottom: 10 }}>
+          No real flags this period — every reviewed row was marked NIL.
+        </div>
+      )}
+
+      {nilFlags.length > 0 && (
+        <div>
+          <button
+            onClick={() => setShowNil((v) => !v)}
+            style={{
+              background: "transparent",
+              border: `1px solid ${C.border}`,
+              color: C.sec,
+              padding: "6px 12px",
+              borderRadius: 6,
+              cursor: "pointer",
+              fontSize: 11,
+              fontFamily: "'DM Sans', sans-serif",
+              fontWeight: 600,
+            }}
+          >
+            {showNil ? "▾" : "▸"} {showNil ? "Hide" : "Show"} {nilFlags.length} NIL entr{nilFlags.length === 1 ? "y" : "ies"}
+          </button>
+          {showNil && (
+            <div style={{ marginTop: 10 }}>
+              {nilFlags.map((f, i) => (
+                <FlagCard key={`nil-${i}`} flag={f} nil />
+              ))}
             </div>
-          );
-        })
+          )}
+        </div>
       )}
     </div>
   );
@@ -279,59 +329,55 @@ function buildPerClientView(weeks) {
 // Heatmap cell glyphs — colored square per (client × task).
 function HeatCell({ value, taskLabel, client }) {
   const v = String(value || "na").toLowerCase();
-  const cfg = v === "yes" ? { glyph: "✓", color: YN_COLOR.yes, bg: `${YN_COLOR.yes}1F` }
-            : v === "no"  ? { glyph: "✗", color: YN_COLOR.no,  bg: `${YN_COLOR.no}1F` }
-            : v === "na"  ? { glyph: "—", color: YN_COLOR.na,  bg: `${YN_COLOR.na}14` }
-            : { glyph: String(value || "·"), color: YN_COLOR.other, bg: C.surface };
+  const meta = v === "yes" ? { glyph: "✓", color: "#10B981" }
+             : v === "no"  ? { glyph: "✗", color: "#EF4444" }
+             : v === "na"  ? { glyph: "—", color: "#6B7280" }
+             : { glyph: String(value || "·"), color: YN_COLOR.other };
   const label = `${client} · ${taskLabel}: ${v.toUpperCase()}`;
   return (
-    <div
+    <span
       title={label}
       aria-label={label}
       style={{
-        width: 32,
-        height: 32,
-        display: "flex",
+        display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        background: cfg.bg,
-        color: cfg.color,
+        width: 28,
+        height: 28,
+        fontSize: 16,
         fontWeight: 700,
-        fontSize: 14,
-        borderRadius: 6,
-        border: `1px solid ${cfg.color}44`,
+        color: meta.color,
         fontFamily: "'DM Mono', monospace",
       }}
     >
-      {cfg.glyph}
-    </div>
+      {meta.glyph}
+    </span>
   );
 }
 
 
 function PerClientComplianceHeatmap({ rows }) {
+  const [hoverRow, setHoverRow] = useState(null);
   if (!rows || rows.length === 0) {
     return (
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.sec, marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.8 }}>
-          📊 Per-client Compliance
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.pri, marginBottom: 4 }}>
+          📊 Per-client Compliance Heatmap
         </div>
-        <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12 }}>
+        <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12, marginTop: 4 }}>
           No client rows recorded this period.
         </div>
       </div>
     );
   }
-  const stickyHeader = {
+  const headerTh = {
     position: "sticky",
     top: 0,
     background: C.card,
-    fontSize: 10,
-    fontWeight: 700,
-    color: C.muted,
-    textTransform: "uppercase",
-    letterSpacing: 0.6,
-    padding: "10px 8px",
+    fontSize: 11,
+    fontWeight: 600,
+    color: C.sec,
+    padding: "12px 14px",
     borderBottom: `1px solid ${C.border}`,
     whiteSpace: "nowrap",
     textAlign: "center",
@@ -340,27 +386,28 @@ function PerClientComplianceHeatmap({ rows }) {
     position: "sticky",
     left: 0,
     background: C.card,
-    fontSize: 12,
     fontWeight: 600,
+    fontSize: 13,
     color: C.pri,
-    padding: "10px 12px",
+    padding: "14px 14px",
     borderRight: `1px solid ${C.border}`,
     whiteSpace: "nowrap",
     zIndex: 1,
+    textAlign: "left",
   };
-  const cellPad = { padding: "8px 8px", textAlign: "center" };
+  const cellPad = { padding: "14px 14px", textAlign: "center", borderBottom: `1px solid ${C.border}40` };
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: C.sec, marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.8 }}>
+      <div style={{ fontSize: 14, fontWeight: 700, color: C.pri, marginBottom: 12 }}>
         📊 Per-client Compliance Heatmap
       </div>
-      <div style={{ overflowX: "auto", maxHeight: 320, border: `1px solid ${C.border}`, borderRadius: 8 }}>
+      <div style={{ overflowX: "auto", maxHeight: 360, border: `1px solid ${C.border}`, borderRadius: 8 }}>
         <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%" }}>
           <thead>
             <tr>
-              <th style={{ ...stickyHeader, ...stickyClient, textAlign: "left", zIndex: 2 }}>Client</th>
+              <th style={{ ...headerTh, ...stickyClient, textAlign: "left", zIndex: 2 }}>Client</th>
               {BOOL_COLUMNS.map((col) => (
-                <th key={col.key} style={stickyHeader} title={col.label}>
+                <th key={col.key} style={headerTh} title={col.label}>
                   {col.label.replace(" Procedure", "")
                             .replace("Checked ", "")
                             .replace("Updated ", "")
@@ -371,10 +418,29 @@ function PerClientComplianceHeatmap({ rows }) {
           </thead>
           <tbody>
             {rows.map((row, i) => {
-              const baseBg = i % 2 === 0 ? "transparent" : C.surface;
+              const isHover = hoverRow === row.client;
+              const baseBg = isHover
+                ? C.surface
+                : (i % 2 === 0 ? "transparent" : C.surface);
               return (
-                <tr key={row.client} style={{ background: baseBg }}>
-                  <td style={{ ...stickyClient, background: baseBg, fontStyle: row.isTeamWide ? "italic" : "normal", color: row.isTeamWide ? C.muted : C.pri }}>
+                <tr
+                  key={row.client}
+                  onMouseEnter={() => setHoverRow(row.client)}
+                  onMouseLeave={() => setHoverRow((r) => (r === row.client ? null : r))}
+                  style={{ background: baseBg, transition: "background 0.12s" }}
+                >
+                  <td
+                    style={{
+                      ...stickyClient,
+                      ...cellPad,
+                      padding: "14px 14px",
+                      background: baseBg,
+                      fontStyle: row.isTeamWide ? "italic" : "normal",
+                      color: row.isTeamWide ? C.muted : C.pri,
+                      borderRight: `1px solid ${C.border}`,
+                      borderBottom: `1px solid ${C.border}40`,
+                    }}
+                  >
                     {row.client}
                     <div style={{ fontSize: 10, color: C.muted, fontFamily: "'DM Mono', monospace", marginTop: 2 }}>
                       {row.weeks.join(" · ")}
@@ -391,25 +457,84 @@ function PerClientComplianceHeatmap({ rows }) {
           </tbody>
         </table>
       </div>
-      <div style={{ display: "flex", gap: 14, marginTop: 10, fontSize: 10, color: C.muted }}>
-        <span><span style={{ color: YN_COLOR.yes, fontWeight: 700 }}>✓</span> Yes</span>
-        <span><span style={{ color: YN_COLOR.no,  fontWeight: 700 }}>✗</span> No</span>
-        <span><span style={{ color: YN_COLOR.na }}>—</span> N/A</span>
+      <div style={{ display: "flex", gap: 14, marginTop: 10, fontSize: 11, color: C.muted }}>
+        <span><span style={{ color: "#10B981", fontWeight: 700 }}>✓</span> Yes</span>
+        <span><span style={{ color: "#EF4444", fontWeight: 700 }}>✗</span> No</span>
+        <span><span style={{ color: "#6B7280" }}>—</span> N/A</span>
       </div>
     </div>
   );
 }
 
 
+function FieldRow({ label, children }) {
+  return (
+    <div style={{ display: "flex", gap: 12, marginBottom: 8, alignItems: "flex-start" }}>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          color: C.muted,
+          textTransform: "uppercase",
+          letterSpacing: 0.5,
+          minWidth: 70,
+          paddingTop: 2,
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ fontSize: 13, color: C.pri, lineHeight: 1.5, flex: 1 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function WhaleChipRow({ urls }) {
+  const list = Array.isArray(urls) ? urls.filter((u) => /^https?:\/\//i.test(u)) : [];
+  if (list.length === 0) return <span style={{ color: C.muted }}>—</span>;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+      {list.map((u, i) => (
+        <a
+          key={i}
+          href={u}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={u}
+          style={{
+            fontSize: 12,
+            color: C.teal,
+            textDecoration: "none",
+            padding: "4px 10px",
+            background: C.card,
+            border: `1px solid ${C.teal}40`,
+            borderRadius: 4,
+            display: "inline-block",
+            whiteSpace: "nowrap",
+          }}
+        >
+          🐳 Whale{list.length > 1 ? ` (${i + 1})` : ""}
+        </a>
+      ))}
+    </div>
+  );
+}
+
 function ProcedureUpdatesCards({ rows }) {
-  const rowsWithUpdates = (rows || []).filter((r) => r.updates.length > 0 || r.whaleLinks.length > 0);
-  if (rowsWithUpdates.length === 0) {
+  // Keep only clients with at least one real update or a Whale link.
+  const cards = (rows || []).filter(
+    (r) =>
+      r.updates.some((u) => (u.updated || "").trim() || (u.new || "").trim())
+      || r.whaleLinks.length > 0,
+  );
+  if (cards.length === 0) {
     return (
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.sec, marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.8 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.pri, marginBottom: 4 }}>
           📝 Procedure Updates by Client
         </div>
-        <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12 }}>
+        <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12, marginTop: 4 }}>
           No procedure updates recorded this period.
         </div>
       </div>
@@ -417,59 +542,82 @@ function ProcedureUpdatesCards({ rows }) {
   }
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: C.sec, marginBottom: 12, textTransform: "uppercase", letterSpacing: 0.8 }}>
+      <div style={{ fontSize: 14, fontWeight: 700, color: C.pri, marginBottom: 12 }}>
         📝 Procedure Updates by Client
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {rowsWithUpdates.map((row, i) => {
-          const accent = i % 2 === 0 ? C.blue : C.purple;
-          return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {cards.flatMap((row) => {
+          // Build one card per (client × week-with-content) so the same client
+          // across multiple weeks renders as separate cards — no duplicate
+          // date rendering inside a single card.
+          const populated = row.updates.filter(
+            (u) => (u.updated || "").trim() || (u.new || "").trim(),
+          );
+          // If the client has zero update rows but has Whale links, still
+          // surface a single card so the link doesn't disappear.
+          const blocks = populated.length > 0
+            ? populated.map((u) => ({ week: u.week, updated: u.updated, new: u.new }))
+            : [{ week: row.weeks[0] || "—", updated: "", new: "" }];
+          return blocks.map((b, j) => (
             <div
-              key={row.client}
+              key={`${row.client}-${j}`}
               style={{
                 background: C.surface,
                 border: `1px solid ${C.border}`,
-                borderLeft: `3px solid ${accent}`,
-                borderRadius: 8,
-                padding: "12px 14px",
+                borderRadius: 10,
+                padding: 16,
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: row.isTeamWide ? C.muted : C.pri, fontStyle: row.isTeamWide ? "italic" : "normal" }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 10,
+                  marginBottom: 12,
+                  flexWrap: "wrap",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 14,
+                    fontWeight: 700,
+                    color: row.isTeamWide ? C.muted : C.pri,
+                    fontStyle: row.isTeamWide ? "italic" : "normal",
+                  }}
+                >
                   🏢 {row.client}
                 </div>
-                <div style={{ fontSize: 10, color: C.muted, fontFamily: "'DM Mono', monospace" }}>
-                  {row.weeks.join(" · ")}
-                </div>
+                <span
+                  style={{
+                    fontSize: 10,
+                    padding: "4px 10px",
+                    borderRadius: 12,
+                    background: C.card,
+                    color: C.sec,
+                    fontFamily: "'DM Mono', monospace",
+                    letterSpacing: 0.4,
+                  }}
+                >
+                  {b.week}
+                </span>
               </div>
-              {row.updates.length === 0 ? (
-                <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic" }}>No procedure changes logged.</div>
-              ) : (
-                row.updates.map((u, j) => (
-                  <div key={j} style={{ fontSize: 12, color: C.sec, marginBottom: 4 }}>
-                    <span style={{ fontSize: 10, color: C.muted, fontFamily: "'DM Mono', monospace", marginRight: 6 }}>{u.week}</span>
-                    {u.updated && (
-                      <span style={{ marginRight: 12 }}>
-                        <span style={{ color: C.muted, fontWeight: 600 }}>Updated: </span>
-                        <span style={{ color: C.pri }}>{u.updated}</span>
-                      </span>
-                    )}
-                    {u.new && (
-                      <span>
-                        <span style={{ color: C.muted, fontWeight: 600 }}>New: </span>
-                        <span style={{ color: C.pri }}>{u.new}</span>
-                      </span>
-                    )}
-                  </div>
-                ))
-              )}
-              {row.whaleLinks.length > 0 && (
-                <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
-                  <WhaleLinkCell urls={row.whaleLinks} />
-                </div>
+
+              <FieldRow label="Updated">
+                {b.updated ? b.updated : <span style={{ color: C.muted }}>—</span>}
+              </FieldRow>
+              <FieldRow label="New">
+                {b.new ? b.new : <span style={{ color: C.muted }}>—</span>}
+              </FieldRow>
+              {/* Whale links surface only on the FIRST card per client so we
+                  don't render them once per week. */}
+              {j === 0 && row.whaleLinks.length > 0 && (
+                <FieldRow label="Whale">
+                  <WhaleChipRow urls={row.whaleLinks} />
+                </FieldRow>
               )}
             </div>
-          );
+          ));
         })}
       </div>
     </div>
@@ -478,46 +626,50 @@ function ProcedureUpdatesCards({ rows }) {
 
 
 function TrainingTopicsByClientTable({ rows }) {
-  const rowsWithTraining = (rows || []).filter((r) =>
-    r.trainingPreparers.length > 0 || r.trainingTL.length > 0
-  );
-  if (rowsWithTraining.length === 0) {
+  const [hoverRow, setHoverRow] = useState(null);
+  // Show every client row — even ones with no training noted — so the user
+  // can scan all reviewed clients in one place. "(No training noted)" fills
+  // empty cells.
+  const allRows = rows || [];
+  if (allRows.length === 0) {
     return (
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.sec, marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.8 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.pri, marginBottom: 4 }}>
           🎓 Training Topics by Client
         </div>
-        <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12 }}>
+        <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12, marginTop: 4 }}>
           No training topics recorded this period.
         </div>
       </div>
     );
   }
   const th = {
-    padding: "10px 12px",
-    fontSize: 10,
-    color: C.muted,
-    textTransform: "uppercase",
-    letterSpacing: 0.6,
+    padding: "12px 14px",
+    fontSize: 11,
+    color: C.sec,
+    fontWeight: 600,
     borderBottom: `1px solid ${C.border}`,
     background: C.card,
     whiteSpace: "nowrap",
     textAlign: "left",
+    position: "sticky",
+    top: 0,
+    zIndex: 1,
   };
   const td = {
-    padding: "10px 12px",
-    fontSize: 12,
+    padding: "12px 14px",
+    fontSize: 13,
     color: C.pri,
     borderBottom: `1px solid ${C.border}40`,
     verticalAlign: "top",
   };
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: C.sec, marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.8 }}>
+      <div style={{ fontSize: 14, fontWeight: 700, color: C.pri, marginBottom: 12 }}>
         🎓 Training Topics by Client
       </div>
-      <div style={{ overflowX: "auto", border: `1px solid ${C.border}`, borderRadius: 8 }}>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <div style={{ overflowX: "auto", maxHeight: 360, border: `1px solid ${C.border}`, borderRadius: 8 }}>
+        <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
           <thead>
             <tr>
               <th style={th}>Client</th>
@@ -526,32 +678,54 @@ function TrainingTopicsByClientTable({ rows }) {
             </tr>
           </thead>
           <tbody>
-            {rowsWithTraining.map((row, i) => {
-              const baseBg = i % 2 === 0 ? "transparent" : C.surface;
+            {allRows.map((row, i) => {
               const both = row.trainingPreparers.length > 0 && row.trainingTL.length > 0;
+              const hover = hoverRow === row.client;
+              const baseBg = hover
+                ? C.surface
+                : (i % 2 === 0 ? "transparent" : C.surface);
+              const noTraining = row.trainingPreparers.length === 0 && row.trainingTL.length === 0;
               return (
                 <tr
                   key={row.client}
+                  onMouseEnter={() => setHoverRow(row.client)}
+                  onMouseLeave={() => setHoverRow((r) => (r === row.client ? null : r))}
                   style={{
                     background: baseBg,
-                    borderLeft: both ? `3px solid ${YN_COLOR.flag}` : "3px solid transparent",
+                    transition: "background 0.12s",
                   }}
                 >
-                  <td style={{ ...td, fontWeight: 600, color: row.isTeamWide ? C.muted : C.pri, fontStyle: row.isTeamWide ? "italic" : "normal" }}>
+                  <td
+                    style={{
+                      ...td,
+                      fontWeight: 600,
+                      color: row.isTeamWide ? C.muted : C.pri,
+                      fontStyle: row.isTeamWide ? "italic" : "normal",
+                      borderLeft: both ? `3px solid ${YN_COLOR.flag}` : "3px solid transparent",
+                    }}
+                  >
                     {row.client}
                   </td>
                   <td style={td}>
                     {row.trainingPreparers.length === 0
-                      ? <span style={{ color: C.muted }}>—</span>
+                      ? <span style={{ color: C.muted, fontStyle: "italic", fontSize: 12 }}>
+                          {noTraining ? "(No training noted)" : "—"}
+                        </span>
                       : row.trainingPreparers.map((t, j) => (
-                          <div key={j}>{t}</div>
+                          <div key={j} style={{ marginBottom: j < row.trainingPreparers.length - 1 ? 4 : 0 }}>
+                            {t}
+                          </div>
                         ))}
                   </td>
                   <td style={td}>
                     {row.trainingTL.length === 0
-                      ? <span style={{ color: C.muted }}>—</span>
+                      ? <span style={{ color: C.muted, fontStyle: "italic", fontSize: 12 }}>
+                          {noTraining ? "" : "—"}
+                        </span>
                       : row.trainingTL.map((t, j) => (
-                          <div key={j}>{t}</div>
+                          <div key={j} style={{ marginBottom: j < row.trainingTL.length - 1 ? 4 : 0 }}>
+                            {t}
+                          </div>
                         ))}
                   </td>
                 </tr>
@@ -775,7 +949,7 @@ export default function WeeklyChecklistSection({ teamId }) {
       )}
 
       {!state.loading && !state.error && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
           <ChecklistSummaryCards summary={summary} />
           <PerClientComplianceHeatmap rows={perClientRows} />
           <ProcedureUpdatesCards     rows={perClientRows} />
