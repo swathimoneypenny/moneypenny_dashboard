@@ -2091,6 +2091,383 @@ _delays_csv_cache: dict[tuple[str, str], dict] = {}
 _DELAYS_CSV_TTL = 300
 
 
+# ── Weekly Admin Checklist tabs ───────────────────────────────────
+# One tab per team on the same master sheet as the Delays tabs. Column
+# layout is shared across teams (TL-confirmed 2026-06-05). team_f's gid
+# is None — the endpoint surfaces a clear "not configured" message rather
+# than 404 so the modal can render a friendly empty state.
+WEEKLY_CHECKLIST_GIDS: dict[str, str | None] = {
+    "team_a": "990415838",
+    "team_b": "135187606",
+    "team_c": "1911560805",
+    "team_d": "885695460",
+    "team_e": "730935679",
+    "team_f": None,
+    "team_g": "1291078606",
+    "team_h": "1391629922",
+    "team_i": "704609157",
+    "team_j": "1110008086",
+    "team_k": "64928295",
+    "team_l": "694721645",
+    "team_m": "387054095",
+    "team_n": "1515770345",
+    "team_t": "2027349398",
+}
+
+WEEKLY_CHECKLIST_COLUMNS = {
+    "week":                  0,    # "Jun 01 - 05"
+    "client":                1,    # Client name
+    "reviewed_procedure":    2,    # Yes/No/N/A
+    "updated_procedure":     3,    # Free text
+    "new_procedure":         4,    # Free text
+    "updated_escalation":    5,    # Yes/No
+    "identified_turn":       6,    # Free text / N/A
+    "assigned_reading":      7,    # Yes/No
+    "assigned_quiz":         8,    # Yes/No
+    "training_preparers":    9,    # Free text
+    "training_myself":       10,   # Free text
+    "checked_tsheet":        11,   # Yes/No
+    "checked_meeting_notes": 12,   # Yes/No/N/A
+    "meeting_notes_shared":  13,   # Yes/No/N/A
+    "flag_tm_ops":           14,   # Free text (NIL when nothing to flag)
+    "whale_links":           15,   # URL
+}
+
+# Boolean-ish columns we run through compliance % math. Free-text columns
+# (updated_procedure, new_procedure, training_*, flag_tm_ops, whale_links,
+# identified_turn) are excluded — they don't have a yes/no axis.
+_CHECKLIST_BOOL_FIELDS = (
+    "reviewed_procedure",
+    "updated_escalation",
+    "assigned_reading",
+    "assigned_quiz",
+    "checked_tsheet",
+    "checked_meeting_notes",
+    "meeting_notes_shared",
+)
+
+# CSV cache for checklist tabs — 10 min TTL (data only updates weekly).
+_checklist_csv_cache: dict[tuple[str, str], dict] = {}
+_CHECKLIST_CSV_TTL = 600
+
+
+def _normalize_yes_no(text: str) -> str:
+    """Map any cell value → 'yes' / 'no' / 'na' / 'other'."""
+    s = (text or "").strip().lower()
+    if not s:
+        return "na"
+    if s in ("yes", "y", "✓", "true", "x"):
+        return "yes"
+    if s in ("no", "n", "✗", "false"):
+        return "no"
+    if s in ("n/a", "na", "nil", "-", "—"):
+        return "na"
+    return "other"
+
+
+def _fetch_weekly_checklist_csv(sheet_id: str, gid: str) -> str:
+    """Cached CSV export for a checklist tab. 10-min TTL per (sheet, gid).
+    Returns "" on any failure (network or non-200).
+
+    Forces UTF-8 decoding: Google Sheets' CSV export rarely sets a charset
+    in the Content-Type, which makes requests default to ISO-8859-1 and turn
+    em-dashes / curly quotes into 'â€"' style garbage. Decoding from
+    response.content directly side-steps the issue.
+    """
+    if not sheet_id or not gid:
+        return ""
+    key = (sheet_id, gid)
+    entry = _checklist_csv_cache.get(key)
+    now = datetime.now()
+    if entry and (now - entry["at"]).total_seconds() < _CHECKLIST_CSV_TTL:
+        return entry["csv"]
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
+    try:
+        resp = requests.get(url, timeout=15, allow_redirects=True)
+        if resp.status_code != 200:
+            print(f"[checklist] fetch gid={gid} returned {resp.status_code}")
+            _checklist_csv_cache[key] = {"at": now, "csv": ""}
+            return ""
+        csv_text = resp.content.decode("utf-8", errors="replace")
+    except Exception as e:
+        print(f"[checklist] fetch gid={gid} error: {e}")
+        _checklist_csv_cache[key] = {"at": now, "csv": ""}
+        return ""
+    _checklist_csv_cache[key] = {"at": now, "csv": csv_text}
+    return csv_text
+
+
+_WEEK_RANGE_RE = re.compile(
+    r"^([A-Za-z]{3,9})\s+(\d{1,2})\s*[-–—to]+\s*(?:([A-Za-z]{3,9})\s+)?(\d{1,2})",
+    re.IGNORECASE,
+)
+
+
+def _parse_week_label_to_iso(week_label: str, fallback_year: int) -> str:
+    """Parse 'Jun 01 - 05' style labels into the ISO start-date 'YYYY-MM-DD'.
+    Best-effort: returns "" on failure. Assumes fallback_year when the cell
+    doesn't include one (the checklist sheet never does)."""
+    if not week_label:
+        return ""
+    m = _WEEK_RANGE_RE.match(week_label.strip())
+    if not m:
+        return ""
+    start_mon, start_day = m.group(1), int(m.group(2))
+    for fmt in ("%b %d %Y", "%B %d %Y"):
+        try:
+            dt = datetime.strptime(f"{start_mon} {start_day} {fallback_year}", fmt)
+            return dt.strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return ""
+
+
+_MONTH_PREFIXES = (
+    "jan", "feb", "mar", "apr", "may", "jun",
+    "jul", "aug", "sep", "oct", "nov", "dec",
+)
+
+# Exact-match text we've seen in placeholder / instruction rows leads paste
+# above the data. Stripped + lowercased before comparing.
+_CHECKLIST_HEADER_WEEK_TEXTS = (
+    "week",
+    "week range (mon-fri)",
+    "week range",
+    "mon-fri",
+)
+_CHECKLIST_HEADER_CLIENT_TEXTS = (
+    "client",
+    "mention client name you have updated",
+    "mention client name you have updated the procedure for",
+    "clients",
+    "client name",
+)
+_CHECKLIST_FLAG_PLACEHOLDERS = (
+    "",
+    "nil",
+    "n/a",
+    "na",
+    "none",
+    "-",
+    "—",
+    "flag for training manager / ops",
+    "one item only - what it is and why it matters. leave blank if nothing this week.",
+    "one item only — what it is and why it matters. leave blank if nothing this week.",
+)
+
+
+def _is_valid_week_row(week_text: str, client_text: str) -> bool:
+    """True only for genuine data rows. Rejects instruction / column-header
+    rows the TL pastes above the data. A valid row needs:
+      • Week cell that starts with a 3-letter month prefix (Jan…Dec)
+      • Client cell that isn't blank and isn't one of the known header labels
+    """
+    w = (week_text or "").strip()
+    c = (client_text or "").strip()
+    if w.lower() in _CHECKLIST_HEADER_WEEK_TEXTS:
+        return False
+    if c.lower() in _CHECKLIST_HEADER_CLIENT_TEXTS:
+        return False
+    if not c:
+        return False
+    w_lower = w.lower()
+    return any(w_lower.startswith(m) for m in _MONTH_PREFIXES)
+
+
+def _is_real_flag(flag_text: str) -> bool:
+    """True iff `flag_text` is a real flag (not NIL / placeholder / instruction
+    string). Used by the summary aggregator to filter `open_flags`."""
+    return (flag_text or "").strip().lower() not in _CHECKLIST_FLAG_PLACEHOLDERS
+
+
+def _looks_like_checklist_header(row: list[str]) -> bool:
+    """True if this row is the column-header row (case-insensitive match on
+    multiple known labels). Used to skip past pre-header title rows AND the
+    header row itself."""
+    blob = " ".join((c or "").lower() for c in row)
+    hits = 0
+    for keyword in ("week", "client", "review", "procedure", "escalation",
+                    "reading", "quiz", "tsheet", "training"):
+        if keyword in blob:
+            hits += 1
+    return hits >= 3
+
+
+def _shape_checklist_row(row: list[str]) -> dict:
+    """Convert a raw CSV row to the public-API entry shape, normalizing each
+    boolean-ish field through _normalize_yes_no."""
+    def col(key: str) -> str:
+        idx = WEEKLY_CHECKLIST_COLUMNS[key]
+        return (row[idx] if idx < len(row) else "").strip()
+
+    return {
+        "client":                col("client"),
+        "reviewed_procedure":    _normalize_yes_no(col("reviewed_procedure")),
+        "updated_procedure":     col("updated_procedure"),
+        "new_procedure":         col("new_procedure"),
+        "updated_escalation":    _normalize_yes_no(col("updated_escalation")),
+        "identified_turn":       col("identified_turn"),
+        "assigned_reading":      _normalize_yes_no(col("assigned_reading")),
+        "assigned_quiz":         _normalize_yes_no(col("assigned_quiz")),
+        "training_preparers":    col("training_preparers"),
+        "training_myself":       col("training_myself"),
+        "checked_tsheet":        _normalize_yes_no(col("checked_tsheet")),
+        "checked_meeting_notes": _normalize_yes_no(col("checked_meeting_notes")),
+        "meeting_notes_shared":  _normalize_yes_no(col("meeting_notes_shared")),
+        "flag_tm_ops":           col("flag_tm_ops"),
+        "whale_link":            col("whale_links"),
+    }
+
+
+def _parse_weekly_checklist(csv_text: str, team_id: str) -> list[dict]:
+    """Return weeks grouped by week label. Skips title rows, the header row,
+    and rows with no client filled (sentinel empty rows leads leave between
+    weeks). Week ordering follows first-seen in the CSV — leads typically
+    keep them chronological."""
+    if not csv_text:
+        return []
+    reader = csv.reader(io.StringIO(csv_text))
+    rows = list(reader)
+    if not rows:
+        return []
+
+    # Find header row: scan first 6 rows for a row that looks like the column
+    # header. Anything before it is title/notes — skip.
+    header_idx = -1
+    for i, row in enumerate(rows[:6]):
+        if _looks_like_checklist_header(row):
+            header_idx = i
+            break
+    data_start = (header_idx + 1) if header_idx >= 0 else 3
+
+    fallback_year = datetime.now().year
+    week_buckets: dict[str, dict] = {}
+    week_order: list[str] = []
+    current_week = ""
+
+    for row in rows[data_start:]:
+        if not row or not any((c or "").strip() for c in row):
+            continue
+        week_cell   = (row[WEEKLY_CHECKLIST_COLUMNS["week"]]   if len(row) > 0 else "").strip()
+        client_cell = (row[WEEKLY_CHECKLIST_COLUMNS["client"]] if len(row) > 1 else "").strip()
+
+        # Sheets commonly merge the Week cell across multiple client rows —
+        # CSV export drops the merge, leaving only the first row populated.
+        # Carry the last-seen week forward so subsequent rows inherit it.
+        if week_cell:
+            current_week = week_cell
+        if not current_week or not client_cell:
+            continue
+
+        # Hard-filter instruction / column-header rows that survived the
+        # data_start skip (TLs sometimes paste reminders mid-table).
+        if not _is_valid_week_row(current_week, client_cell):
+            continue
+
+        if current_week not in week_buckets:
+            week_buckets[current_week] = {
+                "week":           current_week,
+                "week_start_iso": _parse_week_label_to_iso(current_week, fallback_year) or None,
+                "entries":        [],
+            }
+            week_order.append(current_week)
+        week_buckets[current_week]["entries"].append(_shape_checklist_row(row))
+
+    return [week_buckets[w] for w in week_order]
+
+
+def _compute_checklist_summary(weeks: list[dict]) -> dict:
+    """Aggregate stats across every entry on every week."""
+    total_weeks   = len(weeks)
+    total_entries = 0
+    yes_count     = 0
+    no_count      = 0
+    open_flags    = 0
+    whale_links   = 0
+    preparer_topics: dict[str, int] = {}
+    myself_topics:   dict[str, int] = {}
+    flags: list[dict] = []
+    field_totals: dict[str, dict[str, int]] = {f: {"yes": 0, "no": 0, "na": 0, "other": 0} for f in _CHECKLIST_BOOL_FIELDS}
+
+    for w in weeks:
+        for e in w.get("entries") or []:
+            total_entries += 1
+            for f in _CHECKLIST_BOOL_FIELDS:
+                v = e.get(f) or "na"
+                field_totals[f][v if v in field_totals[f] else "other"] += 1
+                if v == "yes":
+                    yes_count += 1
+                elif v == "no":
+                    no_count += 1
+            flag_text = (e.get("flag_tm_ops") or "").strip()
+            if _is_real_flag(flag_text):
+                open_flags += 1
+                flags.append({
+                    "week":   w.get("week"),
+                    "client": e.get("client"),
+                    "flag":   flag_text,
+                })
+            if (e.get("whale_link") or "").strip():
+                whale_links += 1
+            for raw, bucket in ((e.get("training_preparers"), preparer_topics),
+                                (e.get("training_myself"),   myself_topics)):
+                for topic in _split_training_topics(raw):
+                    bucket[topic] = bucket.get(topic, 0) + 1
+
+    denom = yes_count + no_count
+    compliance_pct = round(yes_count / denom * 100, 1) if denom > 0 else 0.0
+
+    top_preparer = sorted(preparer_topics.items(), key=lambda kv: -kv[1])[:10]
+    top_myself   = sorted(myself_topics.items(),   key=lambda kv: -kv[1])[:10]
+
+    # Combined top-N for the "top training topics" widget — emit objects so
+    # the frontend can render `{topic} · ×{count}` instead of bare strings.
+    combined: dict[str, int] = {}
+    for t, c in top_preparer + top_myself:
+        combined[t] = combined.get(t, 0) + c
+    top_combined = sorted(combined.items(), key=lambda kv: -kv[1])[:10]
+
+    return {
+        "total_weeks":             total_weeks,
+        "total_clients_reviewed":  total_entries,
+        "compliance_pct":          compliance_pct,
+        "open_flags":              open_flags,
+        "whale_links_count":       whale_links,
+        "top_training_topics": [{"topic": t, "count": c} for t, c in top_combined],
+        "training_preparers":  [{"topic": t, "count": c} for t, c in top_preparer],
+        "training_myself":     [{"topic": t, "count": c} for t, c in top_myself],
+        "flags":               flags,
+        "field_compliance": {
+            f: {
+                **counts,
+                "pct": round(counts["yes"] / (counts["yes"] + counts["no"]) * 100, 1)
+                        if (counts["yes"] + counts["no"]) > 0 else 0.0,
+            }
+            for f, counts in field_totals.items()
+        },
+    }
+
+
+def _split_training_topics(raw: str) -> list[str]:
+    """Split a free-text training cell into individual topics. Conservative —
+    only split on commas / ampersands / ' and ' to avoid breaking phrases
+    like 'Bill Matching and Buildertrend Bill Import'."""
+    if not raw:
+        return []
+    s = raw.strip()
+    if not s or s.lower() in ("n/a", "na", "nil", "-", "—", "none"):
+        return []
+    # Split first on commas, then on bullet separators, then on standalone &.
+    parts: list[str] = []
+    for chunk in s.split(","):
+        for sub in chunk.split("•"):
+            for piece in sub.split("&"):
+                p = piece.strip(" .;:-")
+                if p:
+                    parts.append(p)
+    return parts
+
+
 
 _DELAYS_TAB_MATCH_TTL = 3600  # 1 h — resolver cache (which tab name matched)
 _DELAYS_QUESTIONS_TTL = 300   # 5 min — aggregated questions cache, matches spec
@@ -5283,6 +5660,192 @@ async def team_delays_endpoint(
         }, status_code=200)
 
 
+def _build_team_checklist(team_id: str) -> dict:
+    """Fetch + parse + summarize the Weekly Admin Checklist tab for a team.
+    Returns a structured response (always 200, with `error` key on failure)."""
+    cfg = TEAM_LETTER_MAP.get(team_id)
+    if not cfg:
+        return {
+            "team_id": team_id,
+            "error":   "unknown_team",
+            "error_detail": f"team_id {team_id!r} is not configured",
+            "weeks":   [],
+            "summary": {},
+        }
+    sheet_id = cfg.get("sheetId")
+    if not sheet_id:
+        return {
+            "team_id":     team_id,
+            "team_label":  cfg.get("label", team_id),
+            "error":       "no_sheet_id",
+            "error_detail": f"Team {team_id!r} has no Google Sheet configured.",
+            "weeks":       [],
+            "summary":     {},
+        }
+    gid = WEEKLY_CHECKLIST_GIDS.get(team_id)
+    if not gid:
+        return {
+            "team_id":     team_id,
+            "team_label":  cfg.get("label", team_id),
+            "sheet_id":    sheet_id,
+            "error":       "no_checklist_tab_configured",
+            "error_detail": (
+                f"No Weekly Admin Checklist gid registered for {team_id!r}. "
+                f"Add an entry to WEEKLY_CHECKLIST_GIDS in backend/main.py."
+            ),
+            "weeks":       [],
+            "summary":     {},
+        }
+    csv_text = _fetch_weekly_checklist_csv(sheet_id, gid)
+    if not csv_text:
+        return {
+            "team_id":     team_id,
+            "team_label":  cfg.get("label", team_id),
+            "sheet_id":    sheet_id,
+            "tab_gid":     gid,
+            "error":       "fetch_failed_or_empty",
+            "error_detail": (
+                f"Could not fetch checklist tab gid={gid} on {sheet_id}. "
+                f"Verify the sheet is shared 'anyone with link can view'."
+            ),
+            "weeks":       [],
+            "summary":     {},
+        }
+    weeks = _parse_weekly_checklist(csv_text, team_id)
+    summary = _compute_checklist_summary(weeks)
+    return {
+        "team_id":    team_id,
+        "team_label": cfg.get("label", team_id),
+        "sheet_id":   sheet_id,
+        "tab_gid":    gid,
+        "weeks":      weeks,
+        "summary":    summary,
+    }
+
+
+@app.get("/api/team/{team_id}/checklist")
+async def team_checklist_endpoint(team_id: str):
+    """Weekly Admin Checklist for one team — every week + the aggregated
+    summary block. Cached server-side via _CHECKLIST_CSV_TTL (10 min)."""
+    try:
+        return await asyncio.to_thread(_build_team_checklist, team_id)
+    except Exception as e:
+        import traceback
+        return JSONResponse({
+            "team_id":        team_id,
+            "error":          "unhandled_exception",
+            "error_class":    type(e).__name__,
+            "error_detail":   str(e),
+            "traceback_tail": traceback.format_exc().splitlines()[-6:],
+            "weeks":          [],
+            "summary":        {},
+        }, status_code=200)
+
+
+@app.get("/api/team/{team_id}/checklist/summary")
+async def team_checklist_summary_endpoint(team_id: str):
+    """Just the aggregated summary block — drops the per-week entries so the
+    payload is small enough to fan out across all 15 teams for the cross-team
+    compliance heatmap."""
+    try:
+        data = await asyncio.to_thread(_build_team_checklist, team_id)
+        return {
+            "team_id":    data.get("team_id", team_id),
+            "team_label": data.get("team_label"),
+            "tab_gid":    data.get("tab_gid"),
+            "error":      data.get("error"),
+            "summary":    data.get("summary") or {},
+        }
+    except Exception as e:
+        return JSONResponse({
+            "team_id":      team_id,
+            "error":        "unhandled_exception",
+            "error_detail": str(e),
+            "summary":      {},
+        }, status_code=200)
+
+
+@app.get("/api/checklist/cross-team-summary")
+async def cross_team_checklist_summary_endpoint():
+    """Compliance matrix: one row per team, one column per boolean checklist
+    field, plus an overall compliance %. Used by the admin heatmap. Teams
+    without a configured tab are included with `error: not_configured`."""
+    async def _one(team_id: str) -> dict:
+        return await asyncio.to_thread(_build_team_checklist, team_id)
+
+    results = await asyncio.gather(*[_one(t) for t in TEAM_LETTER_MAP.keys()])
+    rows: list[dict] = []
+    for r in results:
+        summary = r.get("summary") or {}
+        rows.append({
+            "team_id":              r.get("team_id"),
+            "team_label":           r.get("team_label"),
+            "error":                r.get("error"),
+            "compliance_pct":       summary.get("compliance_pct", 0.0),
+            "open_flags":           summary.get("open_flags", 0),
+            "total_weeks":          summary.get("total_weeks", 0),
+            "total_clients_reviewed": summary.get("total_clients_reviewed", 0),
+            "whale_links_count":    summary.get("whale_links_count", 0),
+            "field_compliance":     summary.get("field_compliance", {}),
+        })
+    return {"teams": rows}
+
+
+@app.get("/api/checklist/flags")
+async def cross_team_checklist_flags_endpoint():
+    """Every non-NIL flag across all teams. One entry per flagged item with
+    team, week, client, and flag text. Sorted newest-first by week label
+    when parseable, else by team."""
+    async def _one(team_id: str) -> dict:
+        return await asyncio.to_thread(_build_team_checklist, team_id)
+
+    results = await asyncio.gather(*[_one(t) for t in TEAM_LETTER_MAP.keys()])
+    out: list[dict] = []
+    for r in results:
+        for f in (r.get("summary") or {}).get("flags") or []:
+            out.append({
+                "team_id":    r.get("team_id"),
+                "team_label": r.get("team_label"),
+                "week":       f.get("week"),
+                "client":     f.get("client"),
+                "flag":       f.get("flag"),
+            })
+    return {"count": len(out), "flags": out}
+
+
+@app.get("/api/checklist/training-needs")
+async def cross_team_training_needs_endpoint():
+    """Aggregate training topics across all teams.
+      - preparers: topics TLs assigned to their preparers
+      - tls:       topics TLs flagged for their own learning
+    Each topic carries (topic, count, teams[]) so admin can route trainers."""
+    async def _one(team_id: str) -> dict:
+        return await asyncio.to_thread(_build_team_checklist, team_id)
+
+    results = await asyncio.gather(*[_one(t) for t in TEAM_LETTER_MAP.keys()])
+    preparer_agg: dict[str, dict] = {}
+    tl_agg:       dict[str, dict] = {}
+    for r in results:
+        summary = r.get("summary") or {}
+        team_id = r.get("team_id")
+        team_label = r.get("team_label")
+        for source, bucket in (("training_preparers", preparer_agg),
+                               ("training_myself",    tl_agg)):
+            for item in summary.get(source) or []:
+                topic = item.get("topic")
+                count = int(item.get("count") or 0)
+                if not topic:
+                    continue
+                entry = bucket.setdefault(topic, {"topic": topic, "count": 0, "teams": []})
+                entry["count"] += count
+                if team_id not in [t["team_id"] for t in entry["teams"]]:
+                    entry["teams"].append({"team_id": team_id, "team_label": team_label, "count": count})
+    return {
+        "preparers": sorted(preparer_agg.values(), key=lambda r: -r["count"]),
+        "tls":       sorted(tl_agg.values(),       key=lambda r: -r["count"]),
+    }
+
+
 def _debug_commitment_counts(team_id: str, week_offset: int) -> dict:
     """Diagnostic for Bug 3 — surfaces the raw commitment text per field
     alongside what _count_commitments produced. If a field shows substantive
@@ -6156,6 +6719,7 @@ async def clear_cache():
     _delays_tab_match_cache.clear()
     _team_delay_questions_cache.clear()
     _delays_csv_cache.clear()
+    _checklist_csv_cache.clear()
     _departure_analysis_cache.clear()
     return {"ok": True, "status": "all caches cleared", "time": datetime.now().isoformat()}
 
