@@ -368,7 +368,11 @@ function ChecklistTable({ weeks, expanded, onToggle }) {
                 return (
                   <tr key={i} style={{ background: baseBg }}>
                     <td style={{ ...td, fontFamily: "'DM Mono', monospace", color: C.sec, whiteSpace: "nowrap" }}>{r.week}</td>
-                    <td style={{ ...td, fontWeight: 600 }}>{r.client}</td>
+                    <td style={{ ...td, fontWeight: 600 }}>
+                      {r.client
+                        ? r.client
+                        : <span style={{ color: C.muted, fontStyle: "italic", fontWeight: 500 }}>Team-wide</span>}
+                    </td>
                     <td style={{ ...td, textAlign: "center" }}><YnPill value={r.reviewed_procedure} /></td>
                     <td style={td}>{r.updated_procedure || <span style={{ color: C.muted }}>—</span>}</td>
                     <td style={td}>{r.new_procedure || <span style={{ color: C.muted }}>—</span>}</td>

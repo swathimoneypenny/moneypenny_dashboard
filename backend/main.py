@@ -2251,11 +2251,23 @@ _CHECKLIST_FLAG_HEADER_STRINGS = (
 _CHECKLIST_FLAG_INSTRUCTION_FRAGMENT = "one item only"
 
 
-def _is_valid_week_row(week_text: str, client_text: str) -> bool:
+_CHECKLIST_EMPTY_CELL_TOKENS = ("", "—", "-")
+
+
+def _is_valid_week_row(
+    week_text: str,
+    client_text: str,
+    row_cells: list[str] | None = None,
+) -> bool:
     """True only for genuine data rows. Rejects instruction / column-header
-    rows the TL pastes above the data. A valid row needs:
-      • Week cell that starts with a 3-letter month prefix (Jan…Dec)
-      • Client cell that isn't blank and isn't one of the known header labels
+    rows the TL pastes above the data. Validation:
+      • Week cell must start with a 3-letter month prefix (Jan…Dec).
+      • Client cell can be empty — some TLs (e.g. Team L / Nasreen) track
+        team-wide tasks without naming a specific client. When the client
+        cell is empty, at least one other column (2..15) must contain
+        non-placeholder text or the row is treated as truly empty.
+      • Client cell exactly matching a known header label ("Client",
+        "Mention client name…") is always rejected.
     """
     w = (week_text or "").strip()
     c = (client_text or "").strip()
@@ -2263,10 +2275,18 @@ def _is_valid_week_row(week_text: str, client_text: str) -> bool:
         return False
     if c.lower() in _CHECKLIST_HEADER_CLIENT_TEXTS:
         return False
-    if not c:
-        return False
     w_lower = w.lower()
-    return any(w_lower.startswith(m) for m in _MONTH_PREFIXES)
+    if not any(w_lower.startswith(m) for m in _MONTH_PREFIXES):
+        return False
+    if c:
+        return True
+    # Empty client → need at least one populated checklist column to accept.
+    if not row_cells:
+        return False
+    for cell in row_cells[2:16]:
+        if (cell or "").strip() not in _CHECKLIST_EMPTY_CELL_TOKENS:
+            return True
+    return False
 
 
 def _is_valid_flag(flag_text: str) -> bool:
@@ -2379,12 +2399,14 @@ def _parse_weekly_checklist(csv_text: str, team_id: str) -> list[dict]:
         # Carry the last-seen week forward so subsequent rows inherit it.
         if week_cell:
             current_week = week_cell
-        if not current_week or not client_cell:
+        if not current_week:
             continue
 
         # Hard-filter instruction / column-header rows that survived the
-        # data_start skip (TLs sometimes paste reminders mid-table).
-        if not _is_valid_week_row(current_week, client_cell):
+        # data_start skip (TLs sometimes paste reminders mid-table). The
+        # validator also handles empty-client team-wide rows — pass the
+        # full row so it can scan columns 2..15 for substantive content.
+        if not _is_valid_week_row(current_week, client_cell, row):
             continue
 
         if current_week not in week_buckets:
@@ -2403,6 +2425,7 @@ def _compute_checklist_summary(weeks: list[dict]) -> dict:
     """Aggregate stats across every entry on every week."""
     total_weeks   = len(weeks)
     total_entries = 0
+    distinct_clients: set[str] = set()
     yes_count     = 0
     no_count      = 0
     open_flags    = 0
@@ -2415,6 +2438,9 @@ def _compute_checklist_summary(weeks: list[dict]) -> dict:
     for w in weeks:
         for e in w.get("entries") or []:
             total_entries += 1
+            client_name = (e.get("client") or "").strip()
+            if client_name:
+                distinct_clients.add(client_name.lower())
             for f in _CHECKLIST_BOOL_FIELDS:
                 v = e.get(f) or "na"
                 field_totals[f][v if v in field_totals[f] else "other"] += 1
@@ -2451,7 +2477,8 @@ def _compute_checklist_summary(weeks: list[dict]) -> dict:
 
     return {
         "total_weeks":             total_weeks,
-        "total_clients_reviewed":  total_entries,
+        "total_clients_reviewed":  len(distinct_clients),
+        "total_entries":           total_entries,
         "compliance_pct":          compliance_pct,
         "open_flags":              open_flags,
         "whale_links_count":       whale_links,
