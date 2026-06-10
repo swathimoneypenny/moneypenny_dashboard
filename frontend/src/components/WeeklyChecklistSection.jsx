@@ -1,8 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { C, authFetch } from "../config";
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell,
-} from "recharts";
 
 // TL-confirmed palette (2026-06-05):
 const YN_COLOR = {
@@ -66,95 +63,6 @@ function ChecklistSummaryCards({ summary }) {
       <StatCard label="Compliance"       value={`${(summary.compliance_pct ?? 0).toFixed(1)}%`} color={(summary.compliance_pct ?? 0) >= 80 ? YN_COLOR.yes : (summary.compliance_pct ?? 0) >= 50 ? YN_COLOR.flag : YN_COLOR.no} sublabel="Yes ÷ (Yes + No)" />
       <StatCard label="Open flags"       value={summary.open_flags ?? 0}               color={(summary.open_flags ?? 0) > 0 ? YN_COLOR.flag : C.muted} />
       <StatCard label="Whale updates"    value={summary.whale_links_count ?? 0}        color={C.teal} />
-    </div>
-  );
-}
-
-function ChecklistComplianceChart({ summary }) {
-  const data = useMemo(() => {
-    const fc = summary?.field_compliance || {};
-    return BOOL_COLUMNS.map((col) => {
-      const c = fc[col.key] || { yes: 0, no: 0, na: 0, other: 0, pct: 0 };
-      return {
-        name:  col.label.replace(" Procedure", "")
-                       .replace("Checked ", "")
-                       .replace("Updated ", ""),
-        Yes:   c.yes   || 0,
-        No:    c.no    || 0,
-        NA:    c.na    || 0,
-        pct:   c.pct   || 0,
-      };
-    });
-  }, [summary]);
-  return (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 14px" }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: C.sec, marginBottom: 12, textTransform: "uppercase", letterSpacing: 0.8 }}>
-        📊 Field Compliance
-      </div>
-      <ResponsiveContainer width="100%" height={220}>
-        <BarChart data={data} margin={{ top: 4, right: 8, left: -16, bottom: 8 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-          <XAxis dataKey="name" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} interval={0} angle={-18} textAnchor="end" height={56} />
-          <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
-          <Tooltip
-            cursor={{ fill: "rgba(255,255,255,0.04)" }}
-            contentStyle={{ background: "rgba(11,25,41,0.95)", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.pri }}
-            formatter={(v, name) => [`${v}`, name]}
-            labelFormatter={(lbl, payload) => {
-              const pct = payload?.[0]?.payload?.pct;
-              return `${lbl} · ${pct != null ? `${pct.toFixed(0)}% compliance` : ""}`;
-            }}
-          />
-          <Legend wrapperStyle={{ fontSize: 11, color: C.sec }} />
-          <Bar dataKey="Yes" stackId="a" fill={YN_COLOR.yes} radius={[0, 0, 0, 0]} />
-          <Bar dataKey="No"  stackId="a" fill={YN_COLOR.no}  radius={[0, 0, 0, 0]} />
-          <Bar dataKey="NA"  stackId="a" fill={YN_COLOR.na}  radius={[4, 4, 0, 0]} />
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
-  );
-}
-
-function TrainingNeedsBlock({ summary }) {
-  const preparers = (summary?.training_preparers || []).slice(0, 6);
-  const tls       = (summary?.training_myself    || []).slice(0, 6);
-  if (preparers.length === 0 && tls.length === 0) {
-    return (
-      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px", color: C.muted, fontSize: 12, fontStyle: "italic" }}>
-        No training topics recorded this period.
-      </div>
-    );
-  }
-  function topicList(items, emptyLabel) {
-    if (items.length === 0) {
-      return <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12 }}>{emptyLabel}</div>;
-    }
-    return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {items.map((t, i) => (
-          <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.pri }}>
-            <span>{t.topic}</span>
-            <span style={{ color: C.muted, fontFamily: "'DM Mono', monospace" }}>×{t.count}</span>
-          </div>
-        ))}
-      </div>
-    );
-  }
-  return (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: C.sec, marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.8 }}>
-        🎓 Training Needs
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
-        <div>
-          <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 8 }}>Preparers need:</div>
-          {topicList(preparers, "No preparer-training topics yet.")}
-        </div>
-        <div>
-          <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 8 }}>TL needs:</div>
-          {topicList(tls, "No TL-training topics yet.")}
-        </div>
-      </div>
     </div>
   );
 }
@@ -318,6 +226,345 @@ function WhaleLinkCell({ urls, url }) {
   );
 }
 
+// ── Per-client view helpers ─────────────────────────────────────────
+// The /api/team/{id}/checklist payload is week-major (weeks[].entries[]).
+// TLs reason client-major ("what happened on Portnoy this week?"). This
+// helper inverts the shape: one rollup per client across every visible
+// week, with the LATEST status winning per bool column.
+function buildPerClientView(weeks) {
+  const map = new Map();
+  for (const w of weeks || []) {
+    for (const e of w.entries || []) {
+      const rawClient = (e.client || "").trim();
+      const client    = rawClient || "(Team-wide)";
+      const isTeamWide = !rawClient;
+      let row = map.get(client);
+      if (!row) {
+        row = {
+          client,
+          isTeamWide,
+          weeks: [],
+          tasks: {},
+          trainingPreparers: [],
+          trainingTL: [],
+          updates: [],
+          whaleLinks: [],
+        };
+        map.set(client, row);
+      }
+      if (!row.weeks.includes(w.week)) row.weeks.push(w.week);
+      for (const col of BOOL_COLUMNS) {
+        row.tasks[col.key] = e[col.key] || "na";
+      }
+      const upd = (e.updated_procedure || "").trim();
+      const nu  = (e.new_procedure || "").trim();
+      if (upd || nu) {
+        row.updates.push({ week: w.week, updated: upd, new: nu });
+      }
+      const tp = (e.training_preparers || "").trim();
+      const tt = (e.training_myself || "").trim();
+      if (tp && !row.trainingPreparers.includes(tp)) row.trainingPreparers.push(tp);
+      if (tt && !row.trainingTL.includes(tt))        row.trainingTL.push(tt);
+      const links = Array.isArray(e.whale_links) ? e.whale_links
+                  : (e.whale_link ? [e.whale_link] : []);
+      for (const u of links) {
+        if (u && !row.whaleLinks.includes(u)) row.whaleLinks.push(u);
+      }
+    }
+  }
+  return Array.from(map.values());
+}
+
+
+// Heatmap cell glyphs — colored square per (client × task).
+function HeatCell({ value, taskLabel, client }) {
+  const v = String(value || "na").toLowerCase();
+  const cfg = v === "yes" ? { glyph: "✓", color: YN_COLOR.yes, bg: `${YN_COLOR.yes}1F` }
+            : v === "no"  ? { glyph: "✗", color: YN_COLOR.no,  bg: `${YN_COLOR.no}1F` }
+            : v === "na"  ? { glyph: "—", color: YN_COLOR.na,  bg: `${YN_COLOR.na}14` }
+            : { glyph: String(value || "·"), color: YN_COLOR.other, bg: C.surface };
+  const label = `${client} · ${taskLabel}: ${v.toUpperCase()}`;
+  return (
+    <div
+      title={label}
+      aria-label={label}
+      style={{
+        width: 32,
+        height: 32,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: cfg.bg,
+        color: cfg.color,
+        fontWeight: 700,
+        fontSize: 14,
+        borderRadius: 6,
+        border: `1px solid ${cfg.color}44`,
+        fontFamily: "'DM Mono', monospace",
+      }}
+    >
+      {cfg.glyph}
+    </div>
+  );
+}
+
+
+function PerClientComplianceHeatmap({ rows }) {
+  if (!rows || rows.length === 0) {
+    return (
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.sec, marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.8 }}>
+          📊 Per-client Compliance
+        </div>
+        <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12 }}>
+          No client rows recorded this period.
+        </div>
+      </div>
+    );
+  }
+  const stickyHeader = {
+    position: "sticky",
+    top: 0,
+    background: C.card,
+    fontSize: 10,
+    fontWeight: 700,
+    color: C.muted,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    padding: "10px 8px",
+    borderBottom: `1px solid ${C.border}`,
+    whiteSpace: "nowrap",
+    textAlign: "center",
+  };
+  const stickyClient = {
+    position: "sticky",
+    left: 0,
+    background: C.card,
+    fontSize: 12,
+    fontWeight: 600,
+    color: C.pri,
+    padding: "10px 12px",
+    borderRight: `1px solid ${C.border}`,
+    whiteSpace: "nowrap",
+    zIndex: 1,
+  };
+  const cellPad = { padding: "8px 8px", textAlign: "center" };
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: C.sec, marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.8 }}>
+        📊 Per-client Compliance Heatmap
+      </div>
+      <div style={{ overflowX: "auto", maxHeight: 320, border: `1px solid ${C.border}`, borderRadius: 8 }}>
+        <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%" }}>
+          <thead>
+            <tr>
+              <th style={{ ...stickyHeader, ...stickyClient, textAlign: "left", zIndex: 2 }}>Client</th>
+              {BOOL_COLUMNS.map((col) => (
+                <th key={col.key} style={stickyHeader} title={col.label}>
+                  {col.label.replace(" Procedure", "")
+                            .replace("Checked ", "")
+                            .replace("Updated ", "")
+                            .replace("Assigned ", "")}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => {
+              const baseBg = i % 2 === 0 ? "transparent" : C.surface;
+              return (
+                <tr key={row.client} style={{ background: baseBg }}>
+                  <td style={{ ...stickyClient, background: baseBg, fontStyle: row.isTeamWide ? "italic" : "normal", color: row.isTeamWide ? C.muted : C.pri }}>
+                    {row.client}
+                    <div style={{ fontSize: 10, color: C.muted, fontFamily: "'DM Mono', monospace", marginTop: 2 }}>
+                      {row.weeks.join(" · ")}
+                    </div>
+                  </td>
+                  {BOOL_COLUMNS.map((col) => (
+                    <td key={col.key} style={cellPad}>
+                      <HeatCell value={row.tasks[col.key]} taskLabel={col.label} client={row.client} />
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ display: "flex", gap: 14, marginTop: 10, fontSize: 10, color: C.muted }}>
+        <span><span style={{ color: YN_COLOR.yes, fontWeight: 700 }}>✓</span> Yes</span>
+        <span><span style={{ color: YN_COLOR.no,  fontWeight: 700 }}>✗</span> No</span>
+        <span><span style={{ color: YN_COLOR.na }}>—</span> N/A</span>
+      </div>
+    </div>
+  );
+}
+
+
+function ProcedureUpdatesCards({ rows }) {
+  const rowsWithUpdates = (rows || []).filter((r) => r.updates.length > 0 || r.whaleLinks.length > 0);
+  if (rowsWithUpdates.length === 0) {
+    return (
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.sec, marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.8 }}>
+          📝 Procedure Updates by Client
+        </div>
+        <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12 }}>
+          No procedure updates recorded this period.
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: C.sec, marginBottom: 12, textTransform: "uppercase", letterSpacing: 0.8 }}>
+        📝 Procedure Updates by Client
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {rowsWithUpdates.map((row, i) => {
+          const accent = i % 2 === 0 ? C.blue : C.purple;
+          return (
+            <div
+              key={row.client}
+              style={{
+                background: C.surface,
+                border: `1px solid ${C.border}`,
+                borderLeft: `3px solid ${accent}`,
+                borderRadius: 8,
+                padding: "12px 14px",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: row.isTeamWide ? C.muted : C.pri, fontStyle: row.isTeamWide ? "italic" : "normal" }}>
+                  🏢 {row.client}
+                </div>
+                <div style={{ fontSize: 10, color: C.muted, fontFamily: "'DM Mono', monospace" }}>
+                  {row.weeks.join(" · ")}
+                </div>
+              </div>
+              {row.updates.length === 0 ? (
+                <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic" }}>No procedure changes logged.</div>
+              ) : (
+                row.updates.map((u, j) => (
+                  <div key={j} style={{ fontSize: 12, color: C.sec, marginBottom: 4 }}>
+                    <span style={{ fontSize: 10, color: C.muted, fontFamily: "'DM Mono', monospace", marginRight: 6 }}>{u.week}</span>
+                    {u.updated && (
+                      <span style={{ marginRight: 12 }}>
+                        <span style={{ color: C.muted, fontWeight: 600 }}>Updated: </span>
+                        <span style={{ color: C.pri }}>{u.updated}</span>
+                      </span>
+                    )}
+                    {u.new && (
+                      <span>
+                        <span style={{ color: C.muted, fontWeight: 600 }}>New: </span>
+                        <span style={{ color: C.pri }}>{u.new}</span>
+                      </span>
+                    )}
+                  </div>
+                ))
+              )}
+              {row.whaleLinks.length > 0 && (
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
+                  <WhaleLinkCell urls={row.whaleLinks} />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+
+function TrainingTopicsByClientTable({ rows }) {
+  const rowsWithTraining = (rows || []).filter((r) =>
+    r.trainingPreparers.length > 0 || r.trainingTL.length > 0
+  );
+  if (rowsWithTraining.length === 0) {
+    return (
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.sec, marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.8 }}>
+          🎓 Training Topics by Client
+        </div>
+        <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12 }}>
+          No training topics recorded this period.
+        </div>
+      </div>
+    );
+  }
+  const th = {
+    padding: "10px 12px",
+    fontSize: 10,
+    color: C.muted,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    borderBottom: `1px solid ${C.border}`,
+    background: C.card,
+    whiteSpace: "nowrap",
+    textAlign: "left",
+  };
+  const td = {
+    padding: "10px 12px",
+    fontSize: 12,
+    color: C.pri,
+    borderBottom: `1px solid ${C.border}40`,
+    verticalAlign: "top",
+  };
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: C.sec, marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.8 }}>
+        🎓 Training Topics by Client
+      </div>
+      <div style={{ overflowX: "auto", border: `1px solid ${C.border}`, borderRadius: 8 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr>
+              <th style={th}>Client</th>
+              <th style={th}>Preparers need</th>
+              <th style={th}>TL needs</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rowsWithTraining.map((row, i) => {
+              const baseBg = i % 2 === 0 ? "transparent" : C.surface;
+              const both = row.trainingPreparers.length > 0 && row.trainingTL.length > 0;
+              return (
+                <tr
+                  key={row.client}
+                  style={{
+                    background: baseBg,
+                    borderLeft: both ? `3px solid ${YN_COLOR.flag}` : "3px solid transparent",
+                  }}
+                >
+                  <td style={{ ...td, fontWeight: 600, color: row.isTeamWide ? C.muted : C.pri, fontStyle: row.isTeamWide ? "italic" : "normal" }}>
+                    {row.client}
+                  </td>
+                  <td style={td}>
+                    {row.trainingPreparers.length === 0
+                      ? <span style={{ color: C.muted }}>—</span>
+                      : row.trainingPreparers.map((t, j) => (
+                          <div key={j}>{t}</div>
+                        ))}
+                  </td>
+                  <td style={td}>
+                    {row.trainingTL.length === 0
+                      ? <span style={{ color: C.muted }}>—</span>
+                      : row.trainingTL.map((t, j) => (
+                          <div key={j}>{t}</div>
+                        ))}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+
 function ChecklistTable({ weeks, expanded, onToggle }) {
   const rows = useMemo(() => {
     const out = [];
@@ -474,6 +721,7 @@ export default function WeeklyChecklistSection({ teamId }) {
   const data = state.data;
   const summary = data?.summary;
   const weeks = data?.weeks || [];
+  const perClientRows = useMemo(() => buildPerClientView(weeks), [weeks]);
 
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
@@ -529,10 +777,9 @@ export default function WeeklyChecklistSection({ teamId }) {
       {!state.loading && !state.error && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <ChecklistSummaryCards summary={summary} />
-          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16 }}>
-            <ChecklistComplianceChart summary={summary} />
-            <TrainingNeedsBlock summary={summary} />
-          </div>
+          <PerClientComplianceHeatmap rows={perClientRows} />
+          <ProcedureUpdatesCards     rows={perClientRows} />
+          <TrainingTopicsByClientTable rows={perClientRows} />
           <OpenFlagsList summary={summary} />
           <ChecklistTable weeks={weeks} expanded={tableOpen} onToggle={() => setTableOpen((v) => !v)} />
         </div>
