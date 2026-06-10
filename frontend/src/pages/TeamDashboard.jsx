@@ -1655,11 +1655,13 @@ ${clients.map((o) => (
             onSelect={(name) => onSelectEmployee && onSelectEmployee({ teamId, employeeName: name, teamName: displayLabel })}
           />
         )}
+        </>)}
 
+        {/* Render on EVERY tab — including Weekly Review — by sitting
+            OUTSIDE the period ternary above. */}
         {!data?.needsRosterSetup && (
           <WeeklyChecklistSection teamId={teamId} />
         )}
-        </>)}
       </div>
       <DelayDetailModal day={selectedDay} teamId={teamId} onClose={() => setSelectedDay(null)} />
     </div>
