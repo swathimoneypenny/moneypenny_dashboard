@@ -2059,7 +2059,7 @@ DELAYS_TAB_GIDS: dict[str, dict[str, str]] = {
         "abs":                  "1912713326",
         "equity camps":         "717863282",
         "daa cpa":              "2126486701",
-        "porkorny":             "1265454301",
+        "pokorny":              "1265454301",
         "tax with jones":       "872413982",
         "kacey":                "1881407505",
         "happy soul":           "992676495",
@@ -5720,23 +5720,68 @@ async def team_delays_endpoint(
 # to the right team's Delays tab here. Matching is lenient: case-folded,
 # punctuation-stripped, and common business suffixes (CPA, LLC, Inc, etc.)
 # removed so "Portnoy CPA, P.C." resolves to "portnoy".
+# Suffixes stripped during normalization. All entries are in
+# punctuation-stripped lowercase form because _normalize_client_name removes
+# punctuation BEFORE this list is consulted. Order matters within multi-token
+# suffixes — longer phrases come first so "cpa pc" strips before "cpa".
 _CLIENT_NAME_SUFFIXES = (
-    " cpa, p.c.", " cpa pc", " cpa p.c.", " cpa, pc", " cpa",
-    ", p.c.", " p.c.", " pc",
-    ", llc", " llc",
-    ", inc.", " inc.", ", inc", " inc",
-    ", ltd", " ltd",
-    ", corp", " corp", " corporation",
+    # CPA / professional-corp combos
+    " cpa pc", " cpa p c", " cpa", " pc", " p c", " pllc", " pa",
+    # LLC / LLP / LP
+    " llc", " llp", " lp",
+    # Inc / Incorporated
+    " incorporated", " inc",
+    # Ltd / Limited
+    " limited", " ltd",
+    # Corp / Corporation
+    " corporation", " corp",
+    # Company
+    " company", " co",
+    # Generic descriptors leads add to client names
     " group", " advisors", " advisory", " accounting",
 )
 
 
+# Manually-curated overrides for UI labels that don't fuzzy-match cleanly to
+# any DELAYS_TAB_GIDS key. Keys are pre-normalized (lowercase, punctuation
+# stripped); values are the canonical DELAYS_TAB_GIDS key (also normalized).
+# Add a row here whenever the user reports a "client not found" for a name
+# that's actually in the sheet.
+CLIENT_ALIASES: dict[str, str] = {
+    "pokorny cpas":              "pokorny",
+    "pokorny cpa":               "pokorny",
+    "porkorny":                  "pokorny",   # legacy typo defensive entry
+    "porkorny cpa":              "pokorny",
+    "bookkeeping doctor llc":    "bookkeeping doctor",
+    "bkd":                       "bookkeeping doctor",
+    "ollinbalance":              "ollin balance",
+    "ollin balance llc":         "ollin balance",
+    "24 hrs bookkeeper":         "24hr bookkeeper",
+    "24 hours bookkeeper":       "24hr bookkeeper",
+    "24hrs":                     "24hr bookkeeper",
+    "portnoy cpa":               "portnoy",
+    "portnoy cpas":              "portnoy",
+    "portnoy cpa pc":            "portnoy",
+    "modern cpas":               "modern cpa",
+    "modern cpa pc":             "modern cpa",
+    "empower accounting & tax":  "empower accounting",
+    "empower tax":               "empower accounting",
+}
+
+
+_PUNCTUATION_RE = re.compile(r"[.,;:'\"()&]")
+
+
 def _normalize_client_name(name: str) -> str:
-    """Strip the common business suffixes, lowercase, collapse whitespace."""
+    """Lowercase, strip punctuation, drop common business suffixes, collapse
+    whitespace. Used as the canonical comparison key everywhere a free-form
+    UI label needs to line up against a DELAYS_TAB_GIDS slot.
+    """
     if not name:
         return ""
-    n = " ".join(str(name).lower().split())
-    # Apply suffix stripping repeatedly so "Foo CPA, P.C." → "foo cpa" → "foo".
+    n = _PUNCTUATION_RE.sub(" ", str(name).lower())
+    n = " ".join(n.split())
+    # Strip suffixes repeatedly so "Foo CPA, P.C." → "foo cpa pc" → "foo".
     changed = True
     while changed:
         changed = False
@@ -5745,26 +5790,40 @@ def _normalize_client_name(name: str) -> str:
                 n = n[:-len(suf)].strip()
                 changed = True
                 break
-    # Strip trailing period that some sheets carry over.
-    return n.rstrip(".").strip()
+    return n.strip()
 
 
 def _find_team_for_client(client_name: str) -> tuple[str | None, str | None]:
     """Resolve a free-form client name → (team_id, client_key) by matching
     against DELAYS_TAB_GIDS.
 
-    Strategy (each tier returns on first match):
-      1. Exact normalized match → highest priority.
-      2. Either normalized name is a substring of the other (handles
-         "Portnoy CPA" vs "portnoy" both ways).
-      3. Token-set overlap on the canonical TEAM_CLIENTS aliases — covers
-         "Bookkeeping Doctor" → "bookkeeping doctor" via tsMatch aliases.
+    Four-tier strategy (each tier returns on first match):
+      1. CLIENT_ALIASES hard-coded override.
+      2. Exact normalized equality against DELAYS_TAB_GIDS keys.
+      3. Substring containment (longer key wins so "Tim Thompson" doesn't
+         shadow "Tim Thompson TX").
+      4. difflib SequenceMatcher fuzzy match at ≥0.80 ratio — catches
+         single-letter typos like "porkorny" / "pokorny" without
+         needing a manual alias.
+
+    All comparison runs against _normalize_client_name output so suffix
+    differences ("Foo CPA, P.C." vs "foo") don't matter.
     """
     target = _normalize_client_name(client_name)
     if not target:
         return None, None
 
-    # Tier 1: exact normalized
+    # Tier 1: explicit alias override
+    canonical_alias = CLIENT_ALIASES.get(target)
+    if canonical_alias:
+        for tid, cmap in DELAYS_TAB_GIDS.items():
+            if not cmap:
+                continue
+            for key in cmap.keys():
+                if _normalize_client_name(key) == canonical_alias:
+                    return tid, key
+
+    # Tier 2: exact normalized
     for tid, cmap in DELAYS_TAB_GIDS.items():
         if not cmap:
             continue
@@ -5772,8 +5831,7 @@ def _find_team_for_client(client_name: str) -> tuple[str | None, str | None]:
             if _normalize_client_name(key) == target:
                 return tid, key
 
-    # Tier 2: substring containment (either direction). Sort by key length
-    # descending so longer / more-specific matches win.
+    # Tier 3: substring containment (longest match wins)
     candidates: list[tuple[int, str, str]] = []
     for tid, cmap in DELAYS_TAB_GIDS.items():
         if not cmap:
@@ -5782,16 +5840,36 @@ def _find_team_for_client(client_name: str) -> tuple[str | None, str | None]:
             nk = _normalize_client_name(key)
             if not nk:
                 continue
-            if target in nk or nk in target:
+            if len(target) >= 3 and len(nk) >= 3 and (target in nk or nk in target):
                 candidates.append((len(nk), tid, key))
     if candidates:
         candidates.sort(key=lambda kv: -kv[0])
         _, tid, key = candidates[0]
         return tid, key
 
-    # Tier 3: match via the TEAM_CLIENTS aliases — the canonical client list
-    # carries `tsMatch` keywords (e.g. ["BKP Doctor", "Bookkeeping Doctor"])
-    # that often line up with how the UI labels the client.
+    # Tier 4: fuzzy match — typo tolerance (e.g. "porkorny" → "pokorny").
+    # 0.80 keeps the false-positive rate negligible on the existing key set.
+    try:
+        from difflib import SequenceMatcher
+        best_ratio = 0.0
+        best_match: tuple[str, str] | tuple[None, None] = (None, None)
+        for tid, cmap in DELAYS_TAB_GIDS.items():
+            if not cmap:
+                continue
+            for key in cmap.keys():
+                nk = _normalize_client_name(key)
+                if not nk:
+                    continue
+                ratio = SequenceMatcher(None, target, nk).ratio()
+                if ratio > best_ratio and ratio >= 0.80:
+                    best_ratio = ratio
+                    best_match = (tid, key)
+        if best_match[0]:
+            return best_match
+    except Exception:
+        pass
+
+    # Tier 5 (fallback): TEAM_CLIENTS aliases via tsMatch overlap
     target_tokens = set(target.split())
     for tid, clients in (TEAM_CLIENTS or {}).items():
         if tid not in DELAYS_TAB_GIDS:
@@ -5804,10 +5882,31 @@ def _find_team_for_client(client_name: str) -> tuple[str | None, str | None]:
                     continue
                 if na == target:
                     return tid, _first_delays_key(tid, c.get("name") or alias) or alias
-                # token-set overlap (>=2 shared meaningful tokens)
                 if len(target_tokens & set(na.split())) >= 2:
                     return tid, _first_delays_key(tid, c.get("name") or alias) or alias
     return None, None
+
+
+def _client_suggestions(client_name: str, n: int = 3) -> list[str]:
+    """Return up to N close-match suggestions for a name we couldn't resolve.
+    Uses difflib.get_close_matches against the union of DELAYS_TAB_GIDS keys
+    and their normalized forms. Display values are the original keys (so the
+    suggestion text matches what an admin would type into the alias table)."""
+    try:
+        from difflib import get_close_matches
+        target = _normalize_client_name(client_name)
+        if not target:
+            return []
+        haystack: list[tuple[str, str]] = []  # (normalized, display)
+        for cmap in DELAYS_TAB_GIDS.values():
+            for key in (cmap or {}).keys():
+                haystack.append((_normalize_client_name(key), key))
+        norm_to_display = {nk: disp for nk, disp in haystack if nk}
+        norm_keys = list(norm_to_display.keys())
+        hits = get_close_matches(target, norm_keys, n=n, cutoff=0.6)
+        return [norm_to_display[h] for h in hits if h in norm_to_display]
+    except Exception:
+        return []
 
 
 def _first_delays_key(team_id: str, hint: str) -> str | None:
@@ -5837,6 +5936,13 @@ async def client_delays_endpoint(client_name: str, date: str | None = None):
     try:
         team_id, client_key = await asyncio.to_thread(_find_team_for_client, client_name)
         if not team_id or not client_key:
+            suggestions = await asyncio.to_thread(_client_suggestions, client_name, 3)
+            hint = (
+                f"Did you mean: {', '.join(suggestions)}? Add an alias to "
+                f"CLIENT_ALIASES in backend/main.py if this name is canonical."
+                if suggestions
+                else "Check DELAYS_TAB_GIDS / CLIENT_ALIASES in backend/main.py."
+            )
             return {
                 "client_name":  client_name,
                 "error":        "client_not_found",
@@ -5844,6 +5950,8 @@ async def client_delays_endpoint(client_name: str, date: str | None = None):
                     f"No team's DELAYS_TAB_GIDS contains a client matching "
                     f"{client_name!r}. Update the mapping in backend/main.py."
                 ),
+                "suggestions": suggestions,
+                "hint":         hint,
                 "clients":      [],
                 "tab_errors":   [],
                 "totals":       {"total": 0, "open": 0, "in_progress": 0, "completed": 0},
