@@ -58,11 +58,14 @@ function ChecklistSummaryCards({ summary }) {
   if (!summary) return null;
   return (
     <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-      <StatCard label="Weeks tracked"    value={summary.total_weeks ?? 0}              color={C.blue} />
-      <StatCard label="Clients reviewed" value={summary.total_clients_reviewed ?? 0}   color={C.purple} />
-      <StatCard label="Compliance"       value={`${(summary.compliance_pct ?? 0).toFixed(1)}%`} color={(summary.compliance_pct ?? 0) >= 80 ? YN_COLOR.yes : (summary.compliance_pct ?? 0) >= 50 ? YN_COLOR.flag : YN_COLOR.no} sublabel="Yes ÷ (Yes + No)" />
-      <StatCard label="Open flags"       value={summary.open_flags ?? 0}               color={(summary.open_flags ?? 0) > 0 ? YN_COLOR.flag : C.muted} />
-      <StatCard label="Whale updates"    value={summary.whale_links_count ?? 0}        color={C.teal} />
+      <StatCard label="Weeks tracked" value={summary.total_weeks ?? 0}         color={C.blue} />
+      <StatCard
+        label="Open flags"
+        value={summary.open_flags ?? 0}
+        color={(summary.open_flags ?? 0) > 0 ? YN_COLOR.flag : C.muted}
+        sublabel={(summary.nil_flags_count ?? 0) > 0 ? `+ ${summary.nil_flags_count} NIL` : null}
+      />
+      <StatCard label="Whale updates" value={summary.whale_links_count ?? 0}   color={C.teal} />
     </div>
   );
 }
@@ -299,8 +302,22 @@ function buildPerClientView(weeks) {
           trainingTL: [],
           updates: [],
           whaleLinks: [],
+          // Multi-client provenance — populated when the upstream CSV row
+          // listed multiple clients in one cell. Used by the training
+          // table to collapse N rows that share identical training text
+          // into a single "EZ Ledger, Putman, Manzelli (×3)" row.
+          isMultiClient: !!e.is_multi_client_row,
+          siblings: Array.isArray(e.siblings) ? e.siblings.slice() : [],
         };
         map.set(client, row);
+      }
+      if (e.is_multi_client_row) {
+        row.isMultiClient = true;
+        if (Array.isArray(e.siblings)) {
+          for (const s of e.siblings) {
+            if (s && !row.siblings.includes(s)) row.siblings.push(s);
+          }
+        }
       }
       if (!row.weeks.includes(w.week)) row.weeks.push(w.week);
       for (const col of BOOL_COLUMNS) {
@@ -323,6 +340,33 @@ function buildPerClientView(weeks) {
     }
   }
   return Array.from(map.values());
+}
+
+
+// Group per-client rows by their training-text signature when the rows came
+// from a single multi-client CSV row that broadcast identical training text
+// across siblings. Returns the same row shape but with `groupedClients`
+// populated when collapsing — the caller renders the combined list there.
+function groupTrainingRows(rows) {
+  if (!Array.isArray(rows)) return [];
+  const groups = new Map();
+  const ordered = [];
+  for (const r of rows) {
+    const sig = r.isMultiClient
+      ? `MULTI|${[...r.trainingPreparers].sort().join("|")}||${[...r.trainingTL].sort().join("|")}`
+      : `SOLO|${r.client}`;
+    const existing = groups.get(sig);
+    if (existing) {
+      if (!existing.groupedClients.includes(r.client)) {
+        existing.groupedClients.push(r.client);
+      }
+    } else {
+      const copy = { ...r, groupedClients: [r.client] };
+      groups.set(sig, copy);
+      ordered.push(copy);
+    }
+  }
+  return ordered;
 }
 
 
@@ -629,13 +673,14 @@ function TrainingTopicsByClientTable({ rows }) {
   const [hoverRow, setHoverRow] = useState(null);
   // Show every client row — even ones with no training noted — so the user
   // can scan all reviewed clients in one place. "(No training noted)" fills
-  // empty cells.
-  const allRows = rows || [];
+  // empty cells. Multi-client siblings that share identical training text
+  // collapse into a single row via groupTrainingRows.
+  const allRows = useMemo(() => groupTrainingRows(rows || []), [rows]);
   if (allRows.length === 0) {
     return (
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: C.pri, marginBottom: 4 }}>
-          🎓 Training Topics by Client
+          🎓 Training Topics
         </div>
         <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12, marginTop: 4 }}>
           No training topics recorded this period.
@@ -666,7 +711,7 @@ function TrainingTopicsByClientTable({ rows }) {
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
       <div style={{ fontSize: 14, fontWeight: 700, color: C.pri, marginBottom: 12 }}>
-        🎓 Training Topics by Client
+        🎓 Training Topics
       </div>
       <div style={{ overflowX: "auto", maxHeight: 360, border: `1px solid ${C.border}`, borderRadius: 8 }}>
         <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
@@ -680,16 +725,18 @@ function TrainingTopicsByClientTable({ rows }) {
           <tbody>
             {allRows.map((row, i) => {
               const both = row.trainingPreparers.length > 0 && row.trainingTL.length > 0;
-              const hover = hoverRow === row.client;
+              const groupKey = (row.groupedClients || [row.client]).join("|");
+              const hover = hoverRow === groupKey;
               const baseBg = hover
                 ? C.surface
                 : (i % 2 === 0 ? "transparent" : C.surface);
               const noTraining = row.trainingPreparers.length === 0 && row.trainingTL.length === 0;
+              const grouped   = (row.groupedClients || []).length > 1;
               return (
                 <tr
-                  key={row.client}
-                  onMouseEnter={() => setHoverRow(row.client)}
-                  onMouseLeave={() => setHoverRow((r) => (r === row.client ? null : r))}
+                  key={groupKey}
+                  onMouseEnter={() => setHoverRow(groupKey)}
+                  onMouseLeave={() => setHoverRow((r) => (r === groupKey ? null : r))}
                   style={{
                     background: baseBg,
                     transition: "background 0.12s",
@@ -704,7 +751,16 @@ function TrainingTopicsByClientTable({ rows }) {
                       borderLeft: both ? `3px solid ${YN_COLOR.flag}` : "3px solid transparent",
                     }}
                   >
-                    {row.client}
+                    {grouped ? (
+                      <>
+                        <div>{row.groupedClients.join(", ")}</div>
+                        <div style={{ fontSize: 10, color: C.muted, fontWeight: 500, marginTop: 2, fontStyle: "italic" }}>
+                          combined entry · ×{row.groupedClients.length}
+                        </div>
+                      </>
+                    ) : (
+                      row.client
+                    )}
                   </td>
                   <td style={td}>
                     {row.trainingPreparers.length === 0

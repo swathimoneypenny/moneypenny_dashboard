@@ -2289,6 +2289,16 @@ def _is_valid_week_row(
     return False
 
 
+_NIL_FLAG_TOKENS = frozenset({"nil", "n/a", "na", "none", "-", "—", ""})
+
+
+def _is_nil_flag(flag_text: str) -> bool:
+    """True iff the flag cell holds a 'nothing-to-flag' placeholder (NIL,
+    N/A, None, dash). Real-content flags return False and bubble up to the
+    Open Flags summary count."""
+    return (flag_text or "").strip().lower() in _NIL_FLAG_TOKENS
+
+
 def _is_valid_flag(flag_text: str) -> bool:
     """True iff `flag_text` is a non-empty cell that isn't one of the two
     instruction strings the TL sees in the column header. NIL / N/A / "-"
@@ -2336,18 +2346,91 @@ def _parse_whale_links(text: str) -> list[str]:
     return urls
 
 
-def _shape_checklist_row(row: list[str]) -> dict:
-    """Convert a raw CSV row to the public-API entry shape, normalizing each
-    boolean-ish field through _normalize_yes_no."""
+_LIST_BULLET_RE = re.compile(r"^[\d]+[\.\)]\s*")
+_LIST_DASH_RE   = re.compile(r"^[•\-\*]\s*")
+
+
+def _split_multi_client(client_text: str) -> list[str]:
+    """Split a Client cell that holds multiple clients. TLs commonly
+    newline-separate or bullet-list multiple clients in a single row when
+    the same checklist applies to all of them. Returns one cleaned name per
+    client. Single-client input returns [text]."""
+    if not client_text:
+        return []
+    text = str(client_text).strip()
+    if not text:
+        return []
+    if "\n" in text:
+        parts = text.split("\n")
+    elif ";" in text:
+        parts = text.split(";")
+    elif "," in text and len(text.split(",")) > 1:
+        parts = text.split(",")
+    else:
+        return [text]
+    cleaned: list[str] = []
+    for part in parts:
+        p = part.strip()
+        if not p:
+            continue
+        p = _LIST_BULLET_RE.sub("", p)
+        p = _LIST_DASH_RE.sub("", p).strip()
+        if p:
+            cleaned.append(p)
+    return cleaned or [text]
+
+
+# Numbered-prefix pattern. Matches "1.", "1)", "1-", etc. at the start of a
+# logical paragraph (line start or after whitespace). Capturing group holds
+# the number so we can splice paragraphs back together.
+_NUMBERED_PREFIX_RE = re.compile(r"(?:^|\n)\s*(\d+)\s*[\.\)\-:]\s*")
+
+
+def _split_numbered_updates(text: str, num_clients: int) -> list[str]:
+    """Split a free-text Updates / New Procedures cell into per-client
+    chunks when its content is numbered "1. ...", "2. ...", and the count
+    of numbered items matches `num_clients`. Returns the full text in a
+    one-element list otherwise (i.e. fall back to "shared across all").
+    """
+    if not text or num_clients <= 1:
+        return [text]
+    s = str(text).strip()
+    if not s:
+        return [text]
+    parts = _NUMBERED_PREFIX_RE.split(s)
+    # split yields [pre, '1', body1, '2', body2, ...]. Pre is usually "".
+    if len(parts) < 3:
+        return [text]
+    bodies: list[str] = []
+    for i in range(1, len(parts), 2):
+        if i + 1 < len(parts):
+            bodies.append(parts[i + 1].strip())
+    if len(bodies) == num_clients:
+        return bodies
+    return [text]
+
+
+def _shape_checklist_row(
+    row: list[str],
+    *,
+    client_override: str | None = None,
+    updated_override: str | None = None,
+    new_override: str | None = None,
+    is_multi_client_row: bool = False,
+    siblings: list[str] | None = None,
+) -> dict:
+    """Convert a raw CSV row to the public-API entry shape. Optional overrides
+    let `_parse_weekly_checklist` emit one entry per client when a single CSV
+    row carries a multi-client cell."""
     def col(key: str) -> str:
         idx = WEEKLY_CHECKLIST_COLUMNS[key]
         return (row[idx] if idx < len(row) else "").strip()
 
     return {
-        "client":                col("client"),
+        "client":                (client_override if client_override is not None else col("client")),
         "reviewed_procedure":    _normalize_yes_no(col("reviewed_procedure")),
-        "updated_procedure":     col("updated_procedure"),
-        "new_procedure":         col("new_procedure"),
+        "updated_procedure":     (updated_override if updated_override is not None else col("updated_procedure")),
+        "new_procedure":         (new_override if new_override is not None else col("new_procedure")),
         "updated_escalation":    _normalize_yes_no(col("updated_escalation")),
         "identified_turn":       col("identified_turn"),
         "assigned_reading":      _normalize_yes_no(col("assigned_reading")),
@@ -2359,6 +2442,8 @@ def _shape_checklist_row(row: list[str]) -> dict:
         "meeting_notes_shared":  _normalize_yes_no(col("meeting_notes_shared")),
         "flag_tm_ops":           col("flag_tm_ops"),
         "whale_links":           _parse_whale_links(col("whale_links")),
+        "is_multi_client_row":   is_multi_client_row,
+        "siblings":              list(siblings) if siblings else [],
     }
 
 
@@ -2416,7 +2501,32 @@ def _parse_weekly_checklist(csv_text: str, team_id: str) -> list[dict]:
                 "entries":        [],
             }
             week_order.append(current_week)
-        week_buckets[current_week]["entries"].append(_shape_checklist_row(row))
+
+        # Multi-client cells: when the Client cell holds multiple clients
+        # (newline / semicolon / comma), emit one entry per client. Numbered
+        # Updated / New text gets split per client when the count matches;
+        # otherwise it's broadcast (each entry shows the same text).
+        clients_in_cell = _split_multi_client(client_cell)
+        if len(clients_in_cell) > 1:
+            updated_raw = (row[WEEKLY_CHECKLIST_COLUMNS["updated_procedure"]]
+                           if WEEKLY_CHECKLIST_COLUMNS["updated_procedure"] < len(row) else "")
+            new_raw     = (row[WEEKLY_CHECKLIST_COLUMNS["new_procedure"]]
+                           if WEEKLY_CHECKLIST_COLUMNS["new_procedure"] < len(row) else "")
+            updated_split = _split_numbered_updates(updated_raw, len(clients_in_cell))
+            new_split     = _split_numbered_updates(new_raw,     len(clients_in_cell))
+            for idx, name in enumerate(clients_in_cell):
+                week_buckets[current_week]["entries"].append(
+                    _shape_checklist_row(
+                        row,
+                        client_override=name,
+                        updated_override=(updated_split[idx] if len(updated_split) == len(clients_in_cell) else updated_raw.strip()),
+                        new_override=(new_split[idx]     if len(new_split)     == len(clients_in_cell) else new_raw.strip()),
+                        is_multi_client_row=True,
+                        siblings=clients_in_cell,
+                    )
+                )
+        else:
+            week_buckets[current_week]["entries"].append(_shape_checklist_row(row))
 
     return [week_buckets[w] for w in week_order]
 
@@ -2428,11 +2538,11 @@ def _compute_checklist_summary(weeks: list[dict]) -> dict:
     distinct_clients: set[str] = set()
     yes_count     = 0
     no_count      = 0
-    open_flags    = 0
     whale_links   = 0
     preparer_topics: dict[str, int] = {}
     myself_topics:   dict[str, int] = {}
-    flags: list[dict] = []
+    real_flags: list[dict] = []
+    nil_flags:  list[dict] = []
     field_totals: dict[str, dict[str, int]] = {f: {"yes": 0, "no": 0, "na": 0, "other": 0} for f in _CHECKLIST_BOOL_FIELDS}
 
     for w in weeks:
@@ -2449,13 +2559,24 @@ def _compute_checklist_summary(weeks: list[dict]) -> dict:
                 elif v == "no":
                     no_count += 1
             flag_text = (e.get("flag_tm_ops") or "").strip()
+            # Real flag = non-empty, not a NIL/N/A/None placeholder, and not
+            # the column-header / instruction-prompt text leads sometimes
+            # forget to clear.
             if _is_valid_flag(flag_text):
-                open_flags += 1
-                flags.append({
-                    "week":   w.get("week"),
-                    "client": e.get("client"),
-                    "flag":   flag_text,
-                })
+                if _is_nil_flag(flag_text):
+                    nil_flags.append({
+                        "week":   w.get("week"),
+                        "client": e.get("client"),
+                        "flag":   flag_text,
+                        "is_placeholder": True,
+                    })
+                else:
+                    real_flags.append({
+                        "week":   w.get("week"),
+                        "client": e.get("client"),
+                        "flag":   flag_text,
+                        "is_placeholder": False,
+                    })
             whale_links += len(e.get("whale_links") or [])
             for raw, bucket in ((e.get("training_preparers"), preparer_topics),
                                 (e.get("training_myself"),   myself_topics)):
@@ -2480,12 +2601,18 @@ def _compute_checklist_summary(weeks: list[dict]) -> dict:
         "total_clients_reviewed":  len(distinct_clients),
         "total_entries":           total_entries,
         "compliance_pct":          compliance_pct,
-        "open_flags":              open_flags,
+        # Real flags only — NIL placeholders are counted separately so the
+        # top "Open flags" stat card doesn't light up just because the TL
+        # typed NIL in every row.
+        "open_flags":              len(real_flags),
+        "nil_flags_count":         len(nil_flags),
         "whale_links_count":       whale_links,
         "top_training_topics": [{"topic": t, "count": c} for t, c in top_combined],
         "training_preparers":  [{"topic": t, "count": c} for t, c in top_preparer],
         "training_myself":     [{"topic": t, "count": c} for t, c in top_myself],
-        "flags":               flags,
+        # Real flags first, NIL after — the modal renders them in that order
+        # and uses `is_placeholder` to style NIL rows muted.
+        "flags":               real_flags + nil_flags,
         "field_compliance": {
             f: {
                 **counts,
