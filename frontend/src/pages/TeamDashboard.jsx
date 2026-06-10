@@ -1372,7 +1372,11 @@ ${clients.map((o) => (
 
       <div style={{ padding: "24px 32px", display: "flex", flexDirection: "column", gap: 24 }}>
         {period === "review" ? (
-          <WeeklyReviewSection teamId={teamId} />
+          <>
+            {!data?.needsRosterSetup && (
+              <WeeklyChecklistSection teamId={teamId} />
+            )}
+          </>
         ) : (<>
         {/* Roster info banner */}
         {!loading && data && !data.error && !data.needsRosterSetup && (
@@ -1656,12 +1660,6 @@ ${clients.map((o) => (
           />
         )}
         </>)}
-
-        {/* Render on EVERY tab — including Weekly Review — by sitting
-            OUTSIDE the period ternary above. */}
-        {!data?.needsRosterSetup && (
-          <WeeklyChecklistSection teamId={teamId} />
-        )}
       </div>
       <DelayDetailModal day={selectedDay} teamId={teamId} onClose={() => setSelectedDay(null)} />
     </div>
