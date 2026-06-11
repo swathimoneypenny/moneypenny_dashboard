@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from groq import Groq
@@ -2088,7 +2088,8 @@ _DELAYS_PLACEHOLDER_TOKENS = (
 
 # CSV cache keyed by (sheet_id, gid) — 5 min TTL per spec.
 _delays_csv_cache: dict[tuple[str, str], dict] = {}
-_DELAYS_CSV_TTL = 300
+# 60 sec TTL — TLs edit delays/Q&A tabs live (Penny's 2026-06-10 feedback).
+_DELAYS_CSV_TTL = 60
 
 
 # ── Weekly Admin Checklist tabs ───────────────────────────────────
@@ -2146,9 +2147,13 @@ _CHECKLIST_BOOL_FIELDS = (
     "meeting_notes_shared",
 )
 
-# CSV cache for checklist tabs — 10 min TTL (data only updates weekly).
+# CSV cache for checklist tabs — 60 sec TTL. TLs edit these sheets live in
+# meetings and expect dashboard changes to reflect within ~1 min (was 600s,
+# which felt stale — see Penny's 2026-06-10 feedback). Lower TTL also makes
+# the manual ⟳ Refresh button in WeeklyChecklistSection mostly redundant —
+# but the button is still useful for forcing a fetch mid-edit.
 _checklist_csv_cache: dict[tuple[str, str], dict] = {}
-_CHECKLIST_CSV_TTL = 600
+_CHECKLIST_CSV_TTL = 60
 
 
 _YES_PREFIX_RE = re.compile(r"^yes[\s,.\-:;()]")
@@ -2351,18 +2356,63 @@ def _looks_like_checklist_header(row: list[str]) -> bool:
 _WHALE_URL_RE = re.compile(r"https?://[^\s,;'\"\)]+", re.IGNORECASE)
 
 
-def _parse_whale_links(text: str) -> list[str]:
-    """Extract every URL from a free-form Whale-links cell. Handles cells
-    with multiple URLs separated by newlines, commas, spaces, or arbitrary
-    surrounding prose. Trailing punctuation (.,;:)) is stripped per-URL."""
+def _parse_whale_links(text: str) -> list[dict]:
+    """Extract labelled URL pairs from a free-form Whale-links cell.
+
+    Each cell line is parsed as "{label} - {url}" (separator can be -, –, —,
+    :, |, or whitespace). The label is whatever text precedes the URL on the
+    same line; an empty label falls back to "Whale SOP" / "Whale 1, 2, …".
+
+    Returns: [{"label": "Reconciliation SOP", "url": "https://app.usewhale.io/..."}]
+
+    Penny's 2026-06-10 feedback: TLs paste meaningful labels next to each
+    Whale URL ("Reconciliation SOP", "Vendor Setup") and want the dashboard
+    to surface that label as the link text, not a generic "🐳 Whale 1".
+    """
     if not text or not str(text).strip():
         return []
-    urls: list[str] = []
-    for raw in _WHALE_URL_RE.findall(str(text)):
-        cleaned = raw.rstrip(".,;:)")
-        if cleaned and cleaned not in urls:
-            urls.append(cleaned)
-    return urls
+    raw_text = str(text)
+    seen_urls: set[str] = set()
+    out: list[dict] = []
+
+    # Try line-by-line first — the labelled format.
+    for line in raw_text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        m = _WHALE_URL_RE.search(line)
+        if not m:
+            continue
+        url = m.group().rstrip(".,;:)")
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        label = line[: m.start()].rstrip(" -–—:|").strip()
+        out.append({"label": label or "", "url": url})
+
+    # Fallback: cell with only URLs (no labels). Numbered "Whale 1 / Whale 2"
+    # or just "Whale SOP" for a single link.
+    if not out:
+        urls = [u.rstrip(".,;:)") for u in _WHALE_URL_RE.findall(raw_text)]
+        urls = [u for u in urls if u]
+        for i, url in enumerate(urls):
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            out.append({"label": "", "url": url})
+
+    # Backfill empty labels so the frontend doesn't have to do it.
+    blanks = [r for r in out if not r["label"]]
+    if len(blanks) == 1 and len(out) == 1:
+        out[0]["label"] = "Whale SOP"
+    elif blanks:
+        # Number only the blank ones, leaving labelled entries alone.
+        n = 1
+        for r in out:
+            if not r["label"]:
+                r["label"] = f"Whale {n}"
+                n += 1
+    return out
 
 
 _LIST_BULLET_RE = re.compile(r"^[\d]+[\.\)]\s*")
@@ -3349,6 +3399,96 @@ def date_range_for_period(period: str):
     return s, e, today.strftime("%B %Y")
 
 
+def full_period_range_for_period(period: str) -> tuple[str, str]:
+    """Return the FULL period bounds — UNlike date_range_for_period, the end
+    is the actual end of period, not today. Used as denominator for
+    _pro_rate_committed_hours. Both bounds are ISO 'YYYY-MM-DD'.
+
+      today    → (today, today)
+      weekly   → (Monday, Sunday)        of this week
+      monthly  → (1st, last day)         of this month
+    """
+    today = datetime.now()
+    if period == "today":
+        s = today.strftime("%Y-%m-%d")
+        return s, s
+    if period == "weekly":
+        start = today - timedelta(days=today.weekday())
+        end   = start + timedelta(days=6)
+        return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+    # monthly
+    start = today.replace(day=1)
+    # Last day of month — jump forward then snap back.
+    if start.month == 12:
+        next_month = start.replace(year=start.year + 1, month=1)
+    else:
+        next_month = start.replace(month=start.month + 1)
+    end = next_month - timedelta(days=1)
+    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+
+
+def _working_days_between(start_date, end_date) -> int:
+    """Count working days (Mon-Fri) inclusive of both endpoints. Accepts
+    'YYYY-MM-DD' strings or date/datetime objects. Returns 0 for inverted or
+    empty ranges (defensive — pro-rating callers must not divide by zero)."""
+    def _coerce(d):
+        if isinstance(d, str):
+            return datetime.strptime(d[:10], "%Y-%m-%d").date()
+        if isinstance(d, datetime):
+            return d.date()
+        return d
+    s = _coerce(start_date)
+    e = _coerce(end_date)
+    if not s or not e or e < s:
+        return 0
+    days = 0
+    cur = s
+    while cur <= e:
+        if cur.weekday() < 5:  # 0=Mon … 4=Fri
+            days += 1
+        cur += timedelta(days=1)
+    return days
+
+
+def _pro_rate_committed_hours(
+    full_committed: float,
+    period_start: str,
+    period_end:   str,
+    as_of:        str | None = None,
+) -> float:
+    """Pro-rate a period's full committed hours by working days elapsed.
+
+    Fixes the "BELOW TARGET on June 10" bug: This Month tab used to show 30h
+    booked against the full 80h monthly target → "BELOW TARGET" — even though
+    the employee was on pace (30h after 7/22 working days ≈ 95% of pro-rated
+    25.5h target). With pro-rating, the same employee now reads ON TRACK.
+
+    Boundary behaviour:
+      - as_of < period_start  → 0  (period hasn't started yet)
+      - as_of ≥ period_end    → full_committed  (period is over, no pro-rating)
+      - otherwise             → full × elapsed_working_days / total_working_days
+    """
+    if not full_committed or full_committed <= 0:
+        return 0.0
+    if as_of is None:
+        as_of = datetime.now().strftime("%Y-%m-%d")
+    try:
+        start_d  = datetime.strptime(period_start[:10], "%Y-%m-%d").date()
+        end_d    = datetime.strptime(period_end[:10],   "%Y-%m-%d").date()
+        as_of_d  = datetime.strptime(as_of[:10],        "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return float(full_committed)
+    if as_of_d < start_d:
+        return 0.0
+    if as_of_d >= end_d:
+        return round(float(full_committed), 1)
+    total   = _working_days_between(start_d, end_d)
+    elapsed = _working_days_between(start_d, as_of_d)
+    if total <= 0:
+        return 0.0
+    return round(float(full_committed) * (elapsed / total), 1)
+
+
 # Aliases used by the debug endpoint
 def get_date_range(period: str):
     return date_range_for_period(period)
@@ -3828,10 +3968,20 @@ async def active_clients():
     return result
 
 
-async def _team_response(team_id: str, period: str):
+async def _team_response(
+    team_id: str,
+    period: str,
+    *,
+    custom_window: tuple[str, str, str] | None = None,
+):
     """Build a complete team response. Filter by staff roster (name keywords).
     If no roster is configured, return needsRosterSetup=True without scanning.
-    EOD sheet + timesheet rows are fetched in parallel."""
+    EOD sheet + timesheet rows are fetched in parallel.
+
+    custom_window=(start, end, label) overrides date_range_for_period — used
+    by the /api/team/{id}/custom endpoint. In that mode period is "custom"
+    and pro-rated targets scale to working_days_in_range × 16h.
+    """
     t_total = time.perf_counter()
     cfg = TEAM_LETTER_MAP.get(team_id)
     if not cfg:
@@ -3841,7 +3991,13 @@ async def _team_response(team_id: str, period: str):
     admin_id  = TEAM_ADMIN_MAP.get(team_id)
     sheet_id  = cfg.get("sheetId")
     sheet_gid = cfg.get("gid")
-    start, end, label = date_range_for_period(period)
+    if custom_window:
+        start, end, label = custom_window
+        full_start, full_end = start, end
+    else:
+        start, end, label = date_range_for_period(period)
+        full_start, full_end = full_period_range_for_period(period)
+    today_iso = datetime.now().strftime("%Y-%m-%d")
     team_label = cfg.get("label", team_id)
     # A team is "configured" if it has either a manual roster OR an admin-hierarchy entry.
     is_configured = bool(roster) or bool(admin_id)
@@ -3999,7 +4155,19 @@ async def _team_response(team_id: str, period: str):
         if customer:
             bucket["matchedCustomers"].add(customer)
 
-    org_per_preparer = PER_PREPARER_TARGET.get(period, PER_PREPARER_TARGET["monthly"])
+    # Pro-rated per-preparer target. On day 7 of a 22-day month, this is
+    # 320 × 7/22 ≈ 101.8 instead of the static 320 — so a preparer who's
+    # booked 30h doesn't read "BELOW TARGET" when they're actually on pace.
+    # See _pro_rate_committed_hours / Penny's 2026-06-10 feedback.
+    org_per_preparer_full = (
+        _PER_PREPARER_DAILY * _working_days_between(full_start, full_end)
+        if period == "custom"
+        else _full_committed_for_period(period)
+    )
+    org_per_preparer = get_employee_committed_hours(
+        team_id, period,
+        period_start=full_start, period_end=full_end, as_of=today_iso,
+    )
     clients_data = []
     for org_name, h in orgs.items():
         actual = h["billable"] + h["nonBillable"]
@@ -4130,10 +4298,17 @@ async def _team_response(team_id: str, period: str):
     # this period — if zero (e.g. nobody logged hours today), fall back to the
     # configured roster/admin count so the target isn't 0.
     team_member_count = max(len(staff_names_found), _team_member_count(team_id), 1)
-    per_preparer_target = PER_PREPARER_TARGET.get(period, PER_PREPARER_TARGET["monthly"])
-    team_target = round(per_preparer_target * team_member_count, 1)
+    per_preparer_target      = org_per_preparer        # pro-rated; same value already computed above
+    per_preparer_target_full = org_per_preparer_full   # full period target, for context
+    team_target      = round(per_preparer_target      * team_member_count, 1)
+    team_target_full = round(per_preparer_target_full * team_member_count, 1)
     target_util_pct = round(total_b / team_target * 100, 1) if team_target > 0 else 0.0
     team_target_status = target_status_label(target_util_pct)
+
+    # Period-window metadata — drives the "Day 7/22 working" subhead in the
+    # dashboard header and the side-by-side "pro-rated vs full" stat card.
+    wd_total   = _working_days_between(full_start, full_end)
+    wd_elapsed = _working_days_between(full_start, min(today_iso, full_end))
 
     print(f"[_team_response] team={team_id} period={period} "
           f"rosterCount={len(roster)} totalRows={total_rows} matchedRows={matched_rows} "
@@ -4161,18 +4336,29 @@ async def _team_response(team_id: str, period: str):
         "clients":          clients_data,
         "organizations":    [{**c, "org": c["name"]} for c in clients_data],
         "summary": {
-            "totalCommitted":    team_target,
-            "eodCommitted":      round(eod_committed, 1),
-            "totalBillable":     total_b,
-            "totalNonBillable":  total_nb,
-            "totalUtilized":     total_b,
-            "totalTarget":       team_target,
-            "perPreparerTarget": per_preparer_target,
-            "memberCount":       team_member_count,
-            "targetUtilPct":     target_util_pct,
-            "targetStatus":      team_target_status,
-            "overallEfficiency": target_util_pct,
-            "totalDelays":       total_delays,
+            "totalCommitted":        team_target,           # pro-rated
+            "totalCommittedFull":    team_target_full,      # full period target
+            "eodCommitted":          round(eod_committed, 1),
+            "totalBillable":         total_b,
+            "totalNonBillable":      total_nb,
+            "totalUtilized":         total_b,
+            "totalTarget":           team_target,
+            "totalTargetFull":       team_target_full,
+            "perPreparerTarget":     per_preparer_target,
+            "perPreparerTargetFull": per_preparer_target_full,
+            "memberCount":           team_member_count,
+            "targetUtilPct":         target_util_pct,
+            "targetStatus":          team_target_status,
+            "overallEfficiency":     target_util_pct,
+            "totalDelays":           total_delays,
+            # Period-window metadata for the "Day 7/22 working" subhead.
+            "periodKey":             period,                # today | weekly | monthly | custom
+            "periodStart":           full_start,
+            "periodEnd":             full_end,
+            "asOf":                  today_iso,
+            "workingDaysTotal":      wd_total,
+            "workingDaysElapsed":    wd_elapsed,
+            "isProrated":            (period in ("weekly", "monthly", "custom") and wd_elapsed < wd_total),
         },
         "monthlyTrend":       monthly_trend,
         "monthlyTrendSource": "timesheet",
@@ -4779,18 +4965,69 @@ PER_PREPARER_TARGET: dict[str, float] = {
 }
 
 
-def get_employee_committed_hours(team_id: str, period: str) -> float:
+def _full_committed_for_period(period: str) -> float:
+    """Per-preparer target hours for the FULL period, before pro-rating.
+    today=16, weekly=80, monthly=320."""
+    return float(PER_PREPARER_TARGET.get(period, PER_PREPARER_TARGET["monthly"]))
+
+
+# Daily per-preparer rate — derived from monthly target / 20 working days.
+# Used for custom-range targets where the period length isn't a fixed bucket.
+_PER_PREPARER_DAILY = 16.0
+
+
+def get_employee_committed_hours(
+    team_id: str,
+    period:  str,
+    *,
+    prorate:        bool = True,
+    period_start:   str | None = None,
+    period_end:     str | None = None,
+    as_of:          str | None = None,
+) -> float:
     """Per-preparer target hours for the period.
-    Fixed: today=16h, weekly=80h, monthly=320h. team_id is accepted for
-    signature compatibility but not used — the target is uniform across teams.
+
+    By default the result is **pro-rated** by elapsed working days — so on
+    day 7 of a 22-working-day month, "monthly" returns 320 × 7/22 ≈ 101.8h
+    instead of the static 320h. This is what the status badge compares booked
+    hours against. Pass prorate=False to recover the full period target.
+
+    For period="custom", caller must pass period_start + period_end. Full
+    target = 16h/working-day × working_days_in_range; pro-rated by elapsed.
+
+    team_id is accepted for signature compatibility but not used — the target
+    is uniform across teams.
+
+    "today" is never pro-rated (1-day period; 16h is the full-day target).
     """
-    return PER_PREPARER_TARGET.get(period, PER_PREPARER_TARGET["monthly"])
+    if period == "custom":
+        if not period_start or not period_end:
+            return 0.0
+        full = _PER_PREPARER_DAILY * _working_days_between(period_start, period_end)
+    else:
+        full = _full_committed_for_period(period)
+        if not period_start or not period_end:
+            period_start, period_end = full_period_range_for_period(period)
+    if not prorate or period == "today":
+        return round(full, 1)
+    return _pro_rate_committed_hours(full, period_start, period_end, as_of)
 
 
-def get_team_target_hours(team_id: str, period: str) -> float:
-    """Team-level target = per-preparer target × member count for the period."""
-    per_preparer = PER_PREPARER_TARGET.get(period, PER_PREPARER_TARGET["monthly"])
-    members      = max(1, _team_member_count(team_id))
+def get_team_target_hours(
+    team_id: str,
+    period:  str,
+    *,
+    prorate:      bool = True,
+    period_start: str | None = None,
+    period_end:   str | None = None,
+    as_of:        str | None = None,
+) -> float:
+    """Team-level target = (pro-rated) per-preparer target × member count."""
+    per_preparer = get_employee_committed_hours(
+        team_id, period,
+        prorate=prorate, period_start=period_start, period_end=period_end, as_of=as_of,
+    )
+    members = max(1, _team_member_count(team_id))
     return round(per_preparer * members, 1)
 
 
@@ -4875,12 +5112,24 @@ def _match_employee_rows(rows: list, employee_name: str) -> tuple[list, str]:
     return [], "no_match"
 
 
-def _build_employee_response(team_id: str, employee_name: str, period: str) -> dict:
+def _build_employee_response(
+    team_id: str,
+    employee_name: str,
+    period: str,
+    *,
+    custom_window: tuple[str, str, str] | None = None,
+) -> dict:
     cfg = TEAM_LETTER_MAP.get(team_id)
     if not cfg:
         return {"error": "Team not found", "teamId": team_id}
 
-    start, end, label = date_range_for_period(period)
+    if custom_window:
+        start, end, label = custom_window
+        full_start, full_end = start, end
+    else:
+        start, end, label = date_range_for_period(period)
+        full_start, full_end = full_period_range_for_period(period)
+    today_iso = datetime.now().strftime("%Y-%m-%d")
     rows = get_cached_rows(start, end)
 
     # Cascade name match (exact → prefix → first-name)
@@ -4892,7 +5141,14 @@ def _build_employee_response(team_id: str, employee_name: str, period: str) -> d
     nonbill_h   = total_h - billable_h
     bill_pct    = round(billable_h / total_h * 100, 1) if total_h > 0 else 0.0
 
-    committed = get_employee_committed_hours(team_id, period)
+    committed = get_employee_committed_hours(
+        team_id, period,
+        period_start=full_start, period_end=full_end, as_of=today_iso,
+    )
+    committed_full = get_employee_committed_hours(
+        team_id, period,
+        prorate=False, period_start=full_start, period_end=full_end,
+    )
     util_pct  = round(billable_h / committed * 100, 1) if committed > 0 else 0.0
 
     # Top clients (by hours) — resolve via TEAM_CLIENTS where possible, else raw customer name.
@@ -4918,6 +5174,25 @@ def _build_employee_response(team_id: str, employee_name: str, period: str) -> d
         }
         for name, v in sorted(by_client.items(), key=lambda kv: -kv[1]["hours"])
     ][:5]
+
+    # Non-billable breakdown by raw customer name (per Penny's 2026-06-10 ask).
+    # We bucket every non-billable row under its customer field — that's what
+    # the source data carries (no PTO / Training / Internal-Meeting category
+    # column exists). Bars will be Training / Admin / BREAKS FOR TEAMS / SNMP
+    # / Choose Customer / etc. — whatever's actually in the timesheets.
+    nb_buckets: dict[str, float] = {}
+    for r in emp_rows:
+        if r.get("billable"):
+            continue
+        h = float(r.get("hours") or 0)
+        if h <= 0:
+            continue
+        cat = (r.get("customer") or "").strip() or "Unspecified"
+        nb_buckets[cat] = nb_buckets.get(cat, 0.0) + h
+    non_billable_breakdown = [
+        {"category": k, "hours": round(v, 1)}
+        for k, v in sorted(nb_buckets.items(), key=lambda kv: -kv[1])
+    ]
 
     # Recent work — top 30 rows sorted by date desc
     def _row_date_key(r):
@@ -5002,27 +5277,39 @@ def _build_employee_response(team_id: str, employee_name: str, period: str) -> d
     last_desc = (last_row.get("desc") if last_row else "") or ""
     last_desc = last_desc.strip().replace("\n", " ")
 
+    wd_total   = _working_days_between(full_start, full_end)
+    wd_elapsed = _working_days_between(full_start, min(today_iso, full_end))
     return {
-        "name":              canonical_name,
-        "team_id":           team_id,
-        "team_name":         cfg.get("label", team_id),
-        "period":            label,
-        "totalHours":        round(total_h, 1),
-        "billableHours":     round(billable_h, 1),
-        "nonBillableHours":  round(nonbill_h, 1),
-        "billablePct":       bill_pct,
-        "committedHours":    round(committed, 1),
-        "utilizationPct":    util_pct,
-        "topClients":        top_clients,
-        "recentWork":        recent_out,
-        "dailyHours":        daily_out,
-        "rowCount":          len(emp_rows),
-        "lastLoggedAt":      last_lc,
-        "lastLoggedClient":  (last_row.get("customer") if last_row else "") or "",
-        "lastLoggedProject": (last_row.get("project")  if last_row else "") or "",
-        "lastLoggedDesc":    last_desc[:80],
-        "lastLoggedHours":   round(float(last_row.get("hours") or 0), 1) if last_row else 0,
-        "activeNow":         _is_active_now(last_lc),
+        "name":                  canonical_name,
+        "team_id":               team_id,
+        "team_name":             cfg.get("label", team_id),
+        "period":                label,
+        "totalHours":            round(total_h, 1),
+        "billableHours":         round(billable_h, 1),
+        "nonBillableHours":      round(nonbill_h, 1),
+        "nonBillableBreakdown":  non_billable_breakdown,
+        "billablePct":           bill_pct,
+        "committedHours":        round(committed, 1),         # pro-rated
+        "committedHoursFull":    round(committed_full, 1),    # full period target
+        "utilizationPct":        util_pct,
+        "topClients":            top_clients,
+        "recentWork":            recent_out,
+        "dailyHours":            daily_out,
+        "rowCount":              len(emp_rows),
+        "lastLoggedAt":          last_lc,
+        "lastLoggedClient":      (last_row.get("customer") if last_row else "") or "",
+        "lastLoggedProject":     (last_row.get("project")  if last_row else "") or "",
+        "lastLoggedDesc":        last_desc[:80],
+        "lastLoggedHours":       round(float(last_row.get("hours") or 0), 1) if last_row else 0,
+        "activeNow":             _is_active_now(last_lc),
+        # Period-window metadata — drives the "Day 7/22 working" subhead.
+        "periodKey":             period,
+        "periodStart":           full_start,
+        "periodEnd":             full_end,
+        "asOf":                  today_iso,
+        "workingDaysTotal":      wd_total,
+        "workingDaysElapsed":    wd_elapsed,
+        "isProrated":            (period in ("weekly", "monthly", "custom") and wd_elapsed < wd_total),
     }
 
 
@@ -6560,6 +6847,58 @@ async def debug_weekly_review_endpoint(team_id: str):
     return await asyncio.to_thread(_debug_weekly_review, team_id)
 
 
+@app.get("/api/team/{team_id}/custom")
+async def get_team_custom_range(
+    team_id: str,
+    from_: str | None = Query(default=None, alias="from"),
+    to:    str | None = Query(default=None, alias="to"),
+):
+    """Custom date-range view. Same response shape as weekly/monthly but the
+    committed/target hours are pro-rated to the user-picked range (16h/working
+    day × range). Penny's 2026-06-10 feedback wanted ad-hoc windows like
+    "Jun 01 - 07" for spot-checks.
+
+    Query params:
+      from=YYYY-MM-DD  inclusive start
+      to=YYYY-MM-DD    inclusive end
+    """
+    if not from_ or not to:
+        return {"error": "Both 'from' and 'to' query params are required (YYYY-MM-DD)."}
+    try:
+        start_d = datetime.strptime(from_[:10], "%Y-%m-%d")
+        end_d   = datetime.strptime(to[:10],    "%Y-%m-%d")
+    except ValueError:
+        return {"error": f"Invalid date(s). Use YYYY-MM-DD. Got from={from_!r}, to={to!r}."}
+    if end_d < start_d:
+        return {"error": f"'to' ({to}) must be on or after 'from' ({from_})."}
+    start = start_d.strftime("%Y-%m-%d")
+    end   = end_d.strftime("%Y-%m-%d")
+    same_year = (start_d.year == end_d.year)
+    label = (
+        f"{start_d.strftime('%b %d')} – {end_d.strftime('%b %d, %Y')}"
+        if same_year
+        else f"{start_d.strftime('%b %d, %Y')} – {end_d.strftime('%b %d, %Y')}"
+    )
+
+    cache_key = f"{team_id}_custom_{start}_{end}"
+    now = datetime.now()
+    entry = _team_cache.get(cache_key)
+    if entry and (now - entry["at"]).total_seconds() < TEAM_CACHE_SECS:
+        cached = dict(entry["data"])
+        cached["fromCache"] = True
+        cached["cacheAge"]  = int((now - entry["at"]).total_seconds())
+        return cached
+
+    t0 = time.perf_counter()
+    result = await _team_response(team_id, "custom", custom_window=(start, end, label))
+    print(f"[PERF] team={team_id} custom {start} -> {end} total={time.perf_counter()-t0:.2f}s")
+    result["fromCache"] = False
+    result["cacheAge"]  = 0
+    if not result.get("fetchError"):
+        _team_cache[cache_key] = {"data": result, "at": now}
+    return result
+
+
 @app.get("/api/team/{team_id}/{period}")
 async def get_team_data(team_id: str, period: str):
     if period not in ("today", "weekly", "monthly"):
@@ -6631,15 +6970,72 @@ async def client_trend(client_name: str):
     return result
 
 
-async def _client_data(client_name: str, period: str):
+async def _client_data(
+    client_name: str,
+    period: str,
+    *,
+    custom_window: tuple[str, str, str] | None = None,
+):
     cache_key = f"client:{client_name}:{period}"
+    if custom_window:
+        cache_key = f"client:{client_name}:custom:{custom_window[0]}:{custom_window[1]}"
     cached = cache_get(cache_key)
     if cached:
         return cached
     t0 = time.perf_counter()
-    start, end, label = date_range_for_period(period)
+    if custom_window:
+        start, end, label = custom_window
+        full_start, full_end = start, end
+    else:
+        start, end, label = date_range_for_period(period)
+        full_start, full_end = full_period_range_for_period(period)
+    today_iso = datetime.now().strftime("%Y-%m-%d")
     rows   = await asyncio.to_thread(get_cached_rows, start, end)
     result = build_client_report(rows, client_name, label)
+
+    # Pro-rated target — overlay on top of build_client_report's actual-hours
+    # summary. We resolve estHrs by walking TEAM_CLIENTS for the parent team
+    # and finding the entry whose name OR tsMatch keyword matches client_name.
+    # Without this, the Client view dashboard had no notion of a target — it
+    # just showed total hours logged. Penny's 2026-06-10 feedback: client view
+    # should also be pro-rated against the contracted commitment.
+    parent_team_for_target = find_team_for_client(client_name)
+    est_hrs_monthly = 0.0
+    if parent_team_for_target:
+        for ce in TEAM_CLIENTS.get(parent_team_for_target) or []:
+            ce_name  = (ce.get("name") or "").strip().lower()
+            cn_low   = client_name.lower()
+            tsMatch  = [(t or "").strip().lower() for t in (ce.get("tsMatch") or [])]
+            if ce_name == cn_low or cn_low in ce_name or ce_name in cn_low or any(t and t in cn_low for t in tsMatch):
+                est_hrs_monthly = float(ce.get("estHrs") or 0)
+                break
+    # Scale the monthly estHrs to the active period — same denominator (16h/day,
+    # 20 working days/month → estHrs spans 20 working days). For weekly, monthly,
+    # custom: target_full = estHrs × (working_days_in_period / 20).
+    target_full = 0.0
+    if est_hrs_monthly > 0:
+        wd_full = _working_days_between(full_start, full_end)
+        target_full = round(est_hrs_monthly * (wd_full / 20.0), 1)
+    target_prorated = _pro_rate_committed_hours(target_full, full_start, full_end, today_iso)
+    actual_billable = float(result.get("summary", {}).get("totalBillable") or 0)
+    target_util_pct = round(actual_billable / target_prorated * 100, 1) if target_prorated > 0 else 0.0
+    target_status   = target_status_label(target_util_pct) if target_prorated > 0 else "NO_TARGET"
+    wd_total   = _working_days_between(full_start, full_end)
+    wd_elapsed = _working_days_between(full_start, min(today_iso, full_end))
+    result.setdefault("summary", {}).update({
+        "targetHours":         round(target_prorated, 1),
+        "targetHoursFull":     round(target_full, 1),
+        "estHrsMonthly":       round(est_hrs_monthly, 1),
+        "targetUtilPct":       target_util_pct,
+        "targetStatus":        target_status,
+        "periodKey":           period,
+        "periodStart":         full_start,
+        "periodEnd":           full_end,
+        "asOf":                today_iso,
+        "workingDaysTotal":    wd_total,
+        "workingDaysElapsed":  wd_elapsed,
+        "isProrated":          (period in ("weekly", "monthly", "custom") and wd_elapsed < wd_total),
+    })
 
     # Attach the parent team's EOD sheet data so ClientDashboard can render
     # the Daily Delays chart filtered to this client.
@@ -7360,6 +7756,28 @@ async def clear_cache():
     _checklist_cross_team_cache.clear()
     _departure_analysis_cache.clear()
     return {"ok": True, "status": "all caches cleared", "time": datetime.now().isoformat()}
+
+
+@app.post("/api/checklist/clear-cache")
+async def clear_checklist_cache():
+    """Targeted cache clear for the Weekly Admin Checklist + Delays Q&A tabs.
+    Wired to the ⟳ Refresh button in WeeklyChecklistSection so TLs can force a
+    fetch mid-edit without nuking every cache in the app."""
+    n_checklist  = len(_checklist_csv_cache)
+    n_delays     = len(_delays_csv_cache)
+    n_xteam      = len(_checklist_cross_team_cache)
+    _checklist_csv_cache.clear()
+    _delays_csv_cache.clear()
+    _checklist_cross_team_cache.clear()
+    return {
+        "ok": True,
+        "cleared": {
+            "checklist_csv":         n_checklist,
+            "delays_csv":            n_delays,
+            "checklist_cross_team":  n_xteam,
+        },
+        "time": datetime.now().isoformat(),
+    }
 
 
 @app.post("/api/team/{team_id}/refresh")

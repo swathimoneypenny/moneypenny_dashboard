@@ -393,6 +393,20 @@ ${lines.join("\n")}`;
             MoneyPenny LLC
           </div>
           <div style={{ fontSize: 11, color: C.muted }}>{periodLabel} · {today}</div>
+          {data?.isProrated && data?.workingDaysTotal > 0 && (
+            <div
+              style={{
+                fontSize: 10,
+                color: C.teal,
+                fontFamily: "'DM Mono', monospace",
+                marginTop: 2,
+                letterSpacing: 0.3,
+              }}
+              title={`Targets pro-rated by working days elapsed (${data.periodStart} → ${data.periodEnd})`}
+            >
+              Day {data.workingDaysElapsed}/{data.workingDaysTotal} · target {(data.committedHours ?? 0).toFixed(1)}h / {(data.committedHoursFull ?? 0).toFixed(1)}h full
+            </div>
+          )}
         </div>
       </div>
 
@@ -450,6 +464,53 @@ ${lines.join("\n")}`;
                 <Legend wrapperStyle={{ fontSize: 11, color: C.sec }} />
                 <Bar dataKey="Billable"    stackId="a" fill={C.teal}   radius={[0, 0, 0, 0]} />
                 <Bar dataKey="NonBillable" stackId="a" fill={C.orange} radius={[4, 4, 0, 0]} name="Non-Billable" />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </ChartCard>
+
+        {/* Non-Billable Breakdown — Penny's 2026-06-10 feedback. Buckets
+            non-billable hours by the source `customer` field (Training,
+            Admin, BREAKS FOR TEAMS, SNMP, Choose Customer, Internal, etc.)
+            so the TL can see what's eating non-billable time. */}
+        <ChartCard
+          title={`Non-Billable Breakdown · ${(data?.nonBillableHours ?? 0).toFixed(1)}h`}
+        >
+          {loading ? (
+            <div className="kpi-skeleton" style={{ height: 200 }} />
+          ) : (data?.nonBillableBreakdown?.length ?? 0) === 0 ? (
+            <div style={{ height: 200, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic" }}>
+              No non-billable hours this period.
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={Math.max(200, 36 * (data?.nonBillableBreakdown?.length ?? 0))}>
+              <BarChart
+                data={data.nonBillableBreakdown.map((b) => ({
+                  category: b.category,
+                  Hours:    b.hours,
+                }))}
+                layout="vertical"
+                margin={{ top: 4, right: 56, left: 4, bottom: 4 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border} horizontal={false} />
+                <XAxis type="number" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis
+                  dataKey="category"
+                  type="category"
+                  tick={{ fill: C.muted, fontSize: 11 }}
+                  axisLine={false}
+                  tickLine={false}
+                  width={140}
+                />
+                <Tooltip content={<DarkTooltip />} />
+                <Bar dataKey="Hours" fill={C.orange} radius={[0, 4, 4, 0]} barSize={22}>
+                  <LabelList
+                    dataKey="Hours"
+                    position="right"
+                    formatter={(v) => `${Number(v).toFixed(1)}h`}
+                    style={{ fill: C.pri, fontSize: 11 }}
+                  />
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           )}

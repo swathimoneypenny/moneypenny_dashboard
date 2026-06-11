@@ -239,40 +239,68 @@ function OpenFlagsList({ summary }) {
   );
 }
 
-// Accepts either an array of URLs (`urls={r.whale_links}`) or, for backward
-// compat, a single `url` string. Strings are split on whitespace / comma /
-// semicolon if they contain multiple URLs, so a single populated cell with
-// "https://… https://…" still renders both.
-function WhaleLinkCell({ urls, url }) {
-  let list = [];
-  if (Array.isArray(urls)) {
-    list = urls.filter((u) => typeof u === "string" && /^https?:\/\//i.test(u));
-  } else if (typeof url === "string") {
-    list = (url.match(/https?:\/\/[^\s,;'"\)]+/gi) || [])
-      .map((u) => u.replace(/[.,;:)]+$/, ""))
-      .filter(Boolean);
+// Normalize the polymorphic whale_links input into [{label, url}].
+// Accepts the new backend shape ([{label, url}]) AND the legacy string list
+// shape from cached responses still in flight. Empty / non-URL entries are
+// dropped. Labels fall back to "Whale" / "Whale N" when the source cell had
+// only URLs with no preceding text.
+function _normalizeWhaleLinks(input, urlFallback) {
+  let raw = [];
+  if (Array.isArray(input)) {
+    raw = input;
+  } else if (typeof urlFallback === "string") {
+    raw = (urlFallback.match(/https?:\/\/[^\s,;'"\)]+/gi) || [])
+      .map((u) => u.replace(/[.,;:)]+$/, ""));
   }
+  const out = [];
+  for (const item of raw) {
+    if (typeof item === "string") {
+      if (/^https?:\/\//i.test(item)) out.push({ label: "", url: item });
+    } else if (item && typeof item === "object" && typeof item.url === "string"
+               && /^https?:\/\//i.test(item.url)) {
+      out.push({ label: (item.label || "").trim(), url: item.url });
+    }
+  }
+  // Backfill blank labels — match the backend numbering pattern.
+  const blanks = out.filter((x) => !x.label);
+  if (blanks.length === 1 && out.length === 1) out[0].label = "Whale SOP";
+  else if (blanks.length > 0) {
+    let n = 1;
+    for (const x of out) if (!x.label) x.label = `Whale ${n++}`;
+  }
+  return out;
+}
+
+
+// Compact cell used in the dense detail table. Shows the TL-typed label
+// (e.g. "Reconciliation SOP") as a hyperlink. Multi-link cells stack.
+function WhaleLinkCell({ urls, url }) {
+  const list = _normalizeWhaleLinks(urls, url);
   if (list.length === 0) {
     return <span style={{ color: C.muted, fontSize: 11 }}>—</span>;
   }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      {list.map((u, i) => (
+      {list.map((link, i) => (
         <a
           key={i}
-          href={u}
+          href={link.url}
           target="_blank"
           rel="noopener noreferrer"
-          title={u}
+          title={link.url}
           style={{
             color: C.teal,
             fontSize: 11,
             textDecoration: "none",
             borderBottom: `1px dashed ${C.teal}`,
             whiteSpace: "nowrap",
+            maxWidth: 180,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            display: "inline-block",
           }}
         >
-          🐳 Whale{list.length > 1 ? ` ${i + 1}` : ""}
+          🐳 {link.label}
         </a>
       ))}
     </div>
@@ -361,11 +389,19 @@ function buildPerClientView(weeks) {
       if (tp && !row.trainingPreparers.includes(tp)) row.trainingPreparers.push(tp);
       if (tt && !row.trainingTL.includes(tt))        row.trainingTL.push(tt);
 
-      // Whale links — dedupe (siblings share the same Whale list).
+      // Whale links — dedupe (siblings share the same Whale list). Accept
+      // either the new [{label, url}] shape or legacy strings.
       const links = Array.isArray(e.whale_links) ? e.whale_links
                   : (e.whale_link ? [e.whale_link] : []);
-      for (const u of links) {
-        if (u && !row.whaleLinks.includes(u)) row.whaleLinks.push(u);
+      const seenUrls = new Set(
+        row.whaleLinks.map((x) => (typeof x === "string" ? x : x?.url))
+      );
+      for (const item of links) {
+        const url = typeof item === "string" ? item : item?.url;
+        if (url && !seenUrls.has(url)) {
+          seenUrls.add(url);
+          row.whaleLinks.push(item);
+        }
       }
     }
   }
@@ -537,18 +573,21 @@ function FieldRow({ label, children }) {
   );
 }
 
+// Chip-style row used in the Procedure Updates cards. Shows the TL-typed
+// label as the chip text — falls back to "Whale N" only when the source
+// cell had no preceding label text.
 function WhaleChipRow({ urls }) {
-  const list = Array.isArray(urls) ? urls.filter((u) => /^https?:\/\//i.test(u)) : [];
+  const list = _normalizeWhaleLinks(urls);
   if (list.length === 0) return <span style={{ color: C.muted }}>—</span>;
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-      {list.map((u, i) => (
+      {list.map((link, i) => (
         <a
           key={i}
-          href={u}
+          href={link.url}
           target="_blank"
           rel="noopener noreferrer"
-          title={u}
+          title={link.url}
           style={{
             fontSize: 12,
             color: C.teal,
@@ -559,9 +598,12 @@ function WhaleChipRow({ urls }) {
             borderRadius: 4,
             display: "inline-block",
             whiteSpace: "nowrap",
+            maxWidth: 220,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
           }}
         >
-          🐳 Whale{list.length > 1 ? ` (${i + 1})` : ""}
+          🐳 {link.label}
         </a>
       ))}
     </div>
@@ -998,6 +1040,8 @@ export default function WeeklyChecklistSection({ teamId }) {
   const [state, setState] = useState({ loading: true, data: null, error: null });
   const [tableOpen, setTableOpen] = useState(false);
   const [selectedWeek, setSelectedWeek] = useState("all");
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     if (!teamId) return;
@@ -1017,7 +1061,16 @@ export default function WeeklyChecklistSection({ teamId }) {
         setState({ loading: false, data: null, error: err?.message || String(err) });
       });
     return () => ctrl.abort();
-  }, [teamId, selectedWeek]);
+  }, [teamId, selectedWeek, refreshNonce]);
+
+  async function handleRefresh() {
+    setRefreshing(true);
+    try {
+      await authFetch("/api/checklist/clear-cache", { method: "POST" });
+    } catch { /* ignore — refetch still works against cached data */ }
+    setRefreshNonce((n) => n + 1);
+    setRefreshing(false);
+  }
 
   const data = state.data;
   const summary = data?.summary;
@@ -1026,12 +1079,48 @@ export default function WeeklyChecklistSection({ teamId }) {
 
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
-      <div style={{ fontSize: 14, fontWeight: 700, color: C.pri, marginBottom: 4 }}>
-        📋 Weekly Admin Checklist
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          gap: 12,
+          flexWrap: "wrap",
+          marginBottom: 4,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.pri }}>
+            📋 Weekly Admin Checklist
+          </div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
+            Live (60s cache). Click ⟳ to force-fetch after editing the sheet.
+          </div>
+        </div>
+        <button
+          onClick={handleRefresh}
+          disabled={refreshing || state.loading}
+          style={{
+            background: C.surface,
+            border: `1px solid ${C.border}`,
+            color: refreshing ? C.muted : C.teal,
+            padding: "6px 14px",
+            borderRadius: 6,
+            cursor: refreshing || state.loading ? "wait" : "pointer",
+            fontSize: 11,
+            fontFamily: "'DM Sans', sans-serif",
+            fontWeight: 700,
+            letterSpacing: 0.4,
+            textTransform: "uppercase",
+            opacity: refreshing || state.loading ? 0.6 : 1,
+            whiteSpace: "nowrap",
+          }}
+          title="Clear server-side cache + re-fetch this team's checklist"
+        >
+          {refreshing ? "⟳ Refreshing…" : "⟳ Refresh"}
+        </button>
       </div>
-      <div style={{ fontSize: 11, color: C.muted, marginBottom: 16 }}>
-        Sourced from the per-team checklist tab (cached server-side for 10 min).
-      </div>
+      <div style={{ height: 12 }} />
 
       <WeekDropdown
         weeks={data?.available_weeks || []}

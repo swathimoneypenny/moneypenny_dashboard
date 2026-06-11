@@ -25,8 +25,18 @@ const PERIODS = [
   { key: "today",   label: "Today" },
   { key: "weekly",  label: "This Week" },
   { key: "monthly", label: "This Month" },
+  { key: "custom",  label: "📅 Custom Range" },
   { key: "review",  label: "📋 Weekly Review" },
 ];
+
+// Default custom range = last 7 days ending today.
+function _defaultCustomRange() {
+  const today = new Date();
+  const start = new Date(today);
+  start.setDate(today.getDate() - 6);
+  const fmt = (d) => d.toISOString().slice(0, 10);
+  return { from: fmt(start), to: fmt(today) };
+}
 
 // TL-approved thresholds (verified 2026-05-25):
 //   <80%       → BELOW TARGET  (yellow)
@@ -941,6 +951,8 @@ function RosterSetupCard({ teamId, teamName }) {
 // ── Main ───────────────────────────────────────────────────────────
 export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdate, onSelectEmployee }) {
   const [period, setPeriod] = useState("monthly");
+  const [customRange, setCustomRange] = useState(_defaultCustomRange);
+  const [pendingCustom, setPendingCustom] = useState(_defaultCustomRange);
   // Leaderboard for the current period (drives "Team Members" table).
   const [leaderboard, setLeaderboard] = useState(null);
   // Weekly leaderboard for "Most Underutilized This Week" widget.
@@ -958,11 +970,15 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
     // The Weekly Review tab has its own data source (admin-review endpoint) —
     // don't hit /api/team/{id}/review (would 404 / hit the period catch-all).
     if (period === "review") return;
+    if (period === "custom" && (!customRange.from || !customRange.to)) return;
     if (abortRef.current) abortRef.current.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     if (!silent) setLoading(true);
-    authFetch(`/api/team/${teamId}/${period}`, { signal: ctrl.signal })
+    const url = period === "custom"
+      ? `/api/team/${teamId}/custom?from=${customRange.from}&to=${customRange.to}`
+      : `/api/team/${teamId}/${period}`;
+    authFetch(url, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
         if (ctrl.signal.aborted) return;
@@ -976,7 +992,7 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
         setData({ summary: {}, clients: [], eod: [] });
         if (!silent) setLoading(false);
       });
-  }, [teamId, period]);
+  }, [teamId, period, customRange.from, customRange.to]);
 
   useEffect(() => {
     fetchData();
@@ -1014,11 +1030,16 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
   // Leaderboard for the active period (drives Team Members table).
   useEffect(() => {
     if (period === "review") return;
+    if (period === "custom") {
+      // No leaderboard endpoint for arbitrary windows — fall back to the
+      // monthly leaderboard so the Team Members table still renders names.
+    }
     if (lbAbortRef.current) lbAbortRef.current.abort();
     const ctrl = new AbortController();
     lbAbortRef.current = ctrl;
     setLeaderboard(null);
-    authFetch(`/api/team/${teamId}/leaderboard/${period}`, { signal: ctrl.signal })
+    const lbPeriod = period === "custom" ? "monthly" : period;
+    authFetch(`/api/team/${teamId}/leaderboard/${lbPeriod}`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
         if (ctrl.signal.aborted) return;
@@ -1291,7 +1312,7 @@ ${clients.map((o) => (
                 fontWeight: 600,
                 fontFamily: "'DM Sans', sans-serif",
                 transition: "all 0.15s",
-                background: period === p.key ? (p.key === "review" ? "#7C3AED" : C.blue) : "transparent",
+                background: period === p.key ? (p.key === "review" ? "#7C3AED" : p.key === "custom" ? "#F2895A" : C.blue) : "transparent",
                 color: period === p.key ? "#fff" : C.sec,
               }}
             >
@@ -1299,6 +1320,82 @@ ${clients.map((o) => (
             </button>
           ))}
         </div>
+
+        {period === "custom" && (
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              alignItems: "center",
+              background: C.card,
+              border: `1px solid ${C.border}`,
+              borderRadius: 8,
+              padding: "6px 10px",
+            }}
+          >
+            <input
+              type="date"
+              value={pendingCustom.from || ""}
+              max={pendingCustom.to || undefined}
+              onChange={(e) => setPendingCustom((p) => ({ ...p, from: e.target.value }))}
+              style={{
+                background: C.surface,
+                border: `1px solid ${C.border}`,
+                borderRadius: 4,
+                color: C.pri,
+                padding: "4px 8px",
+                fontSize: 12,
+                fontFamily: "'DM Mono', monospace",
+              }}
+            />
+            <span style={{ color: C.muted, fontSize: 11 }}>to</span>
+            <input
+              type="date"
+              value={pendingCustom.to || ""}
+              min={pendingCustom.from || undefined}
+              onChange={(e) => setPendingCustom((p) => ({ ...p, to: e.target.value }))}
+              style={{
+                background: C.surface,
+                border: `1px solid ${C.border}`,
+                borderRadius: 4,
+                color: C.pri,
+                padding: "4px 8px",
+                fontSize: 12,
+                fontFamily: "'DM Mono', monospace",
+              }}
+            />
+            <button
+              onClick={() => {
+                if (pendingCustom.from && pendingCustom.to && pendingCustom.from <= pendingCustom.to) {
+                  setCustomRange(pendingCustom);
+                }
+              }}
+              disabled={
+                !pendingCustom.from || !pendingCustom.to ||
+                pendingCustom.from > pendingCustom.to ||
+                (pendingCustom.from === customRange.from && pendingCustom.to === customRange.to)
+              }
+              style={{
+                background: "#F2895A",
+                border: "none",
+                color: "#fff",
+                padding: "5px 12px",
+                borderRadius: 4,
+                cursor: "pointer",
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: 0.4,
+                opacity:
+                  !pendingCustom.from || !pendingCustom.to ||
+                  pendingCustom.from > pendingCustom.to ||
+                  (pendingCustom.from === customRange.from && pendingCustom.to === customRange.to)
+                    ? 0.5 : 1,
+              }}
+            >
+              APPLY
+            </button>
+          </div>
+        )}
 
         {fromCache && (
           <div
@@ -1366,7 +1463,23 @@ ${clients.map((o) => (
           >
             MoneyPenny LLC
           </div>
-          <div style={{ fontSize: 11, color: C.muted }}>{periodLabel} · {today}</div>
+          <div style={{ fontSize: 11, color: C.muted }}>
+            {periodLabel} · {today}
+          </div>
+          {data?.summary?.isProrated && data?.summary?.workingDaysTotal > 0 && (
+            <div
+              style={{
+                fontSize: 10,
+                color: C.teal,
+                fontFamily: "'DM Mono', monospace",
+                marginTop: 2,
+                letterSpacing: 0.3,
+              }}
+              title={`Targets pro-rated by working days elapsed (${data.summary.periodStart} → ${data.summary.periodEnd})`}
+            >
+              Day {data.summary.workingDaysElapsed}/{data.summary.workingDaysTotal} · pro-rated
+            </div>
+          )}
         </div>
       </div>
 
