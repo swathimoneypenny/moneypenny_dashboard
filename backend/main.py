@@ -2275,17 +2275,128 @@ def _sheet_tab_name_for_gid(sheet_id: str, gid: str) -> str | None:
     return gid_to_name.get(str(gid))
 
 
+_WHALE_URL_BARE_RE = re.compile(r"https?://[^\s,;'\"\)<>]+", re.IGNORECASE)
+
+
+def _extract_cell_hyperlinks(cell: dict) -> list[dict]:
+    """Extract every {label, url} pair carried by a Sheets API cell.
+
+    Handles four shapes:
+      1. textFormatRuns — per-segment hyperlinks. Google Sheets stores a
+         multi-line cell where each line is Ctrl+K-linked to a different URL
+         as a list of runs partitioning formattedValue; each run with
+         format.link.uri is a hyperlinked segment. The segment text becomes
+         the label.
+      2. Top-level cell.hyperlink — single hyperlink applied to the whole
+         cell (only used when no per-run links were found, so we don't
+         double-count).
+      3. =HYPERLINK("url","label") formula cells.
+      4. Bare https:// URLs in the text (legacy "label - https://…" format).
+
+    Dedupes URLs. Auto-labels blanks: single → "Whale SOP", multiple →
+    "Whale 1, Whale 2, …".
+    """
+    if not isinstance(cell, dict):
+        return []
+    text = cell.get("formattedValue") or ""
+    results: list[dict] = []
+    seen: set[str] = set()
+
+    # 1. textFormatRuns — multi-line, one hyperlink per line.
+    runs = cell.get("textFormatRuns") or []
+    if runs and text:
+        for i, run in enumerate(runs):
+            try:
+                start = int(run.get("startIndex") or 0)
+            except (TypeError, ValueError):
+                start = 0
+            if i + 1 < len(runs):
+                try:
+                    end = int(runs[i + 1].get("startIndex") or len(text))
+                except (TypeError, ValueError):
+                    end = len(text)
+            else:
+                end = len(text)
+            segment = text[start:end]
+            fmt = run.get("format") or {}
+            link = fmt.get("link") if isinstance(fmt, dict) else None
+            uri = link.get("uri") if isinstance(link, dict) else None
+            if not uri:
+                continue
+            uri = uri.strip().rstrip(".,;:)")
+            if not uri or not uri.lower().startswith("http") or uri in seen:
+                continue
+            label = segment.strip().strip(" \n\t-–—:|,")
+            if "\n" in label:
+                label = label.split("\n", 1)[0].strip()
+            results.append({"label": label, "url": uri})
+            seen.add(uri)
+
+    # 2. Top-level hyperlink — only when textFormatRuns yielded nothing, so
+    #    we don't re-add the same URL that's already in `results`.
+    if not results:
+        top = (cell.get("hyperlink") or "").strip().rstrip(".,;:)")
+        if top and top not in seen:
+            label = text.split("\n", 1)[0].strip() if text else ""
+            results.append({"label": label, "url": top})
+            seen.add(top)
+
+    # 3. =HYPERLINK("url","label") formula.
+    if not results:
+        uev = cell.get("userEnteredValue") or {}
+        formula = (uev.get("formulaValue") or "").strip() if isinstance(uev, dict) else ""
+        if formula:
+            m = _HYPERLINK_FORMULA_RE.match(formula)
+            if m:
+                url, label = m.group(1), m.group(2)
+                if url and url not in seen:
+                    results.append({"label": label or "", "url": url})
+                    seen.add(url)
+
+    # 4. Bare URL fallback (text contains raw https:// with no hyperlink set).
+    if text:
+        for line in text.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            m = _WHALE_URL_BARE_RE.search(line)
+            if not m:
+                continue
+            url = m.group().rstrip(".,;:)")
+            if not url or url in seen:
+                continue
+            label = line[: m.start()].rstrip(" -–—:|,").strip()
+            results.append({"label": label, "url": url})
+            seen.add(url)
+
+    # Auto-label blanks.
+    blanks = [r for r in results if not r["label"]]
+    if len(blanks) == 1 and len(results) == 1:
+        results[0]["label"] = "Whale SOP"
+    elif blanks:
+        n = 1
+        for r in results:
+            if not r["label"]:
+                r["label"] = f"Whale {n}"
+                n += 1
+    return results
+
+
 def _fetch_weekly_checklist_rich(
     sheet_id: str, gid: str,
-) -> tuple[list[list[str]], dict[tuple[int, int], str]] | None:
+) -> tuple[list[list[str]], dict[tuple[int, int], list[dict]]] | None:
     """Fetch a checklist tab via the Sheets API so cell hyperlinks survive.
 
     Returns (rows, links) where:
       - rows  = list[list[str]] — same 2D string grid the CSV path produces,
                 so the existing _parse_weekly_checklist code can consume it
                 without modification.
-      - links = dict[(row_idx, col_idx) -> url] — sparse map of every cell
-                that carries a hyperlink (either Ctrl+K or =HYPERLINK formula).
+      - links = dict[(row_idx, col_idx) -> list[{label, url}]] — sparse map of
+                every cell that carries one or more hyperlinks. Multi-line
+                cells (each line Ctrl+K-linked to a different URL) produce one
+                {label, url} entry per line via textFormatRuns; single-link
+                cells produce a one-element list; =HYPERLINK formulas also
+                produce a one-element list.
 
     Returns None when GOOGLE_API_KEY is missing, the metadata lookup fails,
     or any error occurs — caller falls back to the CSV path.
@@ -2307,7 +2418,7 @@ def _fetch_weekly_checklist_rich(
     url = (
         f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}"
         f"?ranges={range_param}"
-        f"&fields=sheets(data(rowData(values(formattedValue,hyperlink,userEnteredValue))))"
+        f"&fields=sheets(data(rowData(values(formattedValue,hyperlink,userEnteredValue,textFormatRuns(startIndex,format(link(uri)))))))"
         f"&key={api_key}"
     )
     try:
@@ -2330,27 +2441,24 @@ def _fetch_weekly_checklist_rich(
     row_data = (data_blocks[0].get("rowData") or [])
 
     rows: list[list[str]] = []
-    links: dict[tuple[int, int], str] = {}
+    links: dict[tuple[int, int], list[dict]] = {}
     for r_idx, rd in enumerate(row_data):
         cells = rd.get("values") or []
         row_strs: list[str] = []
         for c_idx, cell in enumerate(cells):
             text = cell.get("formattedValue") or ""
-            link = cell.get("hyperlink") or ""
-            # Some TLs write `=HYPERLINK("url","label")` instead of using
-            # Ctrl+K — that goes into userEnteredValue.formulaValue. Parse
-            # it so both styles work the same.
-            if not link:
+            # When a =HYPERLINK formula has no formattedValue, surface the
+            # formula's label so the text grid still carries something.
+            if not text:
                 uev = cell.get("userEnteredValue") or {}
-                formula = uev.get("formulaValue") or ""
-                m = _HYPERLINK_FORMULA_RE.match(formula.strip())
+                formula = (uev.get("formulaValue") or "").strip() if isinstance(uev, dict) else ""
+                m = _HYPERLINK_FORMULA_RE.match(formula) if formula else None
                 if m:
-                    link = m.group(1)
-                    if not text:
-                        text = m.group(2)
+                    text = m.group(2) or ""
             row_strs.append(text)
-            if link:
-                links[(r_idx, c_idx)] = link
+            cell_links = _extract_cell_hyperlinks(cell)
+            if cell_links:
+                links[(r_idx, c_idx)] = cell_links
         rows.append(row_strs)
 
     _checklist_rich_cache[key] = {"at": now, "rows": rows, "links": links}
@@ -2623,28 +2731,25 @@ def _shape_checklist_row(
     new_override: str | None = None,
     is_multi_client_row: bool = False,
     siblings: list[str] | None = None,
-    whale_hyperlink: str | None = None,
+    whale_links_override: list[dict] | None = None,
 ) -> dict:
     """Convert a raw CSV row to the public-API entry shape. Optional overrides
     let `_parse_weekly_checklist` emit one entry per client when a single CSV
     row carries a multi-client cell.
 
-    whale_hyperlink: if the upstream rich fetch captured a Ctrl+K hyperlink
-    on the Whale-links cell, pass the URL here. The cell text becomes the
-    link label (e.g. "1099" → 🐳 1099 instead of 🐳 Whale 1). When None /
-    empty, falls back to the text-based parser that scans the cell for raw
-    URLs (legacy "label - https://…" format).
+    whale_links_override: the rich-path output of `_extract_cell_hyperlinks`
+    for the Whale-links cell — one {label, url} per Ctrl+K-linked line, so a
+    multi-line cell like "SOP Policy\\nLandolfi\\nBank VA request" with each
+    line linked separately surfaces as three chips. When None / empty, falls
+    back to the text-based parser for legacy "label - https://…" cells.
     """
     def col(key: str) -> str:
         idx = WEEKLY_CHECKLIST_COLUMNS[key]
         return (row[idx] if idx < len(row) else "").strip()
 
     whale_text = col("whale_links")
-    if whale_hyperlink:
-        whale_links = [{
-            "label": whale_text or "Whale SOP",
-            "url":   whale_hyperlink,
-        }]
+    if whale_links_override:
+        whale_links = list(whale_links_override)
     else:
         whale_links = _parse_whale_links(whale_text)
 
@@ -2746,9 +2851,10 @@ def _parse_weekly_checklist(
             }
             week_order.append(current_week)
 
-        # Look up the Whale-links cell hyperlink for this row (Sheets API
-        # path only — empty for CSV path).
-        whale_hyperlink = links_map.get((absolute_row_idx, whale_col_idx)) or None
+        # Look up the Whale-links cell hyperlinks for this row (Sheets API
+        # path only — empty for CSV path). Returns a list[{label, url}] when
+        # the cell has any rich hyperlinks, one entry per Ctrl+K-linked line.
+        whale_links_override = links_map.get((absolute_row_idx, whale_col_idx)) or None
 
         # Multi-client cells: when the Client cell holds multiple clients
         # (newline / semicolon / comma), emit one entry per client. Numbered
@@ -2771,12 +2877,12 @@ def _parse_weekly_checklist(
                         new_override=(new_split[idx]     if len(new_split)     == len(clients_in_cell) else new_raw.strip()),
                         is_multi_client_row=True,
                         siblings=clients_in_cell,
-                        whale_hyperlink=whale_hyperlink,
+                        whale_links_override=whale_links_override,
                     )
                 )
         else:
             week_buckets[current_week]["entries"].append(
-                _shape_checklist_row(row, whale_hyperlink=whale_hyperlink)
+                _shape_checklist_row(row, whale_links_override=whale_links_override)
             )
 
     return [week_buckets[w] for w in week_order]
