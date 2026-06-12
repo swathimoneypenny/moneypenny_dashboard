@@ -8181,6 +8181,9 @@ async def whale_refresh_cache_endpoint():
         return {"refreshed": False, "error": "unhandled", "error_detail": f"{type(e).__name__}: {e}"}
 
 
+_DEPARTURE_ANALYSIS_TIMEOUT_SECS = 45.0
+
+
 @app.get("/api/analysis/client-departure/{client_slug}")
 async def client_departure_endpoint(client_slug: str):
     """AI-driven root-cause analysis for a departing client. Aggregates ~6
@@ -8188,9 +8191,31 @@ async def client_departure_endpoint(client_slug: str):
     delay history, then asks Groq to identify root causes, missed warnings,
     recovery options, and prevention rules. Cached 1 h per slug.
 
-    Always returns 200; structured `error` field on any failure path."""
+    Always returns 200; structured `error` field on any failure path.
+
+    Wrapped in asyncio.wait_for because the cold-start 6-month timesheet
+    fetch can hit upstream rate limits (timesheets.com returns 420 and
+    fetch_timesheet sleeps 60s before retrying). Without a hard ceiling the
+    frontend gets stuck on the loading spinner indefinitely. The underlying
+    sync work continues after timeout — the next request reuses the cache."""
     try:
-        return await asyncio.to_thread(analyze_client_departure, client_slug)
+        return await asyncio.wait_for(
+            asyncio.to_thread(analyze_client_departure, client_slug),
+            timeout=_DEPARTURE_ANALYSIS_TIMEOUT_SECS,
+        )
+    except asyncio.TimeoutError:
+        return JSONResponse({
+            "client_slug":  client_slug,
+            "error":        "analysis_timeout",
+            "error_detail": (
+                f"Aggregating 6 months of timesheet + EOD + weekly-review data "
+                f"took longer than {int(_DEPARTURE_ANALYSIS_TIMEOUT_SECS)}s. "
+                "This usually means the timesheet upstream is rate-limited — "
+                "the fetch is still running in the background and the result "
+                "will land in the cache shortly. Retry in 1-2 minutes; "
+                "subsequent calls hit the warm cache and complete in <5s."
+            ),
+        }, status_code=200)
     except Exception as e:
         import traceback
         return JSONResponse({

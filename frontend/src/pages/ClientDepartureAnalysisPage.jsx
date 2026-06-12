@@ -142,19 +142,32 @@ export default function ClientDepartureAnalysisPage({ clientSlug, onBack }) {
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
+  // Bump to force the useEffect to re-fetch (Retry button).
+  const [retryNonce, setRetryNonce] = useState(0);
 
   useEffect(() => {
     if (!clientSlug) return;
     let cancelled = false;
+    const ctrl = new AbortController();
+    // 60s frontend ceiling. The backend's own ceiling is 45s, so a 60s
+    // browser timeout only fires if the network itself is hung — gives the
+    // backend room to deliver its own structured timeout JSON first.
+    const timeoutId = setTimeout(() => { if (!cancelled) ctrl.abort(); }, 60000);
     setLoading(true);
     setError(null);
-    authFetch(`/api/analysis/client-departure/${encodeURIComponent(clientSlug)}`)
+    authFetch(
+      `/api/analysis/client-departure/${encodeURIComponent(clientSlug)}`,
+      { signal: ctrl.signal },
+    )
       .then((r) => r.json())
       .then((d) => {
         if (cancelled) return;
+        clearTimeout(timeoutId);
         if (d?.error) {
           setError(`${d.error}: ${d.error_detail || d.error_message || ""}`);
-          setData(null);
+          // Keep d so we still render the hours chart + raw data sections
+          // even when the AI step failed — gives Penny something to read.
+          setData(d);
         } else {
           setData(d);
         }
@@ -162,11 +175,15 @@ export default function ClientDepartureAnalysisPage({ clientSlug, onBack }) {
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(err?.message || String(err));
+        clearTimeout(timeoutId);
+        const msg = err?.name === "AbortError"
+          ? "Request timed out after 60 seconds. The upstream timesheet API may be rate-limited — please retry in a minute."
+          : (err?.message || String(err));
+        setError(msg);
         setLoading(false);
       });
-    return () => { cancelled = true; };
-  }, [clientSlug]);
+    return () => { cancelled = true; clearTimeout(timeoutId); ctrl.abort(); };
+  }, [clientSlug, retryNonce]);
 
   const analysis = data?.analysis || {};
   const aiError  = analysis?.error;
@@ -221,7 +238,11 @@ export default function ClientDepartureAnalysisPage({ clientSlug, onBack }) {
       <div style={{ padding: "24px 32px", maxWidth: 1100, margin: "0 auto" }}>
         {loading && (
           <div style={{ padding: 60, textAlign: "center", color: C.muted, fontSize: 13 }}>
-            Running AI analysis on the last 6 months of data… (this can take ~5-10s on the first call)
+            Running AI analysis on the last 6 months of data…
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 8, fontStyle: "italic" }}>
+              Cold-cache calls aggregate 6 months of timesheet + EOD data and can take 30-45s.
+              Subsequent calls within an hour are cached and return in &lt;1s.
+            </div>
           </div>
         )}
 
@@ -231,12 +252,39 @@ export default function ClientDepartureAnalysisPage({ clientSlug, onBack }) {
             border: `1px solid ${C.red}55`,
             borderLeft: `3px solid ${C.red}`,
             borderRadius: 8,
-            padding: "12px 16px",
+            padding: "14px 18px",
             fontSize: 13,
             color: C.pri,
             marginBottom: 16,
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 14,
+            flexWrap: "wrap",
           }}>
-            <strong style={{ color: C.red }}>Couldn't load analysis:</strong> {error}
+            <div style={{ flex: "1 1 320px" }}>
+              <div style={{ color: C.red, fontWeight: 700, marginBottom: 4 }}>
+                ⚠ Couldn't load analysis
+              </div>
+              <div style={{ color: C.sec, lineHeight: 1.5 }}>{error}</div>
+            </div>
+            <button
+              onClick={() => setRetryNonce((n) => n + 1)}
+              style={{
+                background: C.red,
+                border: "none",
+                color: "#fff",
+                padding: "8px 16px",
+                borderRadius: 6,
+                fontSize: 12,
+                fontWeight: 700,
+                letterSpacing: 0.5,
+                cursor: "pointer",
+                fontFamily: "'DM Sans', sans-serif",
+                flexShrink: 0,
+              }}
+            >
+              ↻ Retry
+            </button>
           </div>
         )}
 
