@@ -29,7 +29,7 @@ const SECTIONS = [
       ["deliveredVsContracted", "Delivered vs contracted"],
       ["clientBlockedHours",    "Client-blocked hours"],
       ["trainingPto",           "Training / PTO / absences"],
-      ["utilFlags",             "Over/under utilization flags"],
+      ["utilFlags",             "Capacity flags"],
     ],
   },
   {

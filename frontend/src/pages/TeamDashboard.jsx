@@ -43,13 +43,6 @@ function _defaultCustomRange() {
 //   80–<100%   → ON TRACK      (green)
 //   100–<120%  → ABOVE TARGET  (orange)
 //   >=120%     → CRITICAL      (red)
-function utilColor(pct) {
-  if (pct < 80)   return C.yellow;
-  if (pct < 100)  return C.green;
-  if (pct < 120)  return C.orange;
-  return C.red;
-}
-
 function statusInfo(pct) {
   if (pct < 80)   return { label: "BELOW TARGET", color: C.yellow, bg: C.statusYellow };
   if (pct < 100)  return { label: "ON TRACK",     color: C.green,  bg: C.statusGreen };
@@ -433,7 +426,6 @@ function PerfTable({ orgs }) {
     }),
     { committed: 0, billable: 0, delays: 0 }
   );
-  const totalUtil = totals.committed > 0 ? (totals.billable / totals.committed) * 100 : 0;
 
   const th = {
     padding: "12px 14px",
@@ -494,10 +486,9 @@ function PerfTable({ orgs }) {
           <tr>
             <th style={{ ...th, textAlign: "left" }}>Organization</th>
             {[
-              ["efficiency", "Util %"],
               ["gap",        "Gap"],
               ["committed",  "Committed"],
-              ["billable",   "Utilized"],
+              ["billable",   "Billable"],
               ["delays",     "Delays"],
             ].map(([col, lbl]) => (
               <th key={col} style={{ ...th, textAlign: "right" }} onClick={() => toggle(col)}>
@@ -554,9 +545,6 @@ function PerfTable({ orgs }) {
                     <span style={{ fontWeight: 500, color: isPlaceholder ? C.muted : C.pri }}>{o.name}</span>
                   </div>
                 </td>
-                <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: committed > 0 ? utilColor(eff) : C.muted }}>
-                  {committed > 0 ? `${eff.toFixed(1)}%` : "—"}
-                </td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: committed > 0 ? (gap >= 0 ? C.green : C.red) : C.muted }}>
                   {committed > 0 ? `${gap >= 0 ? "+" : ""}${gap.toFixed(1)}` : "—"}
                 </td>
@@ -594,7 +582,6 @@ function PerfTable({ orgs }) {
         <tfoot>
           <tr style={{ background: C.card, fontWeight: 700 }}>
             <td style={{ ...td, color: C.sec, borderTop: `2px solid ${C.border}` }}>TOTALS</td>
-            <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: utilColor(totalUtil), borderTop: `2px solid ${C.border}` }}>{totalUtil.toFixed(1)}%</td>
             <td style={{ ...td, borderTop: `2px solid ${C.border}` }} />
             <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.blue, borderTop: `2px solid ${C.border}` }}>{totals.committed.toFixed(1)}</td>
             <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.teal, borderTop: `2px solid ${C.border}` }}>{totals.billable.toFixed(1)}</td>
@@ -1126,9 +1113,6 @@ ${clients.map((o) => (
         month:     b.month,
         Committed: Math.round(b.committed * 10) / 10,
         Utilized:  Math.round(b.booked * 10) / 10,
-        "Util%":   b.committed > 0
-          ? Math.round((b.booked / b.committed) * 1000) / 10
-          : 0,
       }));
 
     if (eodChart.length > 0) return eodChart;
@@ -1149,7 +1133,6 @@ ${clients.map((o) => (
           month,
           Committed: Math.round(committed * 10) / 10,
           Utilized:  Math.round(utilized * 10) / 10,
-          "Util%":   committed > 0 ? Math.round((utilized / committed) * 1000) / 10 : 0,
         };
       });
   }, [eod, data]);
@@ -1175,15 +1158,6 @@ ${clients.map((o) => (
         name:  o.name,
         Hours: Number((o.total ?? 0).toFixed(1)),
       })),
-    [chartClients]
-  );
-
-  // Chart 3 — Utilization rate per org
-  const utilByOrg = useMemo(
-    () => chartClients.map((o) => ({
-      name: o.name,
-      rate: Number((o.efficiency ?? 0).toFixed(1)),
-    })),
     [chartClients]
   );
 
@@ -1577,12 +1551,6 @@ ${clients.map((o) => (
               sub="Active this period"
             />
             <KpiCard label="Total Billable"  value={summary.totalBillable}  color={C.teal} />
-            <KpiCard
-              label="Utilization Rate"
-              value={summary.overallEfficiency}
-              color={utilColor(summary.overallEfficiency ?? 0)}
-              suffix="%"
-            />
             <KpiCard label="Non-Billable" value={summary.totalNonBillable} color={C.orange} />
             <KpiCard label="Total Hours"  value={totalHours}                color={C.purple} />
           </div>
@@ -1618,13 +1586,11 @@ ${clients.map((o) => (
                 <ComposedChart data={monthlyEod} barGap={4} barCategoryGap="25%">
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                   <XAxis dataKey="month" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <YAxis yAxisId="left" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <YAxis yAxisId="right" orientation="right" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} unit="%" />
+                  <YAxis tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
                   <Tooltip content={<DarkTooltip />} />
                   <Legend wrapperStyle={{ fontSize: 11, color: C.sec }} />
-                  <Bar yAxisId="left" dataKey="Committed" fill={C.blue}  radius={[4, 4, 0, 0]} />
-                  <Bar yAxisId="left" dataKey="Utilized"  fill={C.green} radius={[4, 4, 0, 0]} />
-                  <Line yAxisId="right" type="monotone" dataKey="Util%" stroke={C.orange} strokeWidth={2} dot={false} />
+                  <Bar dataKey="Committed" fill={C.blue}  radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="Utilized"  fill={C.green} radius={[4, 4, 0, 0]} />
                 </ComposedChart>
               </ResponsiveContainer>
             )}
@@ -1650,43 +1616,9 @@ ${clients.map((o) => (
             )}
           </ChartCard>
 
-          <ChartCard title="Utilization Rate by Organization">
-            {loading ? (
-              <div className="kpi-skeleton" style={{ height: 260 }} />
-            ) : utilByOrg.length === 0 ? (
-              <div style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic" }}>
-                No organization data
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={utilByOrg} barCategoryGap="30%" margin={{ top: 20, right: 10, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                  <XAxis dataKey="name" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <YAxis
-                    tick={{ fill: C.muted, fontSize: 11 }}
-                    axisLine={false}
-                    tickLine={false}
-                    unit="%"
-                    domain={[0, 130]}
-                    ticks={[0, 25, 50, 75, 95, 120]}
-                  />
-                  <Tooltip content={<DarkTooltip />} formatter={(v) => [`${Number(v).toFixed(1)}%`, "Util"]} />
-                  <Bar dataKey="rate" radius={[4, 4, 0, 0]}>
-                    {utilByOrg.map((entry, i) => (
-                      <Cell key={i} fill={utilColor(entry.rate)} />
-                    ))}
-                    <LabelList
-                      dataKey="rate"
-                      position="top"
-                      formatter={(v) => `${Number(v).toFixed(0)}%`}
-                      style={{ fill: C.pri, fontSize: 10 }}
-                    />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </ChartCard>
-
+          {/* Spans both columns — third chart card on a 2-wide grid would
+              otherwise sit alone in the left column. */}
+          <div style={{ gridColumn: "1 / -1" }}>
           <ChartCard title="Open Questions & Delays — Aging Report">
             {loading ? (
               <div className="kpi-skeleton" style={{ height: 260 }} />
@@ -1743,6 +1675,7 @@ ${clients.map((o) => (
               </>
             )}
           </ChartCard>
+          </div>
         </div>
         )}
 
@@ -1846,8 +1779,8 @@ function UnderutilizedWidget({ members, onSelect }) {
             </div>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 1 }}>
               <span style={{ fontSize: 12, fontWeight: 600 }}>{m.name}</span>
-              <span style={{ fontSize: 10, color: utilColor(m.utilPct ?? 0), fontFamily: "'DM Mono', monospace" }}>
-                {(m.utilPct ?? 0).toFixed(1)}%
+              <span style={{ fontSize: 10, color: C.teal, fontFamily: "'DM Mono', monospace" }}>
+                {(m.billable ?? 0).toFixed(1)}h billable
                 {m.trend === "up"   && <span style={{ marginLeft: 6, color: C.green }}>▲</span>}
                 {m.trend === "down" && <span style={{ marginLeft: 6, color: C.red }}>▼</span>}
                 {m.trend === "flat" && <span style={{ marginLeft: 6, color: C.muted }}>–</span>}
@@ -2054,7 +1987,7 @@ function UserSelectorDropdown({ members, onSelect }) {
         {sorted.map((m) => (
           <option key={m.name} value={m.name}>
             {m.name}
-            {typeof m.utilPct === "number" ? ` (${m.utilPct.toFixed(0)}% util)` : ""}
+            {typeof m.billable === "number" ? ` (${m.billable.toFixed(1)}h billable)` : ""}
           </option>
         ))}
       </select>
@@ -2067,7 +2000,7 @@ function UserSelectorDropdown({ members, onSelect }) {
 
 
 function TeamMembersTable({ members, onSelect }) {
-  const [sort, setSort] = useState({ col: "utilPct", dir: "asc" });
+  const [sort, setSort] = useState({ col: "billable", dir: "desc" });
   const sorted = useMemo(() => {
     if (!Array.isArray(members)) return [];
     const arr = [...members];
@@ -2140,7 +2073,6 @@ function TeamMembersTable({ members, onSelect }) {
                   ["totalHours", "Total Hours"],
                   ["billable",   "Billable"],
                   ["committed",  "Committed"],
-                  ["utilPct",    "Util %"],
                 ].map(([col, lbl]) => (
                   <th key={col} style={{ ...th, textAlign: "right" }} onClick={() => toggle(col)}>
                     {lbl}{sort.col === col && <span style={{ marginLeft: 4, opacity: 0.5, fontSize: 10 }}>{sort.dir === "asc" ? "▲" : "▼"}</span>}
@@ -2204,9 +2136,6 @@ function TeamMembersTable({ members, onSelect }) {
                     </td>
                     <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.blue }}>
                       {(m.committed ?? 0) > 0 ? (m.committed ?? 0).toFixed(1) : "—"}
-                    </td>
-                    <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: utilColor(util) }}>
-                      {(m.committed ?? 0) > 0 ? `${util.toFixed(1)}%` : "—"}
                     </td>
                     <td
                       style={{ ...td, fontSize: 12 }}

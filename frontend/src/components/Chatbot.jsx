@@ -254,7 +254,7 @@ export default function Chatbot({ context, viewHint }) {
                 </div>
                 <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.6 }}>
                   Ask me about team performance,<br />
-                  utilization rates, or staff hours.
+                  billable hours, or client trends.
                 </div>
               </div>
             )}

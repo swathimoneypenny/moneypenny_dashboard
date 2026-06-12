@@ -25,13 +25,6 @@ const PERIODS = [
   { key: "monthly", label: "This Month", endpoint: "monthly" },
 ];
 
-function utilColor(pct) {
-  if (pct < 75)  return C.red;
-  if (pct < 95)  return C.teal;
-  if (pct <= 120) return C.green;
-  return C.orange;
-}
-
 function statusInfo(pct) {
   if (pct < 75)  return { label: "BELOW TARGET", color: C.red,    bg: C.statusRed };
   if (pct < 95)  return { label: "ON TARGET",    color: C.green,  bg: C.statusGreen };
@@ -313,7 +306,6 @@ function StaffTable({ staff }) {
     }),
     { committed: 0, billable: 0, nonBillable: 0 }
   );
-  const totalUtil = totals.committed > 0 ? (totals.billable / totals.committed) * 100 : 0;
 
   const th = {
     padding: "12px 14px",
@@ -344,7 +336,6 @@ function StaffTable({ staff }) {
               ["committed",   "Committed"],
               ["billable",    "Billable (h)"],
               ["nonBillable", "Non-Bill (h)"],
-              ["utilPct",     "Util %"],
               ["gap",         "Gap"],
             ].map(([col, lbl]) => (
               <th key={col} style={{ ...th, textAlign: "right" }} onClick={() => toggle(col)}>
@@ -393,7 +384,6 @@ function StaffTable({ staff }) {
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace" }}>{(s.committed ?? 0).toFixed(1)}</td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.teal }}>{(s.billable ?? 0).toFixed(1)}</td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.orange }}>{(s.nonBillable ?? 0).toFixed(1)}</td>
-                <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: utilColor(util) }}>{util.toFixed(1)}%</td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: gap >= 0 ? C.green : C.red }}>
                   {gap >= 0 ? "+" : ""}{gap.toFixed(1)}
                 </td>
@@ -423,7 +413,6 @@ function StaffTable({ staff }) {
             <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", borderTop: `2px solid ${C.border}` }}>{totals.committed.toFixed(1)}</td>
             <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.teal, borderTop: `2px solid ${C.border}` }}>{totals.billable.toFixed(1)}</td>
             <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.orange, borderTop: `2px solid ${C.border}` }}>{totals.nonBillable.toFixed(1)}</td>
-            <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: utilColor(totalUtil), borderTop: `2px solid ${C.border}` }}>{totalUtil.toFixed(1)}%</td>
             <td style={{ ...td, borderTop: `2px solid ${C.border}` }} colSpan={2} />
           </tr>
         </tfoot>
@@ -574,7 +563,6 @@ ${Object.entries(staffObj).map(([name, v]) => {
   const staff = useMemo(
     () => (data?.staff ?? []).map((s) => ({
       ...s,
-      utilPct: s.committed > 0 ? (s.billable / s.committed) * 100 : 0,
       gap: (s.billable ?? 0) - (s.committed ?? 0),
     })),
     [data]
@@ -587,14 +575,6 @@ ${Object.entries(staffObj).map(([name, v]) => {
       name: (s.staff ?? "").split(" ")[0],
       Billable: s.billable ?? 0,
       "Non-Billable": s.nonBillable ?? 0,
-    })),
-    [staff]
-  );
-
-  const staffUtil = useMemo(
-    () => staff.map((s) => ({
-      name: (s.staff ?? "").split(" ")[0],
-      util: s.utilPct,
     })),
     [staff]
   );
@@ -812,18 +792,12 @@ ${Object.entries(staffObj).map(([name, v]) => {
         {/* KPIs (skeleton or real) */}
         {loading ? (
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-            {[1, 2, 3, 4, 5, 6].map((i) => <KpiSkeleton key={i} />)}
+            {[1, 2, 3, 4, 5].map((i) => <KpiSkeleton key={i} />)}
           </div>
         ) : (
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
             <KpiCard label="Total Committed" value={summary.totalCommitted} color={C.blue} />
             <KpiCard label="Total Billable"  value={summary.totalBillable}  color={C.teal} />
-            <KpiCard
-              label="Utilization Rate"
-              value={summary.overallEfficiency}
-              color={utilColor(summary.overallEfficiency ?? 0)}
-              suffix="%"
-            />
             <KpiCard label="Non-Billable" value={summary.totalNonBillable} color={C.orange} />
             <KpiCard label="Total Hours"  value={totalHours}                color={C.purple} />
             <KpiCard
@@ -892,32 +866,10 @@ ${Object.entries(staffObj).map(([name, v]) => {
             )}
           </div>
 
-          {/* Utilization by Staff */}
-          <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 16px" }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: C.sec, marginBottom: 16 }}>
-              Utilization Rate by Staff
-            </div>
-            {loading ? (
-              <div style={{ height: 220 }} className="kpi-skeleton" />
-            ) : (
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={staffUtil} barCategoryGap="30%">
-                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                  <XAxis dataKey="name" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} unit="%" />
-                  <Tooltip content={<DarkTooltip />} formatter={(v) => [`${v.toFixed(1)}%`, "Util"]} />
-                  <Bar dataKey="util" radius={[4, 4, 0, 0]}>
-                    {staffUtil.map((entry, i) => (
-                      <Cell key={i} fill={utilColor(entry.util)} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-
           {/* Open Questions & Delays — Aging Report (from parent team's EOD sheet) */}
-          <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 16px" }}>
+          {/* Spans both columns — third card on a 2-wide grid would otherwise
+              sit alone in the left column. */}
+          <div style={{ gridColumn: "1 / -1", background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 16px" }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: C.sec, marginBottom: 16 }}>
               Open Questions & Delays — Aging Report
             </div>

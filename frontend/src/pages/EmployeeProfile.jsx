@@ -413,7 +413,7 @@ export default function EmployeeProfile({ teamId, teamName, employeeName, onBack
       (r) => `• ${r.date} ${r.client}: ${r.hours}h ${r.billable ? "[billable]" : "[non-billable]"} — ${r.desc?.slice(0, 80) || ""}`,
     );
     const ctx = `Employee: ${data.name ?? employeeName} (${data.team_name ?? teamName}) — ${data.period ?? ""}
-Total ${data.totalHours ?? 0}h | Billable ${data.billableHours ?? 0}h | Non-bill ${data.nonBillableHours ?? 0}h | Util ${data.utilizationPct ?? 0}%
+Total ${data.totalHours ?? 0}h | Billable ${data.billableHours ?? 0}h | Non-bill ${data.nonBillableHours ?? 0}h | Billable% ${data.billablePct ?? 0}%
 Top clients: ${(data.topClients ?? []).map((c) => `${c.client} (${c.hours}h)`).join(", ")}
 Recent:
 ${lines.join("\n")}`;
