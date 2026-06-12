@@ -1058,7 +1058,19 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
     return () => ctrl.abort();
   }, [teamId]);
 
-  const clients = useMemo(() => data?.clients ?? [], [data]);
+  // Filter "Internal / Other" out at the source so it disappears from every
+  // consumer below: the Performance by Organization table + its TOTALS row,
+  // the Organizations KPI count, the Hours by Org chart, and the chatbot
+  // context. Non-billable hours that used to land here are still represented
+  // in the Non-Billable KPI card and per-employee Non-Billable Breakdown.
+  const clients = useMemo(
+    () => (data?.clients ?? []).filter((o) =>
+      !o.isInternalOther
+      && (o.name ?? "").toLowerCase() !== "internal / other"
+      && (o.org ?? "").toLowerCase()  !== "internal / other"
+    ),
+    [data],
+  );
   const summary = data?.summary ?? {};
   const eod = useMemo(() => data?.eod ?? [], [data]);
   const currentYear = new Date().getFullYear();
