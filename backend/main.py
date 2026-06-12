@@ -2221,6 +2221,142 @@ def _fetch_weekly_checklist_csv(sheet_id: str, gid: str) -> str:
     return csv_text
 
 
+# ── Sheets API path: preserves cell hyperlinks (Penny 2026-06-12) ───────
+# CSV export strips out Ctrl+K hyperlinks — TLs type a label like "1099" and
+# attach a Whale URL underneath, but the CSV only carries the label. The
+# Sheets API returns both. Falls back to the CSV path when GOOGLE_API_KEY is
+# missing or any call fails, so the feature is purely additive.
+_sheets_metadata_cache: dict[str, dict] = {}
+_SHEETS_METADATA_TTL = 3600  # 1 hour — tab names rarely change
+
+_checklist_rich_cache: dict[tuple[str, str], dict] = {}
+# Same 60s TTL as the CSV cache so live edits surface on the same cadence.
+
+_HYPERLINK_FORMULA_RE = re.compile(
+    r'^=HYPERLINK\(\s*"([^"]+)"\s*,\s*"([^"]*)"\s*\)\s*$',
+    re.IGNORECASE,
+)
+
+
+def _get_sheets_api_key() -> str:
+    return (os.environ.get("GOOGLE_API_KEY") or "").strip()
+
+
+def _sheet_tab_name_for_gid(sheet_id: str, gid: str) -> str | None:
+    """Look up the sheet (tab) name for a numeric GID via the Sheets API
+    metadata endpoint. Cached for 1 hour per spreadsheet. Returns None when
+    the API key is missing, the metadata fetch fails, or the GID isn't found.
+    """
+    api_key = _get_sheets_api_key()
+    if not api_key or not sheet_id or gid is None:
+        return None
+    entry = _sheets_metadata_cache.get(sheet_id)
+    now = datetime.now()
+    if entry and (now - entry["at"]).total_seconds() < _SHEETS_METADATA_TTL:
+        return entry["gid_to_name"].get(str(gid))
+    url = (f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}"
+           f"?fields=sheets(properties(sheetId,title))&key={api_key}")
+    try:
+        resp = requests.get(url, timeout=10)
+        if resp.status_code != 200:
+            print(f"[sheets-api] metadata fetch sid={sheet_id} returned "
+                  f"{resp.status_code}: {resp.text[:120]}")
+            return None
+        gid_to_name = {
+            str((s.get("properties") or {}).get("sheetId")):
+                (s.get("properties") or {}).get("title", "")
+            for s in (resp.json().get("sheets") or [])
+            if (s.get("properties") or {}).get("title")
+        }
+    except Exception as e:
+        print(f"[sheets-api] metadata sid={sheet_id} error: {e}")
+        return None
+    _sheets_metadata_cache[sheet_id] = {"at": now, "gid_to_name": gid_to_name}
+    return gid_to_name.get(str(gid))
+
+
+def _fetch_weekly_checklist_rich(
+    sheet_id: str, gid: str,
+) -> tuple[list[list[str]], dict[tuple[int, int], str]] | None:
+    """Fetch a checklist tab via the Sheets API so cell hyperlinks survive.
+
+    Returns (rows, links) where:
+      - rows  = list[list[str]] — same 2D string grid the CSV path produces,
+                so the existing _parse_weekly_checklist code can consume it
+                without modification.
+      - links = dict[(row_idx, col_idx) -> url] — sparse map of every cell
+                that carries a hyperlink (either Ctrl+K or =HYPERLINK formula).
+
+    Returns None when GOOGLE_API_KEY is missing, the metadata lookup fails,
+    or any error occurs — caller falls back to the CSV path.
+    """
+    api_key = _get_sheets_api_key()
+    if not api_key or not sheet_id or not gid:
+        return None
+    key = (sheet_id, gid)
+    entry = _checklist_rich_cache.get(key)
+    now = datetime.now()
+    if entry and (now - entry["at"]).total_seconds() < _CHECKLIST_CSV_TTL:
+        return entry["rows"], entry["links"]
+
+    tab_name = _sheet_tab_name_for_gid(sheet_id, gid)
+    if not tab_name:
+        return None
+    from urllib.parse import quote
+    range_param = quote(f"'{tab_name}'!A1:Z300", safe="")
+    url = (
+        f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}"
+        f"?ranges={range_param}"
+        f"&fields=sheets(data(rowData(values(formattedValue,hyperlink,userEnteredValue))))"
+        f"&key={api_key}"
+    )
+    try:
+        resp = requests.get(url, timeout=15)
+        if resp.status_code != 200:
+            print(f"[sheets-api] checklist sid={sheet_id} gid={gid} returned "
+                  f"{resp.status_code}: {resp.text[:120]}")
+            return None
+        data = resp.json()
+    except Exception as e:
+        print(f"[sheets-api] checklist sid={sheet_id} gid={gid} error: {e}")
+        return None
+
+    sheets_block = (data.get("sheets") or [])
+    if not sheets_block:
+        return None
+    data_blocks = (sheets_block[0].get("data") or [])
+    if not data_blocks:
+        return None
+    row_data = (data_blocks[0].get("rowData") or [])
+
+    rows: list[list[str]] = []
+    links: dict[tuple[int, int], str] = {}
+    for r_idx, rd in enumerate(row_data):
+        cells = rd.get("values") or []
+        row_strs: list[str] = []
+        for c_idx, cell in enumerate(cells):
+            text = cell.get("formattedValue") or ""
+            link = cell.get("hyperlink") or ""
+            # Some TLs write `=HYPERLINK("url","label")` instead of using
+            # Ctrl+K — that goes into userEnteredValue.formulaValue. Parse
+            # it so both styles work the same.
+            if not link:
+                uev = cell.get("userEnteredValue") or {}
+                formula = uev.get("formulaValue") or ""
+                m = _HYPERLINK_FORMULA_RE.match(formula.strip())
+                if m:
+                    link = m.group(1)
+                    if not text:
+                        text = m.group(2)
+            row_strs.append(text)
+            if link:
+                links[(r_idx, c_idx)] = link
+        rows.append(row_strs)
+
+    _checklist_rich_cache[key] = {"at": now, "rows": rows, "links": links}
+    return rows, links
+
+
 _WEEK_RANGE_RE = re.compile(
     r"^([A-Za-z]{3,9})\s+(\d{1,2})\s*[-–—to]+\s*(?:([A-Za-z]{3,9})\s+)?(\d{1,2})",
     re.IGNORECASE,
@@ -2487,13 +2623,30 @@ def _shape_checklist_row(
     new_override: str | None = None,
     is_multi_client_row: bool = False,
     siblings: list[str] | None = None,
+    whale_hyperlink: str | None = None,
 ) -> dict:
     """Convert a raw CSV row to the public-API entry shape. Optional overrides
     let `_parse_weekly_checklist` emit one entry per client when a single CSV
-    row carries a multi-client cell."""
+    row carries a multi-client cell.
+
+    whale_hyperlink: if the upstream rich fetch captured a Ctrl+K hyperlink
+    on the Whale-links cell, pass the URL here. The cell text becomes the
+    link label (e.g. "1099" → 🐳 1099 instead of 🐳 Whale 1). When None /
+    empty, falls back to the text-based parser that scans the cell for raw
+    URLs (legacy "label - https://…" format).
+    """
     def col(key: str) -> str:
         idx = WEEKLY_CHECKLIST_COLUMNS[key]
         return (row[idx] if idx < len(row) else "").strip()
+
+    whale_text = col("whale_links")
+    if whale_hyperlink:
+        whale_links = [{
+            "label": whale_text or "Whale SOP",
+            "url":   whale_hyperlink,
+        }]
+    else:
+        whale_links = _parse_whale_links(whale_text)
 
     return {
         "client":                (client_override if client_override is not None else col("client")),
@@ -2510,21 +2663,41 @@ def _shape_checklist_row(
         "checked_meeting_notes": _normalize_yes_no(col("checked_meeting_notes")),
         "meeting_notes_shared":  _normalize_yes_no(col("meeting_notes_shared")),
         "flag_tm_ops":           col("flag_tm_ops"),
-        "whale_links":           _parse_whale_links(col("whale_links")),
+        "whale_links":           whale_links,
         "is_multi_client_row":   is_multi_client_row,
         "siblings":              list(siblings) if siblings else [],
     }
 
 
-def _parse_weekly_checklist(csv_text: str, team_id: str) -> list[dict]:
+def _parse_weekly_checklist(
+    csv_text: str,
+    team_id: str,
+    *,
+    rich_rows: list[list[str]] | None = None,
+    links_map: dict[tuple[int, int], str] | None = None,
+) -> list[dict]:
     """Return weeks grouped by week label. Skips title rows, the header row,
     and rows with no client filled (sentinel empty rows leads leave between
     weeks). Week ordering follows first-seen in the CSV — leads typically
-    keep them chronological."""
-    if not csv_text:
-        return []
-    reader = csv.reader(io.StringIO(csv_text))
-    rows = list(reader)
+    keep them chronological.
+
+    Two input paths:
+      - csv_text: legacy CSV export. Used when GOOGLE_API_KEY isn't set or
+        the rich fetch fails.
+      - rich_rows + links_map: Sheets API path that preserves cell hyperlinks.
+        rich_rows is the same string grid the CSV parser produces; links_map
+        is the sparse (row, col) → URL map. When present, the Whale-links
+        cell's hyperlink (if any) becomes the link URL and the cell text its
+        label — matching what the TL actually typed (e.g. "1099" or
+        "Bill Matching and Buildertrend Bill Import Verification").
+    """
+    if rich_rows is not None:
+        rows = rich_rows
+    else:
+        if not csv_text:
+            return []
+        reader = csv.reader(io.StringIO(csv_text))
+        rows = list(reader)
     if not rows:
         return []
 
@@ -2541,8 +2714,10 @@ def _parse_weekly_checklist(csv_text: str, team_id: str) -> list[dict]:
     week_buckets: dict[str, dict] = {}
     week_order: list[str] = []
     current_week = ""
+    whale_col_idx = WEEKLY_CHECKLIST_COLUMNS["whale_links"]
+    links_map = links_map or {}
 
-    for row in rows[data_start:]:
+    for absolute_row_idx, row in enumerate(rows[data_start:], start=data_start):
         if not row or not any((c or "").strip() for c in row):
             continue
         week_cell   = (row[WEEKLY_CHECKLIST_COLUMNS["week"]]   if len(row) > 0 else "").strip()
@@ -2571,6 +2746,10 @@ def _parse_weekly_checklist(csv_text: str, team_id: str) -> list[dict]:
             }
             week_order.append(current_week)
 
+        # Look up the Whale-links cell hyperlink for this row (Sheets API
+        # path only — empty for CSV path).
+        whale_hyperlink = links_map.get((absolute_row_idx, whale_col_idx)) or None
+
         # Multi-client cells: when the Client cell holds multiple clients
         # (newline / semicolon / comma), emit one entry per client. Numbered
         # Updated / New text gets split per client when the count matches;
@@ -2592,10 +2771,13 @@ def _parse_weekly_checklist(csv_text: str, team_id: str) -> list[dict]:
                         new_override=(new_split[idx]     if len(new_split)     == len(clients_in_cell) else new_raw.strip()),
                         is_multi_client_row=True,
                         siblings=clients_in_cell,
+                        whale_hyperlink=whale_hyperlink,
                     )
                 )
         else:
-            week_buckets[current_week]["entries"].append(_shape_checklist_row(row))
+            week_buckets[current_week]["entries"].append(
+                _shape_checklist_row(row, whale_hyperlink=whale_hyperlink)
+            )
 
     return [week_buckets[w] for w in week_order]
 
@@ -6480,28 +6662,43 @@ def _build_team_checklist(team_id: str) -> dict:
             "weeks":       [],
             "summary":     {},
         }
-    csv_text = _fetch_weekly_checklist_csv(sheet_id, gid)
-    if not csv_text:
-        return {
-            "team_id":     team_id,
-            "team_label":  cfg.get("label", team_id),
-            "sheet_id":    sheet_id,
-            "tab_gid":     gid,
-            "error":       "fetch_failed_or_empty",
-            "error_detail": (
-                f"Could not fetch checklist tab gid={gid} on {sheet_id}. "
-                f"Verify the sheet is shared 'anyone with link can view'."
-            ),
-            "weeks":       [],
-            "summary":     {},
-        }
-    weeks = _parse_weekly_checklist(csv_text, team_id)
+    # Try the rich Sheets API path first (preserves Whale-link Ctrl+K
+    # hyperlinks). Falls back to CSV when GOOGLE_API_KEY is missing, the
+    # metadata lookup fails, or any non-200. The fallback runs even after a
+    # partial success — we never want the dashboard to go blank because the
+    # API returned an empty page.
+    source = "csv"
+    rich = _fetch_weekly_checklist_rich(sheet_id, gid)
+    if rich is not None and rich[0]:
+        rich_rows, links_map = rich
+        weeks = _parse_weekly_checklist(
+            "", team_id, rich_rows=rich_rows, links_map=links_map,
+        )
+        source = "sheets_api"
+    else:
+        csv_text = _fetch_weekly_checklist_csv(sheet_id, gid)
+        if not csv_text:
+            return {
+                "team_id":     team_id,
+                "team_label":  cfg.get("label", team_id),
+                "sheet_id":    sheet_id,
+                "tab_gid":     gid,
+                "error":       "fetch_failed_or_empty",
+                "error_detail": (
+                    f"Could not fetch checklist tab gid={gid} on {sheet_id}. "
+                    f"Verify the sheet is shared 'anyone with link can view'."
+                ),
+                "weeks":       [],
+                "summary":     {},
+            }
+        weeks = _parse_weekly_checklist(csv_text, team_id)
     summary = _compute_checklist_summary(weeks)
     return {
         "team_id":    team_id,
         "team_label": cfg.get("label", team_id),
         "sheet_id":   sheet_id,
         "tab_gid":    gid,
+        "source":     source,
         "weeks":      weeks,
         "summary":    summary,
     }
