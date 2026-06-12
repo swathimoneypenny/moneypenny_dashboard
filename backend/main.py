@@ -2324,11 +2324,20 @@ def _extract_cell_hyperlinks(cell: dict) -> list[dict]:
             if not uri:
                 continue
             uri = uri.strip().rstrip(".,;:)")
-            if not uri or not uri.lower().startswith("http") or uri in seen:
+            if not uri or not uri.lower().startswith("http"):
                 continue
             label = segment.strip().strip(" \n\t-–—:|,")
             if "\n" in label:
                 label = label.split("\n", 1)[0].strip()
+            # Skip whitespace-only segments — Google emits zero-content runs
+            # between labelled lines (the bare "\n"). If such a run carries
+            # a URL, it would claim the URL before the next labelled run can,
+            # producing a "Whale 1" chip and deduping the real label out.
+            # Defer to the next run instead.
+            if not label:
+                continue
+            if uri in seen:
+                continue
             results.append({"label": label, "url": uri})
             seen.add(uri)
 
@@ -2418,7 +2427,7 @@ def _fetch_weekly_checklist_rich(
     url = (
         f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}"
         f"?ranges={range_param}"
-        f"&fields=sheets(data(rowData(values(formattedValue,hyperlink,userEnteredValue,effectiveValue,textFormatRuns(startIndex,format(link(uri)))))))"
+        f"&fields=sheets(data(rowData(values(formattedValue,hyperlink,userEnteredValue,textFormatRuns(startIndex,format(link(uri)))))))"
         f"&key={api_key}"
     )
     try:
@@ -2442,17 +2451,6 @@ def _fetch_weekly_checklist_rich(
 
     rows: list[list[str]] = []
     links: dict[tuple[int, int], list[dict]] = {}
-    # Whale-column diagnostic dump (temporary — gated on small row count so
-    # logs don't blow up). Prints the raw Sheets API cell payload for the
-    # first ~20 data rows so we can see exactly which subfield (or none) is
-    # actually carrying the URL for Team B's per-line Ctrl+K cells.
-    whale_col_idx = WEEKLY_CHECKLIST_COLUMNS.get("whale_links", -1)
-    whale_dbg_count = 0
-    WHALE_DBG_MAX = 20
-    whale_cells_seen = 0
-    whale_cells_with_url = 0
-    print(f"[whale-debug] sid={sheet_id[:10]} gid={gid} rows_received={len(row_data)} "
-          f"whale_col_idx={whale_col_idx}")
     for r_idx, rd in enumerate(row_data):
         cells = rd.get("values") or []
         row_strs: list[str] = []
@@ -2470,22 +2468,7 @@ def _fetch_weekly_checklist_rich(
             cell_links = _extract_cell_hyperlinks(cell)
             if cell_links:
                 links[(r_idx, c_idx)] = cell_links
-            if c_idx == whale_col_idx and whale_dbg_count < WHALE_DBG_MAX:
-                if text.strip() or cell:
-                    whale_cells_seen += 1
-                    if cell_links:
-                        whale_cells_with_url += 1
-                    try:
-                        cell_dump = json.dumps(cell, ensure_ascii=False)
-                    except Exception as e:
-                        cell_dump = f"<json-dump-err {e}: {cell!r}>"
-                    print(f"[whale-debug] sid={sheet_id[:10]} gid={gid} row={r_idx} "
-                          f"extracted={len(cell_links)} cell={cell_dump[:1200]}")
-                    whale_dbg_count += 1
         rows.append(row_strs)
-    print(f"[whale-debug] sid={sheet_id[:10]} gid={gid} SUMMARY "
-          f"whale_cells_seen={whale_cells_seen} whale_cells_with_url={whale_cells_with_url} "
-          f"total_link_entries={sum(len(v) for v in links.values())}")
 
     _checklist_rich_cache[key] = {"at": now, "rows": rows, "links": links}
     return rows, links
