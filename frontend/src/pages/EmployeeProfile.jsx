@@ -97,51 +97,6 @@ function KpiCard({ label, value, color, suffix = "h", decimals = 1 }) {
   );
 }
 
-function LastActivityCard({ activeNow, lastLoggedAt, lastLoggedClient, lastLoggedProject, lastLoggedDesc }) {
-  const accent = activeNow ? "#3DC58B" : C.muted;
-  const dot    = activeNow ? "🟢" : "⚫";
-  const badge  = activeNow ? "ACTIVE" : "IDLE";
-  return (
-    <div
-      style={{
-        background: activeNow
-          ? `linear-gradient(180deg, ${C.card} 0%, rgba(61,197,139,0.10) 100%)`
-          : `linear-gradient(180deg, ${C.card} 0%, ${C.surface} 100%)`,
-        border: `1px solid ${activeNow ? "rgba(61,197,139,0.35)" : C.border}`,
-        borderTop: `3px solid ${accent}`,
-        borderRadius: 12,
-        padding: "16px 20px 14px",
-        flex: "1 1 240px",
-        minWidth: 220,
-        boxShadow: `0 2px 8px rgba(0,0,0,0.25)`,
-        display: "flex",
-        flexDirection: "column",
-        gap: 6,
-      }}
-      title={lastLoggedAt ? `LASTCHANGEDATE: ${formatTimeIST(lastLoggedAt)}` : "No activity recorded"}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: accent, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>
-        <span style={{ fontSize: 8 }}>{dot}</span>
-        <span>Last activity · {badge}</span>
-      </div>
-      <div style={{ fontSize: 20, fontWeight: 700, color: accent, fontFamily: "'DM Mono', monospace", lineHeight: 1.1 }}>
-        {timeAgo(lastLoggedAt)}
-      </div>
-      <div style={{ fontSize: 12, color: C.sec, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {lastLoggedClient
-          ? `${lastLoggedClient}${lastLoggedProject ? ` / ${lastLoggedProject}` : ""}`
-          : "—"}
-      </div>
-      {lastLoggedDesc && (
-        <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          “{lastLoggedDesc}{lastLoggedDesc.length >= 80 ? "…" : ""}”
-        </div>
-      )}
-    </div>
-  );
-}
-
-
 function ChartCard({ title, children }) {
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 16px" }}>
@@ -656,24 +611,30 @@ ${lines.join("\n")}`;
         {/* KPIs */}
         {loading ? (
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-            {[1, 2, 3].map((i) => (
+            {[1, 2, 3, 4, 5].map((i) => (
               <div key={i} className="kpi-skeleton" style={{ flex: "1 1 200px", minWidth: 180, height: 124, borderRadius: 12 }} />
             ))}
           </div>
-        ) : (
-          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-            <KpiCard label="Total Hours"     value={data?.totalHours}     color={C.purple} />
-            <KpiCard label="Billable Hours"  value={data?.billableHours}  color={C.teal} />
-            <KpiCard label="Billable %"      value={data?.billablePct}    color={C.green} suffix="%" />
-            <LastActivityCard
-              activeNow={!!data?.activeNow}
-              lastLoggedAt={data?.lastLoggedAt}
-              lastLoggedClient={data?.lastLoggedClient}
-              lastLoggedProject={data?.lastLoggedProject}
-              lastLoggedDesc={data?.lastLoggedDesc}
-            />
-          </div>
-        )}
+        ) : (() => {
+          // Compute non-billable hours / pct here so the KPI cards stay
+          // pure presentational. Reads camelCase fields first, then falls
+          // back to (totalHours - billableHours) for resilience against any
+          // payload-shape edge case (snake_case, missing field, etc.).
+          const totalH = Number(data?.totalHours    ?? data?.total_hours    ?? 0) || 0;
+          const billH  = Number(data?.billableHours ?? data?.billable_hours ?? 0) || 0;
+          const reported = Number(data?.nonBillableHours ?? data?.non_billable_hours ?? NaN);
+          const nbH = Number.isFinite(reported) ? reported : Math.max(0, totalH - billH);
+          const nbPct = totalH > 0 ? (nbH / totalH * 100) : 0;
+          return (
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+              <KpiCard label="Total Hours"        value={data?.totalHours}    color={C.purple} />
+              <KpiCard label="Billable Hours"     value={data?.billableHours} color={C.teal} />
+              <KpiCard label="Billable %"         value={data?.billablePct}   color={C.green}  suffix="%" />
+              <KpiCard label="Non-Billable Hours" value={nbH}                 color="#F2895A" />
+              <KpiCard label="Non-Billable %"     value={nbPct}               color="#F2895A" suffix="%" />
+            </div>
+          );
+        })()}
 
         {/* Billable vs Non-Billable — side-by-side comparison. Replaces the
             "Utilization %" KPI Penny removed 2026-06-12 — gives the same
