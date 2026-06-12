@@ -20,15 +20,6 @@ const PERIODS = [
   { key: "monthly", label: "This Month" },
 ];
 
-// TL-approved thresholds (verified 2026-05-25):
-//   <80% yellow, 80–<100% green, 100–<120% orange, >=120% red.
-function utilColor(pct) {
-  if (pct < 80)  return C.yellow;
-  if (pct < 100) return C.green;
-  if (pct < 120) return C.orange;
-  return C.red;
-}
-
 function initials(name) {
   return (name ?? "?")
     .split(/[\s-]+/)
@@ -159,6 +150,118 @@ function ChartCard({ title, children }) {
     </div>
   );
 }
+
+// Billable vs Non-Billable — two-bar comparison card. Penny removed the
+// "Utilization %" KPI 2026-06-12 in favour of this absolute-hours view.
+// Same orange-left-border styling as SimpleNonBillableCard below so the two
+// cards read as a pair.
+const _BILLABLE_GREEN  = "#3DC58B";
+const _NON_BILLABLE_ORANGE = "#F2895A";
+
+function BillableVsNonBillableCard({ data, loading }) {
+  const totalHours    = Number(data?.totalHours    ?? data?.total_hours    ?? 0) || 0;
+  const billableHours = Number(data?.billableHours ?? data?.billable_hours ?? 0) || 0;
+  const reportedNb    = Number(data?.nonBillableHours ?? data?.non_billable_hours ?? NaN);
+  const nonBillable   = Number.isFinite(reportedNb)
+    ? reportedNb
+    : Math.max(0, totalHours - billableHours);
+  const grandTotal = totalHours || (billableHours + nonBillable);
+
+  const wrapperStyle = {
+    background:   C.card,
+    border:       `1px solid ${C.border}`,
+    borderLeft:   `4px solid ${_NON_BILLABLE_ORANGE}`,
+    borderRadius: 12,
+    padding:      "18px 20px",
+  };
+  const headerStyle = {
+    fontSize:      13,
+    fontWeight:    700,
+    color:         C.pri,
+    margin:        0,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  };
+
+  if (loading) {
+    return (
+      <div style={wrapperStyle}>
+        <div style={headerStyle}>📊 Billable vs Non-Billable</div>
+        <div className="kpi-skeleton" style={{ height: 200, marginTop: 12 }} />
+      </div>
+    );
+  }
+
+  const chartData = [
+    { name: "Billable",     hours: Number(billableHours.toFixed(1)), fill: _BILLABLE_GREEN },
+    { name: "Non-Billable", hours: Number(nonBillable.toFixed(1)),   fill: _NON_BILLABLE_ORANGE },
+  ];
+
+  return (
+    <div style={wrapperStyle}>
+      <div
+        style={{
+          display:        "flex",
+          justifyContent: "space-between",
+          alignItems:     "center",
+          marginBottom:   14,
+          flexWrap:       "wrap",
+          gap:            8,
+        }}
+      >
+        <h3 style={headerStyle}>📊 Billable vs Non-Billable</h3>
+        <div
+          style={{
+            fontSize:   12,
+            color:      C.muted,
+            fontFamily: "'DM Mono', monospace",
+          }}
+        >
+          {grandTotal.toFixed(1)}h total
+        </div>
+      </div>
+
+      <ResponsiveContainer width="100%" height={220}>
+        <BarChart
+          data={chartData}
+          margin={{ top: 24, right: 16, bottom: 4, left: 4 }}
+          barCategoryGap="30%"
+        >
+          <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
+          <XAxis
+            dataKey="name"
+            tick={{ fill: C.sec, fontSize: 12, fontWeight: 600 }}
+            axisLine={false}
+            tickLine={false}
+          />
+          <YAxis
+            tick={{ fill: C.muted, fontSize: 10 }}
+            axisLine={false}
+            tickLine={false}
+            tickFormatter={(v) => `${v}h`}
+          />
+          <Tooltip
+            cursor={{ fill: "rgba(255,255,255,0.04)" }}
+            content={<DarkTooltip />}
+            formatter={(v, _name) => [`${Number(v).toFixed(1)}h`, ""]}
+          />
+          <Bar dataKey="hours" radius={[6, 6, 0, 0]} maxBarSize={120}>
+            {chartData.map((entry, i) => (
+              <Cell key={i} fill={entry.fill} />
+            ))}
+            <LabelList
+              dataKey="hours"
+              position="top"
+              formatter={(v) => `${Number(v).toFixed(1)}h`}
+              style={{ fill: C.pri, fontSize: 12, fontWeight: 700, fontFamily: "'DM Mono', monospace" }}
+            />
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 
 // Non-Billable Hours card — Penny's 2026-06-10 feedback, simplified per
 // her 2026-06-12 follow-up. ALWAYS renders. If the backend payload includes
@@ -553,7 +656,7 @@ ${lines.join("\n")}`;
         {/* KPIs */}
         {loading ? (
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-            {[1, 2, 3, 4].map((i) => (
+            {[1, 2, 3].map((i) => (
               <div key={i} className="kpi-skeleton" style={{ flex: "1 1 200px", minWidth: 180, height: 124, borderRadius: 12 }} />
             ))}
           </div>
@@ -562,7 +665,6 @@ ${lines.join("\n")}`;
             <KpiCard label="Total Hours"     value={data?.totalHours}     color={C.purple} />
             <KpiCard label="Billable Hours"  value={data?.billableHours}  color={C.teal} />
             <KpiCard label="Billable %"      value={data?.billablePct}    color={C.green} suffix="%" />
-            <KpiCard label="Utilization %"   value={data?.utilizationPct} color={utilColor(data?.utilizationPct ?? 0)} suffix="%" />
             <LastActivityCard
               activeNow={!!data?.activeNow}
               lastLoggedAt={data?.lastLoggedAt}
@@ -573,9 +675,13 @@ ${lines.join("\n")}`;
           </div>
         )}
 
-        {/* Non-Billable Hours — placed right after KPIs so an underutilized
-            employee's non-billable hours are visible without scrolling past
-            the fold. Always renders; falls back to a single "Non-Billable"
+        {/* Billable vs Non-Billable — side-by-side comparison. Replaces the
+            "Utilization %" KPI Penny removed 2026-06-12 — gives the same
+            ratio at a glance but with absolute hours, not a static target. */}
+        <BillableVsNonBillableCard data={data} loading={loading} />
+
+        {/* Non-Billable Hours — per-category breakdown of the orange bar
+            above. Always renders; falls back to a single "Non-Billable"
             bar from (Total - Billable) when the per-customer breakdown is
             absent (defensive — works against any payload shape). */}
         <SimpleNonBillableCard data={data} loading={loading} />
