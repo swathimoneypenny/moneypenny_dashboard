@@ -546,8 +546,11 @@ export default function ClientDashboard({ clientName, onBack, onContextUpdate, o
       };
     });
     const utilRate = summary.overallEfficiency ?? 0;
+    const targetCtx = summary.isProrated
+      ? `Target ${(summary.targetHours ?? 0).toFixed(1)}h (pro-rated · full month ${(summary.targetHoursFull ?? 0).toFixed(1)}h, day ${summary.workingDaysElapsed}/${summary.workingDaysTotal})`
+      : `Target ${(summary.targetHours ?? 0).toFixed(1)}h`;
     const ctx = `Client: ${clientName} — ${data.period ?? ""}
-Total: Committed ${summary.totalCommitted ?? "N/A"}h | Billable ${summary.totalBillable ?? 0}h | Non-Bill ${summary.totalNonBillable ?? 0}h | Util ${utilRate}%
+Total: ${targetCtx} | Billable ${summary.totalBillable ?? 0}h | Non-Bill ${summary.totalNonBillable ?? 0}h | Util ${utilRate}%
 
 STAFF DETAILS:
 ${Object.entries(staffObj).map(([name, v]) => {
@@ -610,9 +613,11 @@ ${Object.entries(staffObj).map(([name, v]) => {
       billable:    summary.totalBillable    ?? 0,
       nonBillable: summary.totalNonBillable ?? 0,
       total:       totalHours,
-      committed:   summary.totalCommitted   ?? 0,
+      // Use the pro-rated client target (estHrs scaled to working days
+      // elapsed), not the legacy totalCommitted which was just total hours.
+      target:      summary.targetHours      ?? 0,
     }),
-    [summary.totalBillable, summary.totalNonBillable, summary.totalCommitted, totalHours]
+    [summary.totalBillable, summary.totalNonBillable, summary.targetHours, totalHours]
   );
 
   const agingSummary   = data?.delaysAgeSummary ?? null;
@@ -878,6 +883,20 @@ ${Object.entries(staffObj).map(([name, v]) => {
             MoneyPenny LLC
           </div>
           <div style={{ fontSize: 11, color: C.muted }}>{periodLabel} · {today}</div>
+          {summary.isProrated && summary.workingDaysTotal > 0 && (
+            <div
+              style={{
+                fontSize: 10,
+                color: C.teal,
+                fontFamily: "'DM Mono', monospace",
+                marginTop: 2,
+                letterSpacing: 0.3,
+              }}
+              title={`Target pro-rated by working days elapsed (${summary.periodStart} → ${summary.periodEnd})`}
+            >
+              Day {summary.workingDaysElapsed}/{summary.workingDaysTotal} · target {(summary.targetHours ?? 0).toFixed(1)}h / {(summary.targetHoursFull ?? 0).toFixed(1)}h full
+            </div>
+          )}
         </div>
       </div>
 
@@ -890,7 +909,18 @@ ${Object.entries(staffObj).map(([name, v]) => {
           </div>
         ) : (
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-            <KpiCard label="Total Committed" value={summary.totalCommitted} color={C.blue} />
+            <KpiCard
+              label="Target Hours"
+              value={summary.targetHours}
+              color={C.blue}
+              sublabel={
+                summary.isProrated && summary.workingDaysTotal > 0
+                  ? `Day ${summary.workingDaysElapsed}/${summary.workingDaysTotal} · ${(summary.targetHoursFull ?? 0).toFixed(1)}h full`
+                  : (summary.targetHoursFull > 0 && summary.targetHoursFull !== summary.targetHours
+                      ? `${(summary.targetHoursFull ?? 0).toFixed(1)}h full`
+                      : "pro-rated to today")
+              }
+            />
             <KpiCard label="Total Billable"  value={summary.totalBillable}  color={C.teal} />
             <KpiCard label="Non-Billable" value={summary.totalNonBillable} color={C.orange} />
             <KpiCard label="Total Hours"  value={totalHours}                color={C.purple} />
@@ -1037,7 +1067,7 @@ ${Object.entries(staffObj).map(([name, v]) => {
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                 {[
-                  { label: "Committed",    value: hoursBreakdown.committed,   color: C.blue },
+                  { label: "Target",       value: hoursBreakdown.target,      color: C.blue },
                   { label: "Billable",     value: hoursBreakdown.billable,    color: C.teal },
                   { label: "Non-Billable", value: hoursBreakdown.nonBillable, color: C.orange },
                   { label: "Total Logged", value: hoursBreakdown.total,       color: C.purple },
@@ -1049,7 +1079,7 @@ ${Object.entries(staffObj).map(([name, v]) => {
                         <span style={{ color: C.sec }}>{label}</span>
                         <span style={{ color, fontFamily: "'DM Mono', monospace", fontWeight: 600 }}>
                           {value.toFixed(1)}h
-                          {label !== "Total Logged" && (
+                          {label !== "Total Logged" && label !== "Target" && (
                             <span style={{ color: C.muted, fontWeight: 400, marginLeft: 6 }}>
                               ({pct.toFixed(0)}%)
                             </span>
