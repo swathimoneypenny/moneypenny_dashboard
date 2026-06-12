@@ -5628,6 +5628,43 @@ def _build_employee_response(
     }
 
 
+@app.get("/api/team/{team_id}/employee/{employee_name}/custom")
+async def employee_custom_range(
+    team_id: str,
+    employee_name: str,
+    from_: str | None = Query(default=None, alias="from"),
+    to:    str | None = Query(default=None, alias="to"),
+):
+    """Per-employee custom date-range view. Mirrors /api/team/{id}/custom.
+    Pro-rated committed hours (16h/working day × range) applied via
+    _build_employee_response's custom_window kwarg."""
+    if not from_ or not to:
+        return {"error": "Both 'from' and 'to' query params are required (YYYY-MM-DD)."}
+    try:
+        start_d = datetime.strptime(from_[:10], "%Y-%m-%d")
+        end_d   = datetime.strptime(to[:10],    "%Y-%m-%d")
+    except ValueError:
+        return {"error": f"Invalid date(s). Use YYYY-MM-DD. Got from={from_!r}, to={to!r}."}
+    if end_d < start_d:
+        return {"error": f"'to' ({to}) must be on or after 'from' ({from_})."}
+    start = start_d.strftime("%Y-%m-%d")
+    end   = end_d.strftime("%Y-%m-%d")
+    same_year = (start_d.year == end_d.year)
+    label = (
+        f"{start_d.strftime('%b %d')} – {end_d.strftime('%b %d, %Y')}"
+        if same_year
+        else f"{start_d.strftime('%b %d, %Y')} – {end_d.strftime('%b %d, %Y')}"
+    )
+    t0 = time.perf_counter()
+    result = await asyncio.to_thread(
+        _build_employee_response, team_id, employee_name, "custom",
+        custom_window=(start, end, label),
+    )
+    print(f"[PERF] employee={employee_name} team={team_id} custom {start} -> {end} "
+          f"total={time.perf_counter()-t0:.2f}s rows={result.get('rowCount', 0)}")
+    return result
+
+
 @app.get("/api/team/{team_id}/employee/{employee_name}/{period}")
 async def employee_endpoint(team_id: str, employee_name: str, period: str):
     if period not in ("today", "weekly", "monthly"):
@@ -7267,6 +7304,36 @@ async def client_weekly(client_name: str):
 @app.get("/api/client/{client_name}/monthly")
 async def client_monthly(client_name: str):
     return await _client_data(client_name, "monthly")
+
+
+@app.get("/api/client/{client_name}/custom")
+async def client_custom_range(
+    client_name: str,
+    from_: str | None = Query(default=None, alias="from"),
+    to:    str | None = Query(default=None, alias="to"),
+):
+    """Per-client custom date-range view. Mirrors /api/team/{id}/custom.
+    Pro-rated target hours (estHrs scaled to the working days in the range)
+    flow through _client_data's custom_window kwarg.
+    """
+    if not from_ or not to:
+        return {"error": "Both 'from' and 'to' query params are required (YYYY-MM-DD)."}
+    try:
+        start_d = datetime.strptime(from_[:10], "%Y-%m-%d")
+        end_d   = datetime.strptime(to[:10],    "%Y-%m-%d")
+    except ValueError:
+        return {"error": f"Invalid date(s). Use YYYY-MM-DD. Got from={from_!r}, to={to!r}."}
+    if end_d < start_d:
+        return {"error": f"'to' ({to}) must be on or after 'from' ({from_})."}
+    start = start_d.strftime("%Y-%m-%d")
+    end   = end_d.strftime("%Y-%m-%d")
+    same_year = (start_d.year == end_d.year)
+    label = (
+        f"{start_d.strftime('%b %d')} – {end_d.strftime('%b %d, %Y')}"
+        if same_year
+        else f"{start_d.strftime('%b %d, %Y')} – {end_d.strftime('%b %d, %Y')}"
+    )
+    return await _client_data(client_name, "custom", custom_window=(start, end, label))
 
 
 _trend_cache: dict = {}

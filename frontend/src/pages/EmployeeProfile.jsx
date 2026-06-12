@@ -18,7 +18,17 @@ const PERIODS = [
   { key: "today",   label: "Today" },
   { key: "weekly",  label: "This Week" },
   { key: "monthly", label: "This Month" },
+  { key: "custom",  label: "📅 Custom Range" },
 ];
+
+// Default custom range = last 7 days ending today. Mirrors TeamDashboard.
+function _defaultCustomRange() {
+  const today = new Date();
+  const start = new Date(today);
+  start.setDate(today.getDate() - 6);
+  const fmt = (d) => d.toISOString().slice(0, 10);
+  return { from: fmt(start), to: fmt(today) };
+}
 
 function initials(name) {
   return (name ?? "?")
@@ -618,6 +628,8 @@ const today = new Date().toLocaleDateString("en-US", {
 
 export default function EmployeeProfile({ teamId, teamName, employeeName, onBack, onContextUpdate }) {
   const [period, setPeriod] = useState("monthly");
+  const [customRange, setCustomRange]   = useState(_defaultCustomRange);
+  const [pendingCustom, setPendingCustom] = useState(_defaultCustomRange);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [expandedRow, setExpandedRow] = useState(null);
@@ -630,11 +642,12 @@ export default function EmployeeProfile({ teamId, teamName, employeeName, onBack
     if (abortRef.current) abortRef.current.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    if (period === "custom" && (!customRange.from || !customRange.to)) return;
     if (!silent) setLoading(true);
-    authFetch(
-      `/api/team/${teamId}/employee/${encodeURIComponent(employeeName)}/${period}`,
-      { signal: ctrl.signal },
-    )
+    const url = period === "custom"
+      ? `/api/team/${teamId}/employee/${encodeURIComponent(employeeName)}/custom?from=${customRange.from}&to=${customRange.to}`
+      : `/api/team/${teamId}/employee/${encodeURIComponent(employeeName)}/${period}`;
+    authFetch(url, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
         if (ctrl.signal.aborted) return;
@@ -648,7 +661,7 @@ export default function EmployeeProfile({ teamId, teamName, employeeName, onBack
         setData({});
         if (!silent) setLoading(false);
       });
-  }, [teamId, employeeName, period]);
+  }, [teamId, employeeName, period, customRange.from, customRange.to]);
 
   const isLive = period === "today";
   const refreshSilent = useCallback(() => fetchData(true), [fetchData]);
@@ -709,7 +722,9 @@ ${lines.join("\n")}`;
     [data],
   );
 
-  const periodLabel = PERIODS.find((p) => p.key === period)?.label ?? "";
+  const periodLabel = period === "custom"
+    ? (data?.period || `${customRange.from} – ${customRange.to}`)
+    : (PERIODS.find((p) => p.key === period)?.label ?? "");
   const name        = data?.name ?? employeeName;
   const teamLabel   = data?.team_name ?? teamName;
 
@@ -823,7 +838,7 @@ ${lines.join("\n")}`;
                 fontSize: 12,
                 fontWeight: 600,
                 fontFamily: "'DM Sans', sans-serif",
-                background: period === p.key ? C.blue : "transparent",
+                background: period === p.key ? (p.key === "custom" ? "#F2895A" : C.blue) : "transparent",
                 color: period === p.key ? "#fff" : C.sec,
               }}
             >
@@ -831,6 +846,82 @@ ${lines.join("\n")}`;
             </button>
           ))}
         </div>
+
+        {period === "custom" && (
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              alignItems: "center",
+              background: C.card,
+              border: `1px solid ${C.border}`,
+              borderRadius: 8,
+              padding: "6px 10px",
+            }}
+          >
+            <input
+              type="date"
+              value={pendingCustom.from || ""}
+              max={pendingCustom.to || undefined}
+              onChange={(e) => setPendingCustom((p) => ({ ...p, from: e.target.value }))}
+              style={{
+                background: C.surface,
+                border: `1px solid ${C.border}`,
+                borderRadius: 4,
+                color: C.pri,
+                padding: "4px 8px",
+                fontSize: 12,
+                fontFamily: "'DM Mono', monospace",
+              }}
+            />
+            <span style={{ color: C.muted, fontSize: 11 }}>to</span>
+            <input
+              type="date"
+              value={pendingCustom.to || ""}
+              min={pendingCustom.from || undefined}
+              onChange={(e) => setPendingCustom((p) => ({ ...p, to: e.target.value }))}
+              style={{
+                background: C.surface,
+                border: `1px solid ${C.border}`,
+                borderRadius: 4,
+                color: C.pri,
+                padding: "4px 8px",
+                fontSize: 12,
+                fontFamily: "'DM Mono', monospace",
+              }}
+            />
+            <button
+              onClick={() => {
+                if (pendingCustom.from && pendingCustom.to && pendingCustom.from <= pendingCustom.to) {
+                  setCustomRange(pendingCustom);
+                }
+              }}
+              disabled={
+                !pendingCustom.from || !pendingCustom.to ||
+                pendingCustom.from > pendingCustom.to ||
+                (pendingCustom.from === customRange.from && pendingCustom.to === customRange.to)
+              }
+              style={{
+                background: "#F2895A",
+                border: "none",
+                color: "#fff",
+                padding: "5px 12px",
+                borderRadius: 4,
+                cursor: "pointer",
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: 0.4,
+                opacity:
+                  !pendingCustom.from || !pendingCustom.to ||
+                  pendingCustom.from > pendingCustom.to ||
+                  (pendingCustom.from === customRange.from && pendingCustom.to === customRange.to)
+                    ? 0.5 : 1,
+              }}
+            >
+              APPLY
+            </button>
+          </div>
+        )}
 
         <LiveIndicator
           lastRefreshed={lastRefreshed}
