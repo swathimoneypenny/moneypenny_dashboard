@@ -5272,6 +5272,12 @@ def _full_committed_for_period(period: str) -> float:
 # Used for custom-range targets where the period length isn't a fixed bucket.
 _PER_PREPARER_DAILY = 16.0
 
+# Per-employee daily quota used ONLY by the Individual Employee Dashboard
+# (_build_employee_response). Team-level + leaderboard + client paths still
+# default to _PER_PREPARER_DAILY = 16h, because those reflect the
+# 2-preparers-per-seat staffing model the org targets are sized against.
+_EMPLOYEE_DAILY_QUOTA = 8.0
+
 
 def get_employee_committed_hours(
     team_id: str,
@@ -5281,6 +5287,7 @@ def get_employee_committed_hours(
     period_start:   str | None = None,
     period_end:     str | None = None,
     as_of:          str | None = None,
+    daily_rate:     float | None = None,
 ) -> float:
     """Per-preparer target hours for the period.
 
@@ -5292,19 +5299,27 @@ def get_employee_committed_hours(
     For period="custom", caller must pass period_start + period_end. Full
     target = 16h/working-day × working_days_in_range; pro-rated by elapsed.
 
+    daily_rate: when supplied, the full target is computed as
+    daily_rate × working_days_in_period for EVERY period (today, weekly,
+    monthly, custom) — bypassing the hard-coded 16/80/320 table. Used by
+    the Individual Employee Dashboard to apply the 8h/day employee quota
+    while team-level callers keep the 16h-derived bucket totals.
+
     team_id is accepted for signature compatibility but not used — the target
     is uniform across teams.
 
-    "today" is never pro-rated (1-day period; 16h is the full-day target).
+    "today" is never pro-rated (1-day period; full-day target).
     """
-    if period == "custom":
-        if not period_start or not period_end:
+    if not period_start or not period_end:
+        if period == "custom":
             return 0.0
+        period_start, period_end = full_period_range_for_period(period)
+    if daily_rate is not None:
+        full = daily_rate * _working_days_between(period_start, period_end)
+    elif period == "custom":
         full = _PER_PREPARER_DAILY * _working_days_between(period_start, period_end)
     else:
         full = _full_committed_for_period(period)
-        if not period_start or not period_end:
-            period_start, period_end = full_period_range_for_period(period)
     if not prorate or period == "today":
         return round(full, 1)
     return _pro_rate_committed_hours(full, period_start, period_end, as_of)
@@ -5438,13 +5453,18 @@ def _build_employee_response(
     nonbill_h   = total_h - billable_h
     bill_pct    = round(billable_h / total_h * 100, 1) if total_h > 0 else 0.0
 
+    # Individual Employee Dashboard uses an 8h/working-day quota — overrides
+    # the team-level 16h-derived bucket totals so the target reflects what
+    # one person can plausibly book in a day, not the per-seat staffing model.
     committed = get_employee_committed_hours(
         team_id, period,
         period_start=full_start, period_end=full_end, as_of=today_iso,
+        daily_rate=_EMPLOYEE_DAILY_QUOTA,
     )
     committed_full = get_employee_committed_hours(
         team_id, period,
         prorate=False, period_start=full_start, period_end=full_end,
+        daily_rate=_EMPLOYEE_DAILY_QUOTA,
     )
     util_pct  = round(billable_h / committed * 100, 1) if committed > 0 else 0.0
 
