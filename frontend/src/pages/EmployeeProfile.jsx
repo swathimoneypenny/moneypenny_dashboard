@@ -160,11 +160,12 @@ function ChartCard({ title, children }) {
   );
 }
 
-// Non-Billable Breakdown — Penny's 2026-06-10 feedback. Buckets non-billable
-// hours by the raw `customer` field (Training, Admin, BREAKS FOR TEAMS, SNMP,
-// Choose Customer, Internal, etc.) so the TL can see what's eating
-// non-billable time. Placed directly under the KPI row — *before* Daily
-// Hours — so it can't be missed when scanning an underutilized employee.
+// Non-Billable Hours card — Penny's 2026-06-10 feedback, simplified per
+// her 2026-06-12 follow-up. ALWAYS renders. If the backend payload includes
+// nonBillableBreakdown (one bar per customer category), use it. Otherwise
+// fall back to a single "Non-Billable" bar computed as (totalHours -
+// billableHours) so the card is never blank for an employee with non-billable
+// time, even before any sheet-level breakdown data has rolled in.
 const _NB_PALETTE = [
   "#F2895A",  // orange (matches the team-level non-billable color)
   "#F0B947",  // yellow
@@ -175,97 +176,124 @@ const _NB_PALETTE = [
   "#6B7A95",  // muted slate
 ];
 
-function NonBillableBreakdownChart({ breakdown, totalHours, loading }) {
-  const list = Array.isArray(breakdown) ? breakdown : [];
-  const total = Number.isFinite(totalHours)
-    ? totalHours
-    : list.reduce((s, x) => s + (Number(x?.hours) || 0), 0);
+function SimpleNonBillableCard({ data, loading }) {
+  const totalHours    = Number(data?.totalHours    ?? data?.total_hours    ?? 0) || 0;
+  const billableHours = Number(data?.billableHours ?? data?.billable_hours ?? 0) || 0;
+  const reportedNb    = Number(data?.nonBillableHours ?? data?.non_billable_hours ?? NaN);
+  const derivedNb     = Math.max(0, totalHours - billableHours);
+  const nonBillable   = Number.isFinite(reportedNb) ? reportedNb : derivedNb;
+
+  const breakdown = Array.isArray(data?.nonBillableBreakdown)
+    ? data.nonBillableBreakdown
+    : Array.isArray(data?.non_billable_breakdown)
+      ? data.non_billable_breakdown
+      : [];
+
+  // Fall back to a single "Non-Billable" bar if no per-customer breakdown.
+  const chartData = breakdown.length > 0
+    ? breakdown.map((b) => ({ category: b.category, hours: Number(b.hours) || 0 }))
+    : [{ category: "Non-Billable", hours: nonBillable }];
+
+  const wrapperStyle = {
+    background:   C.card,
+    border:       `1px solid ${C.border}`,
+    borderLeft:   `4px solid #F2895A`,
+    borderRadius: 12,
+    padding:      "18px 20px",
+  };
+  const headerStyle = {
+    fontSize:       13,
+    fontWeight:     700,
+    color:          C.pri,
+    margin:         0,
+    textTransform:  "uppercase",
+    letterSpacing:  0.5,
+  };
+
+  if (loading) {
+    return (
+      <div style={wrapperStyle}>
+        <div style={headerStyle}>📊 Non-Billable Hours</div>
+        <div className="kpi-skeleton" style={{ height: 140, marginTop: 12 }} />
+      </div>
+    );
+  }
+
+  if (nonBillable <= 0 && breakdown.length === 0) {
+    return (
+      <div style={wrapperStyle}>
+        <div style={headerStyle}>📊 Non-Billable Hours</div>
+        <div style={{ color: C.muted, fontSize: 12, marginTop: 8, fontStyle: "italic" }}>
+          No non-billable hours logged this period.
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div
-      style={{
-        background: C.card,
-        border: `1px solid ${C.border}`,
-        borderLeft: `3px solid ${C.orange}`,
-        borderRadius: 12,
-        padding: "20px 16px",
-      }}
-    >
+    <div style={wrapperStyle}>
       <div
         style={{
-          display: "flex",
+          display:        "flex",
           justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 12,
-          flexWrap: "wrap",
-          gap: 8,
+          alignItems:     "center",
+          marginBottom:   14,
+          flexWrap:       "wrap",
+          gap:            8,
         }}
       >
-        <div style={{ fontSize: 13, fontWeight: 700, color: C.pri }}>
-          📊 Non-Billable Breakdown
-        </div>
-        <div style={{ fontSize: 11, color: C.muted, fontFamily: "'DM Mono', monospace" }}>
-          Total: {(total || 0).toFixed(1)}h
+        <h3 style={headerStyle}>📊 Non-Billable Hours</h3>
+        <div
+          style={{
+            fontSize:   13,
+            fontWeight: 700,
+            color:      "#F2895A",
+            fontFamily: "'DM Mono', monospace",
+          }}
+        >
+          {nonBillable.toFixed(1)}h
         </div>
       </div>
 
-      {loading ? (
-        <div className="kpi-skeleton" style={{ height: 200 }} />
-      ) : list.length === 0 ? (
-        <div
-          style={{
-            height: 80,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: C.muted,
-            fontSize: 13,
-            fontStyle: "italic",
-          }}
+      <ResponsiveContainer width="100%" height={Math.max(140, chartData.length * 38)}>
+        <BarChart
+          data={chartData}
+          layout="vertical"
+          margin={{ top: 4, right: 60, bottom: 4, left: 4 }}
         >
-          No non-billable hours logged this period.
-        </div>
-      ) : (
-        <ResponsiveContainer width="100%" height={Math.max(180, list.length * 38)}>
-          <BarChart
-            data={list.map((b) => ({ category: b.category, hours: b.hours }))}
-            layout="vertical"
-            margin={{ top: 4, right: 56, left: 4, bottom: 4 }}
-          >
-            <CartesianGrid stroke={C.border} strokeDasharray="3 3" horizontal={false} />
-            <XAxis
-              type="number"
-              tick={{ fill: C.muted, fontSize: 10 }}
-              axisLine={false}
-              tickLine={false}
+          <CartesianGrid stroke={C.border} strokeDasharray="3 3" horizontal={false} />
+          <XAxis
+            type="number"
+            tick={{ fill: C.muted, fontSize: 10 }}
+            axisLine={false}
+            tickLine={false}
+          />
+          <YAxis
+            type="category"
+            dataKey="category"
+            tick={{ fill: C.sec, fontSize: 11 }}
+            axisLine={false}
+            tickLine={false}
+            width={140}
+          />
+          <Tooltip
+            cursor={{ fill: "rgba(255,255,255,0.04)" }}
+            content={<DarkTooltip />}
+            formatter={(v) => [`${Number(v).toFixed(1)}h`, "Non-billable"]}
+          />
+          <Bar dataKey="hours" radius={[0, 4, 4, 0]} maxBarSize={22}>
+            {chartData.map((_, i) => (
+              <Cell key={i} fill={_NB_PALETTE[i % _NB_PALETTE.length]} />
+            ))}
+            <LabelList
+              dataKey="hours"
+              position="right"
+              formatter={(v) => `${Number(v).toFixed(1)}h`}
+              style={{ fill: C.sec, fontSize: 11, fontFamily: "'DM Mono', monospace" }}
             />
-            <YAxis
-              type="category"
-              dataKey="category"
-              tick={{ fill: C.sec, fontSize: 11 }}
-              axisLine={false}
-              tickLine={false}
-              width={140}
-            />
-            <Tooltip
-              cursor={{ fill: "rgba(255,255,255,0.04)" }}
-              content={<DarkTooltip />}
-              formatter={(v) => [`${Number(v).toFixed(1)}h`, "Non-billable"]}
-            />
-            <Bar dataKey="hours" radius={[0, 4, 4, 0]} maxBarSize={24}>
-              {list.map((_, i) => (
-                <Cell key={i} fill={_NB_PALETTE[i % _NB_PALETTE.length]} />
-              ))}
-              <LabelList
-                dataKey="hours"
-                position="right"
-                formatter={(v) => `${Number(v).toFixed(1)}h`}
-                style={{ fill: C.pri, fontSize: 11 }}
-              />
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      )}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
     </div>
   );
 }
@@ -545,14 +573,12 @@ ${lines.join("\n")}`;
           </div>
         )}
 
-        {/* Non-Billable Breakdown — placed right after KPIs so an
-            underutilized employee's non-billable categories are visible
-            without scrolling past the fold. */}
-        <NonBillableBreakdownChart
-          breakdown={data?.nonBillableBreakdown}
-          totalHours={data?.nonBillableHours}
-          loading={loading}
-        />
+        {/* Non-Billable Hours — placed right after KPIs so an underutilized
+            employee's non-billable hours are visible without scrolling past
+            the fold. Always renders; falls back to a single "Non-Billable"
+            bar from (Total - Billable) when the per-customer breakdown is
+            absent (defensive — works against any payload shape). */}
+        <SimpleNonBillableCard data={data} loading={loading} />
 
         {/* Daily Hours chart */}
         <ChartCard title="Daily Hours">
