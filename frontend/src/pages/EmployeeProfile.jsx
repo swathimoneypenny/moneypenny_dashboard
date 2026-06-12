@@ -689,39 +689,6 @@ ${lines.join("\n")}`;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
 
-  const dailyChart = useMemo(() => {
-    const dh = data?.dailyHours ?? [];
-    return dh.map((d) => {
-      const date = String(d.date ?? "");
-      const day  = date.length >= 10 ? Number(date.slice(8, 10)) : "";
-      return {
-        date: String(day || date.slice(-2) || ""),
-        Billable: Number(d.billable) || 0,
-        NonBillable: Number(d.nonBillable) || 0,
-      };
-    });
-  }, [data]);
-
-  const dailyChartHasData = useMemo(
-    () => dailyChart.some((d) => (d.Billable ?? 0) > 0 || (d.NonBillable ?? 0) > 0),
-    [dailyChart],
-  );
-
-  const topClientsChart = useMemo(
-    () => (data?.topClients ?? [])
-      .slice()
-      .sort((a, b) => (Number(b.hours) || 0) - (Number(a.hours) || 0))
-      .slice(0, 5)
-      .map((c) => {
-        const hours    = Number(c.hours) || 0;
-        const billable = Number(c.billable) || 0;
-        const ratio    = hours > 0 ? billable / hours : 0;
-        const color    = ratio >= 0.95 ? C.green : ratio >= 0.75 ? C.orange : C.red;
-        return { name: c.client, Hours: Number(hours.toFixed(1)), color };
-      }),
-    [data],
-  );
-
   const periodLabel = period === "custom"
     ? (data?.period || `${customRange.from} – ${customRange.to}`)
     : (PERIODS.find((p) => p.key === period)?.label ?? "");
@@ -997,71 +964,6 @@ ${lines.join("\n")}`;
             absent (defensive — works against any payload shape). */}
         <SimpleNonBillableCard data={data} loading={loading} />
 
-        {/* Daily Hours chart */}
-        <ChartCard title="Daily Hours">
-          {loading ? (
-            <div className="kpi-skeleton" style={{ height: 260 }} />
-          ) : !dailyChartHasData ? (
-            <div style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic", textAlign: "center", padding: 16 }}>
-              {(data?.totalHours ?? 0) > 0
-                ? "Chart unavailable — entries logged this period have no date."
-                : "No data for this period."}
-            </div>
-          ) : (
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={dailyChart} margin={{ top: 4, right: 8, left: -18, bottom: 36 }}>
-                <CartesianGrid vertical={false} stroke={C.border} strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="date"
-                  tick={{ fill: C.muted, fontSize: 10 }}
-                  axisLine={false}
-                  tickLine={false}
-                  interval={0}
-                  angle={-45}
-                  textAnchor="end"
-                  height={50}
-                />
-                <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
-                <Tooltip content={<DarkTooltip />} />
-                <Legend wrapperStyle={{ fontSize: 11, color: C.sec }} />
-                <Bar dataKey="Billable"    stackId="a" fill={C.teal}   radius={[0, 0, 0, 0]} />
-                <Bar dataKey="NonBillable" stackId="a" fill={C.orange} radius={[4, 4, 0, 0]} name="Non-Billable" />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </ChartCard>
-
-        {/* Top Clients chart */}
-        <ChartCard title="Top Clients">
-          {loading ? (
-            <div className="kpi-skeleton" style={{ height: 200 }} />
-          ) : topClientsChart.length === 0 ? (
-            <div style={{ height: 200, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic" }}>
-              No client hours yet.
-            </div>
-          ) : (
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={topClientsChart} layout="vertical" margin={{ top: 4, right: 56, left: 4, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={C.border} horizontal={false} />
-                <XAxis type="number" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis dataKey="name" type="category" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} width={140} />
-                <Tooltip content={<DarkTooltip />} />
-                <Bar dataKey="Hours" radius={[0, 4, 4, 0]} barSize={28}>
-                  {topClientsChart.map((entry, i) => (
-                    <Cell key={i} fill={entry.color} />
-                  ))}
-                  <LabelList
-                    dataKey="Hours"
-                    position="right"
-                    formatter={(v) => `${Number(v).toFixed(1)}h`}
-                    style={{ fill: C.pri, fontSize: 11 }}
-                  />
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </ChartCard>
-
         {/* Recent Work */}
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: C.sec, marginBottom: 16 }}>
@@ -1078,7 +980,7 @@ ${lines.join("\n")}`;
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
                   <tr>
-                    {["Date", "Client", "Hours", "Billable", "Description"].map((h) => (
+                    {["Date", "Client", "Service Title", "Hours", "Billable", "Description"].map((h) => (
                       <th
                         key={h}
                         style={{
@@ -1116,6 +1018,21 @@ ${lines.join("\n")}`;
                         </td>
                         <td style={{ padding: "10px 14px", fontSize: 12, color: C.pri, borderBottom: `1px solid ${C.border}40` }}>
                           {r.client}
+                        </td>
+                        <td
+                          title={r.project || ""}
+                          style={{
+                            padding: "10px 14px",
+                            fontSize: 11,
+                            color: C.muted,
+                            borderBottom: `1px solid ${C.border}40`,
+                            maxWidth: 160,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {r.project || "—"}
                         </td>
                         <td style={{ padding: "10px 14px", fontSize: 12, color: C.teal, fontFamily: "'DM Mono', monospace", textAlign: "right", borderBottom: `1px solid ${C.border}40` }}>
                           {Number(r.hours ?? 0).toFixed(1)}
