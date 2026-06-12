@@ -113,7 +113,236 @@ function ChartCard({ title, children }) {
 const _BILLABLE_GREEN  = "#3DC58B";
 const _NON_BILLABLE_ORANGE = "#F2895A";
 
-function BillableVsNonBillableCard({ data, loading }) {
+
+// Drill-down modal opened by clicking a bar in the Billable vs Non-Billable
+// chart. Aggregates the employee's allEntries by project (≈ "service item")
+// and by client, plus lists every entry. Closes on overlay click, X button,
+// or Escape. Penny's 2026-06-12 spec.
+function BreakdownModal({ open, type, data, onClose }) {
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") onClose && onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  const isBillable = type === "billable";
+  const accent     = isBillable ? _BILLABLE_GREEN : _NON_BILLABLE_ORANGE;
+  const title      = isBillable ? "📊 Billable Breakdown" : "📊 Non-Billable Breakdown";
+
+  // Pull from allEntries (full set) when present so totals match the chart
+  // bars exactly; fall back to recentWork (top 30) for back-compat with any
+  // cached response in flight.
+  const source = Array.isArray(data?.allEntries) && data.allEntries.length > 0
+    ? data.allEntries
+    : (data?.recentWork ?? []);
+  const filtered = source.filter((r) => !!r.billable === isBillable);
+
+  // The chart's authoritative totals — show these so the modal header matches
+  // the bar height the user just clicked.
+  const headerTotal = isBillable
+    ? Number(data?.billableHours ?? 0)
+    : Number(data?.nonBillableHours ?? Math.max(0, (data?.totalHours ?? 0) - (data?.billableHours ?? 0)));
+
+  // Aggregate by project (closest field to "service item") and by client.
+  const byProject = new Map();
+  const byClient  = new Map();
+  for (const r of filtered) {
+    const h   = Number(r.hours) || 0;
+    if (h <= 0) continue;
+    const proj   = (r.project || "").trim() || "(no project)";
+    const client = (r.client  || "").trim() || "(no client)";
+    byProject.set(proj,   (byProject.get(proj)   || 0) + h);
+    byClient.set(client,  (byClient.get(client)  || 0) + h);
+  }
+  const projectList = [...byProject.entries()]
+    .map(([name, hours]) => ({ name, hours: Number(hours.toFixed(1)) }))
+    .sort((a, b) => b.hours - a.hours);
+  const clientList = [...byClient.entries()]
+    .map(([name, hours]) => ({ name, hours: Number(hours.toFixed(1)) }))
+    .sort((a, b) => b.hours - a.hours);
+
+  const sectionHeader = {
+    fontSize:       11,
+    fontWeight:     700,
+    color:          C.muted,
+    textTransform:  "uppercase",
+    letterSpacing:  0.6,
+    marginBottom:   10,
+  };
+  const row = {
+    display:        "flex",
+    justifyContent: "space-between",
+    alignItems:     "center",
+    padding:        "8px 12px",
+    background:     C.card,
+    borderRadius:   6,
+    gap:            12,
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position:       "fixed",
+        inset:          0,
+        background:     "rgba(0,0,0,0.65)",
+        zIndex:         1000,
+        display:        "flex",
+        alignItems:     "center",
+        justifyContent: "center",
+        padding:        20,
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background:   C.surface,
+          border:       `1px solid ${C.border}`,
+          borderLeft:   `4px solid ${accent}`,
+          borderRadius: 12,
+          width:        "100%",
+          maxWidth:     720,
+          maxHeight:    "85vh",
+          overflowY:    "auto",
+          padding:      24,
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          style={{
+            display:        "flex",
+            justifyContent: "space-between",
+            alignItems:     "flex-start",
+            marginBottom:   20,
+            gap:            12,
+          }}
+        >
+          <div>
+            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: C.pri }}>{title}</h2>
+            <div
+              style={{
+                fontSize:   12,
+                color:      C.muted,
+                marginTop:  4,
+                fontFamily: "'DM Mono', monospace",
+              }}
+            >
+              {headerTotal.toFixed(1)}h total · {filtered.length} entr{filtered.length === 1 ? "y" : "ies"}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background:   "transparent",
+              border:       `1px solid ${C.border}`,
+              color:        C.sec,
+              padding:      "4px 12px",
+              borderRadius: 6,
+              cursor:       "pointer",
+              fontSize:     12,
+              fontFamily:   "'DM Sans', sans-serif",
+            }}
+            aria-label="Close"
+          >
+            ✕ Close
+          </button>
+        </div>
+
+        {filtered.length === 0 ? (
+          <div style={{ color: C.muted, fontStyle: "italic", fontSize: 13, padding: "20px 0", textAlign: "center" }}>
+            No {isBillable ? "billable" : "non-billable"} entries this period.
+          </div>
+        ) : (
+          <>
+            <div style={{ marginBottom: 22 }}>
+              <div style={sectionHeader}>By Service Item / Project</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {projectList.map((s, i) => (
+                  <div key={i} style={row}>
+                    <span style={{ color: C.pri, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {s.name}
+                    </span>
+                    <span style={{ color: accent, fontWeight: 700, fontFamily: "'DM Mono', monospace", whiteSpace: "nowrap" }}>
+                      {s.hours}h
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 22 }}>
+              <div style={sectionHeader}>By Client</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {clientList.map((c, i) => (
+                  <div key={i} style={row}>
+                    <span style={{ color: C.pri, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {c.name}
+                    </span>
+                    <span style={{ color: accent, fontWeight: 700, fontFamily: "'DM Mono', monospace", whiteSpace: "nowrap" }}>
+                      {c.hours}h
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div style={sectionHeader}>All Entries ({filtered.length})</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {filtered.map((r, i) => (
+                  <div key={i} style={{ ...row, alignItems: "flex-start" }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ color: C.pri, fontSize: 12, fontWeight: 600 }}>
+                        {r.client || "(no client)"}
+                        {r.project ? (
+                          <span style={{ color: C.muted, fontWeight: 400, marginLeft: 6 }}>
+                            · {r.project}
+                          </span>
+                        ) : null}
+                      </div>
+                      {r.desc && (
+                        <div
+                          style={{
+                            color:          C.muted,
+                            fontSize:       11,
+                            marginTop:      2,
+                            overflow:       "hidden",
+                            textOverflow:   "ellipsis",
+                            whiteSpace:     "nowrap",
+                            fontStyle:      "italic",
+                          }}
+                          title={r.desc}
+                        >
+                          {r.desc}
+                        </div>
+                      )}
+                    </div>
+                    <div
+                      style={{
+                        color:      accent,
+                        fontWeight: 700,
+                        fontFamily: "'DM Mono', monospace",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {Number(r.hours).toFixed(1)}h
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BillableVsNonBillableCard({ data, loading, onBarClick }) {
   const totalHours    = Number(data?.totalHours    ?? data?.total_hours    ?? 0) || 0;
   const billableHours = Number(data?.billableHours ?? data?.billable_hours ?? 0) || 0;
   const reportedNb    = Number(data?.nonBillableHours ?? data?.non_billable_hours ?? NaN);
@@ -181,6 +410,17 @@ function BillableVsNonBillableCard({ data, loading }) {
           data={chartData}
           margin={{ top: 24, right: 16, bottom: 4, left: 4 }}
           barCategoryGap="30%"
+          onClick={(e) => {
+            // Recharts onClick fires for clicks anywhere in the chart and
+            // exposes the activePayload[].payload of the bar that was hit.
+            // Using the chart-level handler is more reliable than per-Bar
+            // onClick (which only fires on the colored segment, not the
+            // background of the category column).
+            const p = e?.activePayload?.[0]?.payload;
+            if (!p || !onBarClick) return;
+            onBarClick(p.name === "Billable" ? "billable" : "non-billable");
+          }}
+          style={{ cursor: onBarClick ? "pointer" : "default" }}
         >
           <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
           <XAxis
@@ -213,6 +453,20 @@ function BillableVsNonBillableCard({ data, loading }) {
           </Bar>
         </BarChart>
       </ResponsiveContainer>
+      {onBarClick && (
+        <div
+          style={{
+            fontSize: 10,
+            color: C.muted,
+            textAlign: "center",
+            marginTop: 6,
+            letterSpacing: 0.3,
+            fontStyle: "italic",
+          }}
+        >
+          Click a bar for the per-client / per-project breakdown
+        </div>
+      )}
     </div>
   );
 }
@@ -367,6 +621,7 @@ export default function EmployeeProfile({ teamId, teamName, employeeName, onBack
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [expandedRow, setExpandedRow] = useState(null);
+  const [breakdownModal, setBreakdownModal] = useState({ open: false, type: null });
   const abortRef = useRef(null);
 
   const [lastRefreshed, setLastRefreshed] = useState(null);
@@ -639,7 +894,11 @@ ${lines.join("\n")}`;
         {/* Billable vs Non-Billable — side-by-side comparison. Replaces the
             "Utilization %" KPI Penny removed 2026-06-12 — gives the same
             ratio at a glance but with absolute hours, not a static target. */}
-        <BillableVsNonBillableCard data={data} loading={loading} />
+        <BillableVsNonBillableCard
+          data={data}
+          loading={loading}
+          onBarClick={(type) => setBreakdownModal({ open: true, type })}
+        />
 
         {/* Non-Billable Hours — per-category breakdown of the orange bar
             above. Always renders; falls back to a single "Non-Billable"
@@ -802,6 +1061,12 @@ ${lines.join("\n")}`;
           )}
         </div>
       </div>
+      <BreakdownModal
+        open={breakdownModal.open}
+        type={breakdownModal.type}
+        data={data}
+        onClose={() => setBreakdownModal({ open: false, type: null })}
+      />
     </div>
   );
 }

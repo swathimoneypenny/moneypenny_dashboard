@@ -5211,6 +5211,23 @@ def _build_employee_response(
         for r in recent
     ]
 
+    # All entries — same shape as recent_out but every matched row, used by
+    # the Billable / Non-Billable drill-down modal so its aggregations match
+    # the chart bars exactly (not just the 30 most recent). Stripped down to
+    # the columns the modal needs.
+    all_entries_sorted = sorted(emp_rows, key=_row_date_key, reverse=True)
+    all_entries_out = [
+        {
+            "date":     (r.get("date") or "")[:10],
+            "client":   r.get("customer") or "",
+            "project":  r.get("project") or "",
+            "hours":    round(float(r.get("hours") or 0), 1),
+            "desc":     (r.get("desc") or "").strip(),
+            "billable": bool(r.get("billable")),
+        }
+        for r in all_entries_sorted
+    ]
+
     # Daily hours — fill every day in the period. Rows whose date can't be
     # normalized still count toward total hours, but can't be placed on a
     # specific day — they're tracked in undated_hours for the [employee] log.
@@ -5294,6 +5311,7 @@ def _build_employee_response(
         "utilizationPct":        util_pct,
         "topClients":            top_clients,
         "recentWork":            recent_out,
+        "allEntries":            all_entries_out,
         "dailyHours":            daily_out,
         "rowCount":              len(emp_rows),
         "lastLoggedAt":          last_lc,
