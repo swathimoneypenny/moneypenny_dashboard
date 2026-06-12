@@ -160,6 +160,116 @@ function ChartCard({ title, children }) {
   );
 }
 
+// Non-Billable Breakdown — Penny's 2026-06-10 feedback. Buckets non-billable
+// hours by the raw `customer` field (Training, Admin, BREAKS FOR TEAMS, SNMP,
+// Choose Customer, Internal, etc.) so the TL can see what's eating
+// non-billable time. Placed directly under the KPI row — *before* Daily
+// Hours — so it can't be missed when scanning an underutilized employee.
+const _NB_PALETTE = [
+  "#F2895A",  // orange (matches the team-level non-billable color)
+  "#F0B947",  // yellow
+  "#9B7EE8",  // purple
+  "#4A8FE7",  // blue
+  "#3DC58B",  // green
+  "#E25C5C",  // red
+  "#6B7A95",  // muted slate
+];
+
+function NonBillableBreakdownChart({ breakdown, totalHours, loading }) {
+  const list = Array.isArray(breakdown) ? breakdown : [];
+  const total = Number.isFinite(totalHours)
+    ? totalHours
+    : list.reduce((s, x) => s + (Number(x?.hours) || 0), 0);
+
+  return (
+    <div
+      style={{
+        background: C.card,
+        border: `1px solid ${C.border}`,
+        borderLeft: `3px solid ${C.orange}`,
+        borderRadius: 12,
+        padding: "20px 16px",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 12,
+          flexWrap: "wrap",
+          gap: 8,
+        }}
+      >
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.pri }}>
+          📊 Non-Billable Breakdown
+        </div>
+        <div style={{ fontSize: 11, color: C.muted, fontFamily: "'DM Mono', monospace" }}>
+          Total: {(total || 0).toFixed(1)}h
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="kpi-skeleton" style={{ height: 200 }} />
+      ) : list.length === 0 ? (
+        <div
+          style={{
+            height: 80,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: C.muted,
+            fontSize: 13,
+            fontStyle: "italic",
+          }}
+        >
+          No non-billable hours logged this period.
+        </div>
+      ) : (
+        <ResponsiveContainer width="100%" height={Math.max(180, list.length * 38)}>
+          <BarChart
+            data={list.map((b) => ({ category: b.category, hours: b.hours }))}
+            layout="vertical"
+            margin={{ top: 4, right: 56, left: 4, bottom: 4 }}
+          >
+            <CartesianGrid stroke={C.border} strokeDasharray="3 3" horizontal={false} />
+            <XAxis
+              type="number"
+              tick={{ fill: C.muted, fontSize: 10 }}
+              axisLine={false}
+              tickLine={false}
+            />
+            <YAxis
+              type="category"
+              dataKey="category"
+              tick={{ fill: C.sec, fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+              width={140}
+            />
+            <Tooltip
+              cursor={{ fill: "rgba(255,255,255,0.04)" }}
+              content={<DarkTooltip />}
+              formatter={(v) => [`${Number(v).toFixed(1)}h`, "Non-billable"]}
+            />
+            <Bar dataKey="hours" radius={[0, 4, 4, 0]} maxBarSize={24}>
+              {list.map((_, i) => (
+                <Cell key={i} fill={_NB_PALETTE[i % _NB_PALETTE.length]} />
+              ))}
+              <LabelList
+                dataKey="hours"
+                position="right"
+                formatter={(v) => `${Number(v).toFixed(1)}h`}
+                style={{ fill: C.pri, fontSize: 11 }}
+              />
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      )}
+    </div>
+  );
+}
+
 const today = new Date().toLocaleDateString("en-US", {
   year: "numeric",
   month: "short",
@@ -435,6 +545,15 @@ ${lines.join("\n")}`;
           </div>
         )}
 
+        {/* Non-Billable Breakdown — placed right after KPIs so an
+            underutilized employee's non-billable categories are visible
+            without scrolling past the fold. */}
+        <NonBillableBreakdownChart
+          breakdown={data?.nonBillableBreakdown}
+          totalHours={data?.nonBillableHours}
+          loading={loading}
+        />
+
         {/* Daily Hours chart */}
         <ChartCard title="Daily Hours">
           {loading ? (
@@ -464,53 +583,6 @@ ${lines.join("\n")}`;
                 <Legend wrapperStyle={{ fontSize: 11, color: C.sec }} />
                 <Bar dataKey="Billable"    stackId="a" fill={C.teal}   radius={[0, 0, 0, 0]} />
                 <Bar dataKey="NonBillable" stackId="a" fill={C.orange} radius={[4, 4, 0, 0]} name="Non-Billable" />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </ChartCard>
-
-        {/* Non-Billable Breakdown — Penny's 2026-06-10 feedback. Buckets
-            non-billable hours by the source `customer` field (Training,
-            Admin, BREAKS FOR TEAMS, SNMP, Choose Customer, Internal, etc.)
-            so the TL can see what's eating non-billable time. */}
-        <ChartCard
-          title={`Non-Billable Breakdown · ${(data?.nonBillableHours ?? 0).toFixed(1)}h`}
-        >
-          {loading ? (
-            <div className="kpi-skeleton" style={{ height: 200 }} />
-          ) : (data?.nonBillableBreakdown?.length ?? 0) === 0 ? (
-            <div style={{ height: 200, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic" }}>
-              No non-billable hours this period.
-            </div>
-          ) : (
-            <ResponsiveContainer width="100%" height={Math.max(200, 36 * (data?.nonBillableBreakdown?.length ?? 0))}>
-              <BarChart
-                data={data.nonBillableBreakdown.map((b) => ({
-                  category: b.category,
-                  Hours:    b.hours,
-                }))}
-                layout="vertical"
-                margin={{ top: 4, right: 56, left: 4, bottom: 4 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" stroke={C.border} horizontal={false} />
-                <XAxis type="number" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis
-                  dataKey="category"
-                  type="category"
-                  tick={{ fill: C.muted, fontSize: 11 }}
-                  axisLine={false}
-                  tickLine={false}
-                  width={140}
-                />
-                <Tooltip content={<DarkTooltip />} />
-                <Bar dataKey="Hours" fill={C.orange} radius={[0, 4, 4, 0]} barSize={22}>
-                  <LabelList
-                    dataKey="Hours"
-                    position="right"
-                    formatter={(v) => `${Number(v).toFixed(1)}h`}
-                    style={{ fill: C.pri, fontSize: 11 }}
-                  />
-                </Bar>
               </BarChart>
             </ResponsiveContainer>
           )}
