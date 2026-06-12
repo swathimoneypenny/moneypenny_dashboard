@@ -1017,16 +1017,15 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
   // Leaderboard for the active period (drives Team Members table).
   useEffect(() => {
     if (period === "review") return;
-    if (period === "custom") {
-      // No leaderboard endpoint for arbitrary windows — fall back to the
-      // monthly leaderboard so the Team Members table still renders names.
-    }
+    if (period === "custom" && (!customRange.from || !customRange.to)) return;
     if (lbAbortRef.current) lbAbortRef.current.abort();
     const ctrl = new AbortController();
     lbAbortRef.current = ctrl;
     setLeaderboard(null);
-    const lbPeriod = period === "custom" ? "monthly" : period;
-    authFetch(`/api/team/${teamId}/leaderboard/${lbPeriod}`, { signal: ctrl.signal })
+    const url = period === "custom"
+      ? `/api/team/${teamId}/leaderboard/custom?from=${customRange.from}&to=${customRange.to}`
+      : `/api/team/${teamId}/leaderboard/${period}`;
+    authFetch(url, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
         if (ctrl.signal.aborted) return;
@@ -1038,7 +1037,7 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
         setLeaderboard({ members: [] });
       });
     return () => ctrl.abort();
-  }, [teamId, period]);
+  }, [teamId, period, customRange.from, customRange.to]);
 
   // Weekly leaderboard for the "Most Underutilized This Week" widget.
   useEffect(() => {

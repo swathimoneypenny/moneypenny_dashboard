@@ -5703,16 +5703,36 @@ def _previous_period_range(period: str) -> tuple[str, str] | None:
     return None
 
 
-def _build_leaderboard(team_id: str, period: str) -> dict:
+def _build_leaderboard(
+    team_id: str,
+    period: str,
+    *,
+    custom_window: tuple[str, str, str] | None = None,
+) -> dict:
     cfg = TEAM_LETTER_MAP.get(team_id)
     if not cfg:
         return {"error": "Team not found", "teamId": team_id}
 
-    start, end, label = date_range_for_period(period)
+    if custom_window:
+        start, end, label = custom_window
+        full_start, full_end = start, end
+    else:
+        start, end, label = date_range_for_period(period)
+        full_start, full_end = full_period_range_for_period(period)
+    today_iso = datetime.now().strftime("%Y-%m-%d")
     rows = get_cached_rows(start, end)
     team_label = cfg.get("label", team_id)
     roster     = TEAM_ROSTERS.get(team_id, [])
-    committed  = get_employee_committed_hours(team_id, period)
+    # Pro-rated per-preparer target for the active window — for custom_window
+    # this is 16h × working_days_in_range, then pro-rated by elapsed working
+    # days against today. Was previously `get_employee_committed_hours(team, period)`
+    # with no kwargs, which silently returned 0 for period='custom' (no
+    # period_start/period_end) and a monthly value otherwise — driving the
+    # 145.5h "monthly" committed shown in TeamMembersTable on Custom Range.
+    committed = get_employee_committed_hours(
+        team_id, period,
+        period_start=full_start, period_end=full_end, as_of=today_iso,
+    )
 
     # Same logic _team_response uses: assign_row_to_team handles multi-team ambiguity.
     def _row_matches(row) -> bool:
@@ -5804,6 +5824,54 @@ def _build_leaderboard(team_id: str, period: str) -> dict:
         "period":   label,
         "members":  members,
     }
+
+
+@app.get("/api/team/{team_id}/leaderboard/custom")
+async def leaderboard_custom_range(
+    team_id: str,
+    from_: str | None = Query(default=None, alias="from"),
+    to:    str | None = Query(default=None, alias="to"),
+):
+    """Per-member leaderboard for a user-picked date range. Drives
+    TeamMembersTable when the Team Dashboard is in 📅 Custom Range mode —
+    without this, the table falls back to the monthly leaderboard and shows
+    monthly pro-rated committed hours (145.5h on day 10/22) instead of the
+    range-scaled value (e.g. 48h for a 3-day range)."""
+    if not from_ or not to:
+        return {"error": "Both 'from' and 'to' query params are required (YYYY-MM-DD)."}
+    try:
+        start_d = datetime.strptime(from_[:10], "%Y-%m-%d")
+        end_d   = datetime.strptime(to[:10],    "%Y-%m-%d")
+    except ValueError:
+        return {"error": f"Invalid date(s). Use YYYY-MM-DD. Got from={from_!r}, to={to!r}."}
+    if end_d < start_d:
+        return {"error": f"'to' ({to}) must be on or after 'from' ({from_})."}
+    start = start_d.strftime("%Y-%m-%d")
+    end   = end_d.strftime("%Y-%m-%d")
+    same_year = (start_d.year == end_d.year)
+    label = (
+        f"{start_d.strftime('%b %d')} – {end_d.strftime('%b %d, %Y')}"
+        if same_year
+        else f"{start_d.strftime('%b %d, %Y')} – {end_d.strftime('%b %d, %Y')}"
+    )
+    cache_key = f"{team_id}_custom_{start}_{end}"
+    now = datetime.now()
+    entry = _leaderboard_cache.get(cache_key)
+    if entry and (now - entry["at"]).total_seconds() < LEADERBOARD_CACHE_SECS:
+        cached = dict(entry["data"])
+        cached["fromCache"] = True
+        return cached
+    t0 = time.perf_counter()
+    result = await asyncio.to_thread(
+        _build_leaderboard, team_id, "custom",
+        custom_window=(start, end, label),
+    )
+    print(f"[PERF] leaderboard team={team_id} custom {start} -> {end} "
+          f"total={time.perf_counter()-t0:.2f}s members={len(result.get('members', []))}")
+    result["fromCache"] = False
+    if not result.get("error"):
+        _leaderboard_cache[cache_key] = {"data": result, "at": now}
+    return result
 
 
 @app.get("/api/team/{team_id}/leaderboard/{period}")
