@@ -575,7 +575,7 @@ ${Object.entries(staffObj).map(([name, v]) => {
   const summary = data?.summary ?? {};
 
   const periodLabel = period === "custom"
-    ? (summary.label || `${customRange.from} – ${customRange.to}`)
+    ? (data?.period || `${customRange.from} – ${customRange.to}`)
     : (PERIODS.find((p) => p.key === period)?.label ?? "");
 
   const staff = useMemo(
