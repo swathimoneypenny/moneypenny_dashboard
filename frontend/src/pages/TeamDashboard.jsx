@@ -516,7 +516,11 @@ function PerfTable({ orgs, onRowClick }) {
                 : statusInfo(eff);
             const baseBg = i % 2 === 0 ? "transparent" : C.surface;
             const delays = o.delays ?? 0;
-            const clickable = onRowClick && !isPlaceholder && committed > 0;
+            // Click is enabled whenever the org actually has timesheet rows
+            // behind it — Internal/Other has no `committed` but still has
+            // entries we want to show.
+            const hasEntries = Array.isArray(o.entries) && o.entries.length > 0;
+            const clickable  = onRowClick && !isPlaceholder && hasEntries;
             return (
               <tr
                 key={i}
@@ -1668,6 +1672,10 @@ ${clients.map((o) => (
                   layout="vertical"
                   barCategoryGap="25%"
                   onClick={(e) => {
+                    // Recharts 3.x: chart-level onClick fires reliably only
+                    // when the cursor hits inside the plot area. We keep it
+                    // as a fallback for clicks adjacent to the bar, but the
+                    // per-Bar onClick below is the primary trigger.
                     const p = e?.activePayload?.[0]?.payload;
                     if (p && p._org) setOrgModal({ open: true, org: p._org });
                   }}
@@ -1677,7 +1685,20 @@ ${clients.map((o) => (
                   <XAxis type="number" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
                   <YAxis dataKey="name" type="category" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} width={120} />
                   <Tooltip content={<DarkTooltip />} />
-                  <Bar dataKey="Hours" fill={C.blue} radius={[0, 4, 4, 0]} style={{ cursor: "pointer" }} />
+                  <Bar
+                    dataKey="Hours"
+                    fill={C.blue}
+                    radius={[0, 4, 4, 0]}
+                    style={{ cursor: "pointer" }}
+                    onClick={(payload) => {
+                      // In Recharts, <Bar>'s onClick fires per-bar with the
+                      // row payload as the first argument. More reliable than
+                      // the chart-level handler for direct bar hits.
+                      if (payload && payload._org) {
+                        setOrgModal({ open: true, org: payload._org });
+                      }
+                    }}
+                  />
                 </BarChart>
               </ResponsiveContainer>
             )}

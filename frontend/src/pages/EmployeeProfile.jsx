@@ -608,7 +608,18 @@ function CategoryBarSection({ title, total, color, breakdown, onBarClick }) {
             content={<DarkTooltip />}
             formatter={(v) => [`${Number(v).toFixed(1)}h`, title]}
           />
-          <Bar dataKey="hours" radius={[0, 4, 4, 0]} maxBarSize={22} fill={color}>
+          <Bar
+            dataKey="hours"
+            radius={[0, 4, 4, 0]}
+            maxBarSize={22}
+            fill={color}
+            style={{ cursor: onBarClick ? "pointer" : "default" }}
+            onClick={(payload) => {
+              // Per-bar handler — more reliable than chart-level in
+              // Recharts 3.x.
+              if (payload && onBarClick) onBarClick(payload.category);
+            }}
+          >
             <LabelList
               dataKey="hours"
               position="right"
