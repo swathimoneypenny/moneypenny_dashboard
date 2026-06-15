@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { C, API_BASE, authFetch } from "../config";
 import { LiveIndicator, useAutoRefresh, timeAgo, formatTimeIST } from "../components/LiveIndicator";
 import DelayDetailModal from "../components/DelayDetailModal";
+import BarDetailModal from "../components/BarDetailModal";
 import WeeklyReviewSection from "../components/WeeklyReviewSection";
 import WeeklyChecklistSection from "../components/WeeklyChecklistSection";
 import {
@@ -399,7 +400,7 @@ function SortIcon({ dir }) {
   return <span style={{ marginLeft: 4, opacity: 0.5, fontSize: 10 }}>{dir === "asc" ? "▲" : "▼"}</span>;
 }
 
-function PerfTable({ orgs }) {
+function PerfTable({ orgs, onRowClick }) {
   const [sort, setSort] = useState({ col: "billable", dir: "desc" });
   const [query, setQuery] = useState("");
 
@@ -515,12 +516,14 @@ function PerfTable({ orgs }) {
                 : statusInfo(eff);
             const baseBg = i % 2 === 0 ? "transparent" : C.surface;
             const delays = o.delays ?? 0;
+            const clickable = onRowClick && !isPlaceholder && committed > 0;
             return (
               <tr
                 key={i}
-                style={{ transition: "background 0.12s", background: baseBg }}
+                style={{ transition: "background 0.12s", background: baseBg, cursor: clickable ? "pointer" : "default" }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(61,142,240,0.05)"; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = baseBg; }}
+                onClick={() => { if (clickable) onRowClick(o); }}
               >
                 <td style={{ ...td, textAlign: "left" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -987,6 +990,10 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
   const [lastRefreshed, setLastRefreshed] = useState(null);
   const [forceRefreshing, setForceRefreshing] = useState(false);
   const [refreshNotice, setRefreshNotice] = useState("");
+  // Universal bar-drill-down modal. One state shared by every chart/table on
+  // the team view: clicking any org bar or table row populates `org` with the
+  // clicked client object and the modal lists its underlying entries.
+  const [orgModal, setOrgModal] = useState({ open: false, org: null });
   const abortRef = useRef(null);
 
   const fetchData = useCallback((silent = false) => {
@@ -1197,13 +1204,16 @@ ${clients.map((o) => (
     [clients]
   );
 
-  // Chart 2 — Hours by Org, horizontal, sorted by total desc
+  // Chart 2 — Hours by Org, horizontal, sorted by total desc. Each bar
+  // payload carries `_org` (the full client object including entries[]) so
+  // the chart-level onClick can open BarDetailModal without a second lookup.
   const hoursByOrg = useMemo(
     () => [...chartClients]
       .sort((a, b) => (b.total ?? 0) - (a.total ?? 0))
       .map((o) => ({
         name:  o.name,
         Hours: Number((o.total ?? 0).toFixed(1)),
+        _org:  o,
       })),
     [chartClients]
   );
@@ -1653,12 +1663,21 @@ ${clients.map((o) => (
               </div>
             ) : (
               <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={hoursByOrg} layout="vertical" barCategoryGap="25%">
+                <BarChart
+                  data={hoursByOrg}
+                  layout="vertical"
+                  barCategoryGap="25%"
+                  onClick={(e) => {
+                    const p = e?.activePayload?.[0]?.payload;
+                    if (p && p._org) setOrgModal({ open: true, org: p._org });
+                  }}
+                  style={{ cursor: "pointer" }}
+                >
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} horizontal={false} />
                   <XAxis type="number" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
                   <YAxis dataKey="name" type="category" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} width={120} />
                   <Tooltip content={<DarkTooltip />} />
-                  <Bar dataKey="Hours" fill={C.blue} radius={[0, 4, 4, 0]} />
+                  <Bar dataKey="Hours" fill={C.blue} radius={[0, 4, 4, 0]} style={{ cursor: "pointer" }} />
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -1735,7 +1754,10 @@ ${clients.map((o) => (
           {loading ? (
             <div className="kpi-skeleton" style={{ height: 240 }} />
           ) : (
-            <PerfTable orgs={clients} />
+            <PerfTable
+              orgs={clients}
+              onRowClick={(org) => setOrgModal({ open: true, org })}
+            />
           )}
         </div>
         )}
@@ -1756,6 +1778,15 @@ ${clients.map((o) => (
         </>)}
       </div>
       <DelayDetailModal day={selectedDay} teamId={teamId} onClose={() => setSelectedDay(null)} />
+      <BarDetailModal
+        open={orgModal.open}
+        onClose={() => setOrgModal({ open: false, org: null })}
+        title={orgModal.org?.name || ""}
+        subtitle={`Organization · ${periodLabel}`}
+        entries={orgModal.org?.entries || []}
+        accentColor={C.orange}
+        totalHours={Number(orgModal.org?.total ?? orgModal.org?.actual ?? 0)}
+      />
     </div>
   );
 }

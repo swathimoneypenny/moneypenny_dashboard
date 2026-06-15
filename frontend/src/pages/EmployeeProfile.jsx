@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { C, authFetch } from "../config";
 import { LiveIndicator, useAutoRefresh, timeAgo, formatTimeIST } from "../components/LiveIndicator";
+import BarDetailModal from "../components/BarDetailModal";
 import {
   BarChart,
   Bar,
@@ -545,7 +546,7 @@ const _NB_PALETTE = [
 // One labelled horizontal-bar section used by SimpleNonBillableCard for the
 // CLIENT NON-BILLABLE block and the INTERNAL ACTIVITIES block. Keeping them
 // in one component lets us share styling without duplicating chart wiring.
-function CategoryBarSection({ title, total, color, breakdown }) {
+function CategoryBarSection({ title, total, color, breakdown, onBarClick }) {
   if (!breakdown || breakdown.length === 0) return null;
   const data = breakdown.map((b) => ({ category: b.category, hours: Number(b.hours) || 0 }));
   return (
@@ -586,6 +587,11 @@ function CategoryBarSection({ title, total, color, breakdown }) {
           data={data}
           layout="vertical"
           margin={{ top: 4, right: 60, bottom: 4, left: 4 }}
+          onClick={(e) => {
+            const p = e?.activePayload?.[0]?.payload;
+            if (p && onBarClick) onBarClick(p.category);
+          }}
+          style={{ cursor: onBarClick ? "pointer" : "default" }}
         >
           <CartesianGrid stroke={C.border} strokeDasharray="3 3" horizontal={false} />
           <XAxis type="number" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
@@ -616,7 +622,7 @@ function CategoryBarSection({ title, total, color, breakdown }) {
   );
 }
 
-function SimpleNonBillableCard({ data, loading }) {
+function SimpleNonBillableCard({ data, loading, onCategoryClick }) {
   const totalHours    = Number(data?.totalHours    ?? data?.total_hours    ?? 0) || 0;
   const billableHours = Number(data?.billableHours ?? data?.billable_hours ?? 0) || 0;
   const internalHours = Number(data?.internalHours ?? data?.internal_hours ?? 0) || 0;
@@ -700,12 +706,14 @@ function SimpleNonBillableCard({ data, loading }) {
         total={nonBillable}
         color={_NON_BILLABLE_ORANGE}
         breakdown={nbBreakdown}
+        onBarClick={onCategoryClick ? (cat) => onCategoryClick("nonBillable", cat) : null}
       />
       <CategoryBarSection
         title="Internal Activities"
         total={internalHours}
         color={_INTERNAL_PURPLE}
         breakdown={internalBreakdown}
+        onBarClick={onCategoryClick ? (cat) => onCategoryClick("internal", cat) : null}
       />
     </div>
   );
@@ -935,6 +943,10 @@ export default function EmployeeProfile({ teamId, teamName, employeeName, onBack
   const [acctFilter, setAcctFilter]   = useState("all");
   useEffect(() => { setExpandedRow(null); }, [acctFilter]);
   const [breakdownModal, setBreakdownModal] = useState({ open: false, type: null });
+  // Universal bar-drill-down modal opened from Non-Billable / Internal category
+  // bars. Filters the employee's allEntries client-side by the clicked
+  // customer name (no extra fetch needed).
+  const [barModal, setBarModal] = useState({ open: false, category: null, scope: null });
   const abortRef = useRef(null);
 
   const [lastRefreshed, setLastRefreshed] = useState(null);
@@ -1268,7 +1280,11 @@ ${lines.join("\n")}`;
             above. Always renders; falls back to a single "Non-Billable"
             bar from (Total - Billable) when the per-customer breakdown is
             absent (defensive — works against any payload shape). */}
-        <SimpleNonBillableCard data={data} loading={loading} />
+        <SimpleNonBillableCard
+          data={data}
+          loading={loading}
+          onCategoryClick={(scope, category) => setBarModal({ open: true, scope, category })}
+        />
 
         {/* Recent Work */}
         <RecentWorkSection
@@ -1286,6 +1302,26 @@ ${lines.join("\n")}`;
         data={data}
         onClose={() => setBreakdownModal({ open: false, type: null })}
       />
+      {barModal.open && (() => {
+        const allEntries = Array.isArray(data?.allEntries) ? data.allEntries : [];
+        const cat        = (barModal.category || "").trim().toLowerCase();
+        const filtered   = allEntries.filter((e) => ((e.client || "").trim().toLowerCase() === cat));
+        const total      = filtered.reduce((s, e) => s + (Number(e.hours) || 0), 0);
+        const isInternal = barModal.scope === "internal";
+        const accent     = isInternal ? _INTERNAL_PURPLE : _NON_BILLABLE_ORANGE;
+        const subtitle   = `${isInternal ? "Internal Activities" : "Client Non-Billable"} · ${data?.period || ""}`;
+        return (
+          <BarDetailModal
+            open
+            onClose={() => setBarModal({ open: false, category: null, scope: null })}
+            title={barModal.category || ""}
+            subtitle={subtitle}
+            entries={filtered}
+            accentColor={accent}
+            totalHours={total}
+          />
+        );
+      })()}
     </div>
   );
 }

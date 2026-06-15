@@ -4423,6 +4423,7 @@ async def _team_response(
             "matchedCustomers": set(),
             "rowsMatched": 0,
             "isConfig":    True,
+            "entries":     [],
         }
     orgs["Internal / Other"] = {
         "billable":    0.0,
@@ -4435,6 +4436,7 @@ async def _team_response(
         "matchedCustomers": set(),
         "rowsMatched": 0,
         "isConfig":    False,
+        "entries":     [],
     }
 
     total_rows = 0
@@ -4494,6 +4496,19 @@ async def _team_response(
         bucket["rowsMatched"] += 1
         if customer:
             bucket["matchedCustomers"].add(customer)
+        # Per-org drill-down rows powering the BarDetailModal — keep the
+        # shape uniform with the employee `allEntries` payload so the modal
+        # can render either source without per-call wiring.
+        bucket["entries"].append({
+            "date":        (row.get("date") or "")[:10],
+            "employee":    fullname,
+            "client":      customer or "",
+            "project":     (row.get("project") or "").strip(),
+            "accountCode": (row.get("accountCode") or "").strip(),
+            "hours":       round(h, 2),
+            "billable":    bool(billable),
+            "desc":        (row.get("desc") or "").strip(),
+        })
 
     # Pro-rated per-preparer target. On day 7 of a 22-day month, this is
     # 320 × 7/22 ≈ 101.8 instead of the static 320 — so a preparer who's
@@ -4552,6 +4567,7 @@ async def _team_response(
             "meeting":     h["meeting"],
             "isPlaceholder": h["isConfig"] and committed == 0 and actual == 0,
             "isInternalOther": not h["isConfig"],
+            "entries":     h["entries"],  # per-org drill-down rows
         })
         if h["isConfig"]:
             print(f"[client-match] team={team_id} client={org_name!r} "
