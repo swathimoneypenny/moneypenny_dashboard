@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { C, authFetch } from "../config";
 
 // TL-confirmed palette (2026-06-05):
