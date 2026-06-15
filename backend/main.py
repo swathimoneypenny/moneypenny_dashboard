@@ -3856,8 +3856,14 @@ def _normalize_date(date_raw) -> str:
         if len(parts) >= 3:
             date_only = " ".join(parts[:3])  # "May, 06 2026"
     for fmt in (
-        "%b, %d %Y %H:%M:%S",  # Timesheets.com WORKDATE
+        "%b, %d %Y %H:%M:%S",  # Timesheets.com WORKDATE short-month
         "%b, %d %Y",
+        # Timesheets.com WORKDATE actually emits the full month name with the
+        # same `"<Month>, <day> <year> <time>"` layout (`June, 10 2026 …`),
+        # not the 3-letter abbreviation. Without these two formats every
+        # parse_rows row gets date="" and the Projects modal renders "—".
+        "%B, %d %Y %H:%M:%S",
+        "%B, %d %Y",
         "%b %d, %Y %H:%M:%S",
         "%b %d, %Y",
         "%B %d, %Y %H:%M:%S",
