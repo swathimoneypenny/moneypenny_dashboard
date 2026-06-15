@@ -3,6 +3,7 @@ import { C, API_BASE, authFetch } from "../config";
 import { LiveIndicator, useAutoRefresh, timeAgo, formatTimeIST } from "../components/LiveIndicator";
 import DelayDetailModal from "../components/DelayDetailModal";
 import BarDetailModal from "../components/BarDetailModal";
+import SimpleBreakdownModal from "../components/SimpleBreakdownModal";
 import WeeklyReviewSection from "../components/WeeklyReviewSection";
 import WeeklyChecklistSection from "../components/WeeklyChecklistSection";
 import {
@@ -1885,16 +1886,20 @@ ${clients.map((o) => (
         totalHours={Number(orgModal.org?.total ?? orgModal.org?.actual ?? 0)}
       />
       {kpiModal.open && (() => {
-        const cfg = _kpiConfigFor(kpiModal.type, periodLabel, clients.length);
-        const filtered = _filterEntriesFor(kpiModal.type, allEntries);
+        const props = _buildKpiModalProps({
+          type:        kpiModal.type,
+          periodLabel,
+          clients,
+          summary,
+          allEntries,
+          totalHours,
+        });
+        if (!props) return null;
         return (
-          <BarDetailModal
+          <SimpleBreakdownModal
             open
             onClose={() => setKpiModal({ open: false, type: null })}
-            title={cfg.title}
-            subtitle={cfg.subtitle}
-            entries={filtered}
-            accentColor={cfg.accent}
+            {...props}
           />
         );
       })()}
@@ -1902,9 +1907,9 @@ ${clients.map((o) => (
   );
 }
 
-// KPI-card drill-down filter rules. Matches the Internal-category set the
-// backend uses (lower-cased customer-name set), so the modal totals line up
-// with the KPI numbers exactly even when computed client-side.
+// Per-KPI internal-category set — matches backend INTERNAL_CODES verbatim so
+// the modal aggregations line up with the totalInternal KPI number to the
+// last decimal even though we slice the same allEntries list client-side.
 const _INTERNAL_NAMES = new Set([
   "snmp", "breaks for teams", "choose customer",
   "internal", "internal / other", "training", "admin", "cleanup", "allocation",
@@ -1912,29 +1917,102 @@ const _INTERNAL_NAMES = new Set([
 function _isInternalEntry(e) {
   return _INTERNAL_NAMES.has(String(e.client || "").trim().toLowerCase());
 }
-function _filterEntriesFor(type, all) {
+
+// Build the props object for SimpleBreakdownModal per clicked KPI card.
+// Centralized here so the JSX stays a one-liner and the per-type aggregations
+// are unit-testable side-by-side. Items are sorted desc and stripped of zero
+// rows so the list focuses on what's actually contributing.
+function _buildKpiModalProps({ type, periodLabel, clients, summary, allEntries, totalHours }) {
   switch (type) {
-    case "billable":     return all.filter((e) => !_isInternalEntry(e) && e.billable === true);
-    case "nonBillable":  return all.filter((e) => !_isInternalEntry(e) && e.billable === false);
-    case "internal":     return all.filter(_isInternalEntry);
-    case "organizations":
+    case "organizations": {
+      const items = (clients || [])
+        .filter((c) => !c.isInternalOther)
+        .map((c) => ({
+          name: c.name,
+          value: Number(c.total ?? c.actual ?? 0),
+          color: C.blue,
+        }))
+        .filter((it) => it.value > 0)
+        .sort((a, b) => b.value - a.value);
+      const sum = items.reduce((s, it) => s + it.value, 0);
+      return {
+        title: "📊 Organizations",
+        subtitle: `${items.length} active · ${periodLabel}`,
+        total: `${sum.toFixed(1)}h`,
+        accentColor: C.blue,
+        showPercentage: true,
+        items,
+      };
+    }
+    case "billable": {
+      const items = (clients || [])
+        .filter((c) => !c.isInternalOther)
+        .map((c) => ({ name: c.name, value: Number(c.billable ?? 0), color: C.teal }))
+        .filter((it) => it.value > 0)
+        .sort((a, b) => b.value - a.value);
+      return {
+        title: "💰 Total Billable Breakdown",
+        subtitle: `By organization · ${periodLabel}`,
+        total: `${(summary?.totalBillable ?? 0).toFixed(1)}h`,
+        accentColor: C.teal,
+        showPercentage: true,
+        items,
+      };
+    }
+    case "nonBillable": {
+      const items = (clients || [])
+        .filter((c) => !c.isInternalOther)
+        .map((c) => ({ name: c.name, value: Number(c.nonBillable ?? 0), color: C.orange }))
+        .filter((it) => it.value > 0)
+        .sort((a, b) => b.value - a.value);
+      return {
+        title: "📋 Non-Billable Breakdown",
+        subtitle: `By organization (excludes Internal) · ${periodLabel}`,
+        total: `${(summary?.totalNonBillable ?? 0).toFixed(1)}h`,
+        accentColor: C.orange,
+        showPercentage: true,
+        items,
+      };
+    }
+    case "internal": {
+      // Aggregate internal-category entries by raw customer name (SNMP /
+      // BREAKS FOR TEAMS / Admin / Training / etc.). Sourced from allEntries
+      // so the totals match the team-summary totalInternal exactly.
+      const bucket = {};
+      for (const e of (allEntries || [])) {
+        if (!_isInternalEntry(e)) continue;
+        const name = (e.client || "").trim() || "Unspecified";
+        bucket[name] = (bucket[name] || 0) + (Number(e.hours) || 0);
+      }
+      const items = Object.entries(bucket)
+        .map(([name, value]) => ({ name, value: Number(value), color: C.purple }))
+        .filter((it) => it.value > 0)
+        .sort((a, b) => b.value - a.value);
+      return {
+        title: "🏢 Internal Hours Breakdown",
+        subtitle: `SNMP / Breaks / Admin / Training · ${periodLabel}`,
+        total: `${(summary?.totalInternal ?? 0).toFixed(1)}h`,
+        accentColor: C.purple,
+        showPercentage: true,
+        items,
+      };
+    }
     case "total":
-    default:             return all;
-  }
-}
-function _kpiConfigFor(type, periodLabel, orgCount) {
-  switch (type) {
-    case "organizations":
-      return { title: "All Organizations",  subtitle: `${orgCount} active · ${periodLabel}`,        accent: C.blue   };
-    case "billable":
-      return { title: "Total Billable",     subtitle: `Billable client work · ${periodLabel}`,      accent: C.teal   };
-    case "nonBillable":
-      return { title: "Non-Billable",       subtitle: `Client non-billable · ${periodLabel}`,       accent: C.orange };
-    case "internal":
-      return { title: "Internal Hours",     subtitle: `SNMP / Breaks / Admin / Training · ${periodLabel}`, accent: C.purple };
-    case "total":
-    default:
-      return { title: "Total Hours",        subtitle: `All activity combined · ${periodLabel}`,     accent: "#FFFFFF" };
+    default: {
+      const items = [
+        { name: "Billable",     value: Number(summary?.totalBillable    ?? 0), color: C.teal   },
+        { name: "Non-Billable", value: Number(summary?.totalNonBillable ?? 0), color: C.orange },
+        { name: "Internal",     value: Number(summary?.totalInternal    ?? 0), color: C.purple },
+      ].filter((it) => it.value > 0);
+      return {
+        title: "📊 Total Hours Overview",
+        subtitle: `All activity · ${periodLabel}`,
+        total: `${Number(totalHours || 0).toFixed(1)}h`,
+        accentColor: "#FFFFFF",
+        showPercentage: true,
+        items,
+      };
+    }
   }
 }
 

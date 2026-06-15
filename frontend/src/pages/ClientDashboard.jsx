@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { C, API_BASE, authFetch } from "../config";
 import { LiveIndicator, useAutoRefresh } from "../components/LiveIndicator";
 import DelayDetailModal from "../components/DelayDetailModal";
-import BarDetailModal from "../components/BarDetailModal";
+import SimpleBreakdownModal from "../components/SimpleBreakdownModal";
 import {
   BarChart,
   Bar,
@@ -948,8 +948,9 @@ export default function ClientDashboard({ clientName, onBack, onContextUpdate, o
   const trendAbortRef = useRef(null);
 
   const [lastRefreshed, setLastRefreshed] = useState(null);
-  // KPI-card drill-down modal — clicking any top KPI opens BarDetailModal with
-  // the matching filter applied to the aggregated entry list.
+  // KPI-card drill-down modal — clicking any top KPI opens
+  // SimpleBreakdownModal with a focused per-card list (by project / by
+  // employee / 3-bucket overview). Compact, no search/sort/entries-table.
   const [kpiModal, setKpiModal] = useState({ open: false, type: null });
 
   const fetchMain = useCallback((silent = false) => {
@@ -1081,37 +1082,6 @@ ${Object.entries(staffObj).map(([name, v]) => {
   );
 
   const totalHours = (summary.totalBillable ?? 0) + (summary.totalNonBillable ?? 0);
-
-  // Flat list of every entry under this client for the period — sourced from
-  // each project's `entries[]` in projectsBreakdown. Project-level entries
-  // ship with `serviceCode` / `notes` / string `billable`; normalize to the
-  // BarDetailModal shape (`accountCode` / `desc` / boolean billable) so the
-  // modal can render them without per-source wiring. The project name comes
-  // from the bucket since the row itself doesn't carry it.
-  const allEntries = useMemo(
-    () => {
-      const out = [];
-      const projects = Array.isArray(data?.projectsBreakdown) ? data.projectsBreakdown : [];
-      for (const p of projects) {
-        const list = Array.isArray(p.entries) ? p.entries : [];
-        const projectName = p.projectName || p.name || "(no project)";
-        for (const e of list) {
-          out.push({
-            date:        e.date || "",
-            employee:    e.employee || "",
-            client:      clientName,
-            project:     projectName,
-            accountCode: e.serviceCode || e.accountCode || "",
-            hours:       Number(e.hours) || 0,
-            billable:    e.billable === true || e.billable === "BILLABLE",
-            desc:        e.notes || e.desc || "",
-          });
-        }
-      }
-      return out;
-    },
-    [data, clientName],
-  );
 
   const staffHours = useMemo(
     () => staff.map((s) => ({
@@ -1670,16 +1640,21 @@ ${Object.entries(staffObj).map(([name, v]) => {
         onClose={() => setSelectedDay(null)}
       />
       {kpiModal.open && (() => {
-        const cfg = _kpiConfigFor(kpiModal.type, periodLabel, clientName, staff.length);
-        const filtered = _filterEntriesFor(kpiModal.type, allEntries);
+        const props = _buildClientKpiModalProps({
+          type:        kpiModal.type,
+          periodLabel,
+          clientName,
+          summary,
+          staff,
+          totalHours,
+          projects: data?.projectsBreakdown,
+        });
+        if (!props) return null;
         return (
-          <BarDetailModal
+          <SimpleBreakdownModal
             open
             onClose={() => setKpiModal({ open: false, type: null })}
-            title={cfg.title}
-            subtitle={cfg.subtitle}
-            entries={filtered}
-            accentColor={cfg.accent}
+            {...props}
           />
         );
       })()}
@@ -1687,29 +1662,87 @@ ${Object.entries(staffObj).map(([name, v]) => {
   );
 }
 
-// KPI-card drill-down filter rules for the Client View. `total` and `staff`
-// both reach the modal with every entry the client logged this period —
-// staff routes through the same modal so the By-Employee column reads as
-// the canonical breakdown for the Staff Count KPI.
-function _filterEntriesFor(type, all) {
+// Per-KPI modal data builder for the Client View. Each card type renders a
+// focused single-column list — no search / sort / multi-section, no entries
+// table. Items come from data already on the page (projectsBreakdown for
+// project-level rollups, staff for per-employee, summary for the overview).
+function _buildClientKpiModalProps({ type, periodLabel, clientName, summary, staff, totalHours, projects }) {
+  const projList = Array.isArray(projects) ? projects : [];
   switch (type) {
-    case "billable":    return all.filter((e) => e.billable === true);
-    case "nonBillable": return all.filter((e) => e.billable === false);
-    case "staff":
+    case "billable": {
+      const items = projList
+        .map((p) => ({
+          name:  p.projectName || "(no project)",
+          value: Number(p.billableHours ?? 0),
+          color: C.teal,
+        }))
+        .filter((it) => it.value > 0)
+        .sort((a, b) => b.value - a.value);
+      return {
+        title: "💰 Total Billable Breakdown",
+        subtitle: `By project · ${clientName} · ${periodLabel}`,
+        total: `${(summary?.totalBillable ?? 0).toFixed(1)}h`,
+        accentColor: C.teal,
+        showPercentage: true,
+        items,
+      };
+    }
+    case "nonBillable": {
+      const items = projList
+        .map((p) => ({
+          name:  p.projectName || "(no project)",
+          value: Number(p.nonBillableHours ?? 0),
+          color: C.orange,
+        }))
+        .filter((it) => it.value > 0)
+        .sort((a, b) => b.value - a.value);
+      return {
+        title: "📋 Non-Billable Breakdown",
+        subtitle: `By project · ${clientName} · ${periodLabel}`,
+        total: `${(summary?.totalNonBillable ?? 0).toFixed(1)}h`,
+        accentColor: C.orange,
+        showPercentage: true,
+        items,
+      };
+    }
+    case "staff": {
+      const items = (staff || [])
+        .map((s) => ({
+          name:  s.staff || s.name || "Unknown",
+          value: Number(s.billable ?? 0) + Number(s.nonBillable ?? 0),
+          color: C.blue,
+        }))
+        .filter((it) => it.value > 0)
+        .sort((a, b) => b.value - a.value);
+      return {
+        title: "👥 Staff Breakdown",
+        subtitle: `${items.length} active · ${clientName} · ${periodLabel}`,
+        total: `${items.reduce((s, it) => s + it.value, 0).toFixed(1)}h`,
+        accentColor: C.blue,
+        showPercentage: true,
+        items,
+      };
+    }
     case "total":
-    default:            return all;
-  }
-}
-function _kpiConfigFor(type, periodLabel, clientName, staffCount) {
-  switch (type) {
-    case "billable":
-      return { title: `${clientName} · Billable`,       subtitle: `Billable client work · ${periodLabel}`,    accent: C.teal   };
-    case "nonBillable":
-      return { title: `${clientName} · Non-Billable`,   subtitle: `Client non-billable · ${periodLabel}`,     accent: C.orange };
-    case "staff":
-      return { title: `${clientName} · Staff (${staffCount})`, subtitle: `Per-employee breakdown · ${periodLabel}`, accent: C.blue };
-    case "total":
-    default:
-      return { title: `${clientName} · All Activity`,   subtitle: `Every entry this period · ${periodLabel}`, accent: C.purple };
+    default: {
+      // Top KPI (Target Hours) and the catch-all (Total Hours) both share
+      // this 3-bucket overview — Billable / Non-Billable / (derived rest).
+      // The client view's summary doesn't ship totalInternal, so we just
+      // show the two real buckets.
+      const bill = Number(summary?.totalBillable    ?? 0);
+      const nb   = Number(summary?.totalNonBillable ?? 0);
+      const items = [
+        { name: "Billable",     value: bill, color: C.teal   },
+        { name: "Non-Billable", value: nb,   color: C.orange },
+      ].filter((it) => it.value > 0);
+      return {
+        title: "📊 Total Hours Overview",
+        subtitle: `${clientName} · ${periodLabel}`,
+        total: `${Number(totalHours || 0).toFixed(1)}h`,
+        accentColor: "#FFFFFF",
+        showPercentage: true,
+        items,
+      };
+    }
   }
 }
