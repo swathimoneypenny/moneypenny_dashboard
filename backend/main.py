@@ -2120,7 +2120,7 @@ _DELAYS_CSV_TTL = 60
 WEEKLY_CHECKLIST_GIDS: dict[str, str | None] = {
     "team_a": "990415838",
     "team_b": "135187606",
-    "team_c": "1911560805",
+    "team_c": "1312977007",
     "team_d": "885695460",
     "team_e": "730935679",
     "team_f": None,
