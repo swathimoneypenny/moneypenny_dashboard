@@ -296,13 +296,30 @@ function useCountUp(target, duration = 900) {
   return value;
 }
 
-function KpiCard({ label, value, color, suffix = "h", decimals = 1, sub }) {
+function KpiCard({ label, value, color, suffix = "h", decimals = 1, sub, onClick }) {
   const animated = useCountUp(typeof value === "number" ? value : 0);
   const display = typeof value === "number"
     ? (decimals === 0 ? Math.round(animated).toString() : animated.toFixed(decimals))
     : "—";
+  // When `onClick` is provided, the card lifts on hover and renders a small
+  // "CLICK FOR DETAILS →" hint in the bottom-right so the affordance is
+  // discoverable without changing the static visual for non-clickable cards.
+  const clickable = typeof onClick === "function";
   return (
     <div
+      onClick={clickable ? onClick : undefined}
+      onMouseEnter={(e) => {
+        if (!clickable) return;
+        e.currentTarget.style.transform = "translateY(-2px)";
+        e.currentTarget.style.boxShadow = `0 8px 24px rgba(0,0,0,0.4), inset 0 0 24px ${color}1A`;
+        e.currentTarget.style.borderColor = `${color}55`;
+      }}
+      onMouseLeave={(e) => {
+        if (!clickable) return;
+        e.currentTarget.style.transform = "translateY(0)";
+        e.currentTarget.style.boxShadow = `0 2px 8px rgba(0,0,0,0.25), inset 0 0 24px ${color}0F`;
+        e.currentTarget.style.borderColor = C.border;
+      }}
       style={{
         background: `linear-gradient(180deg, ${C.card} 0%, ${C.surface} 100%)`,
         border: `1px solid ${C.border}`,
@@ -314,6 +331,8 @@ function KpiCard({ label, value, color, suffix = "h", decimals = 1, sub }) {
         boxShadow: `0 2px 8px rgba(0,0,0,0.25), inset 0 0 24px ${color}0F`,
         position: "relative",
         overflow: "hidden",
+        cursor: clickable ? "pointer" : "default",
+        transition: "transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease",
       }}
     >
       <div
@@ -346,6 +365,22 @@ function KpiCard({ label, value, color, suffix = "h", decimals = 1, sub }) {
       {sub && (
         <div style={{ fontSize: 11, color: C.muted, marginTop: 10 }}>
           {sub}
+        </div>
+      )}
+      {clickable && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 6,
+            right: 10,
+            fontSize: 9,
+            color: "rgba(255,255,255,0.40)",
+            fontWeight: 700,
+            letterSpacing: 0.5,
+            pointerEvents: "none",
+          }}
+        >
+          CLICK FOR DETAILS →
         </div>
       )}
     </div>
@@ -998,6 +1033,10 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
   // the team view: clicking any org bar or table row populates `org` with the
   // clicked client object and the modal lists its underlying entries.
   const [orgModal, setOrgModal] = useState({ open: false, org: null });
+  // KPI-card drill-down modal — clicking any top KPI card (Organizations,
+  // Billable, Non-Billable, Internal, Total) opens the same BarDetailModal
+  // with the matching filter applied to the aggregated entry list.
+  const [kpiModal, setKpiModal] = useState({ open: false, type: null });
   const abortRef = useRef(null);
 
   const fetchData = useCallback((silent = false) => {
@@ -1194,6 +1233,22 @@ ${clients.map((o) => (
         };
       });
   }, [eod, data]);
+
+  // Flat list of every entry under this team for the current period — sourced
+  // by concatenating each org's `entries[]` (shipped by the backend). Powers
+  // the KPI-card drill-down modals so a click on Total / Billable / Internal
+  // opens a single filtered list.
+  const allEntries = useMemo(
+    () => {
+      const out = [];
+      for (const c of clients) {
+        const list = Array.isArray(c.entries) ? c.entries : [];
+        for (const e of list) out.push(e);
+      }
+      return out;
+    },
+    [clients],
+  );
 
   // Real client rows only — exclude "Internal / Other" AND configured clients
   // with zero actual hours this period (they're still kept in the PerfTable as
@@ -1610,11 +1665,32 @@ ${clients.map((o) => (
               suffix=""
               decimals={0}
               sub="Active this period"
+              onClick={() => setKpiModal({ open: true, type: "organizations" })}
             />
-            <KpiCard label="Total Billable" value={summary.totalBillable}  color={C.teal} />
-            <KpiCard label="Non-Billable"   value={summary.totalNonBillable} color={C.orange} />
-            <KpiCard label="Internal"       value={summary.totalInternal ?? 0} color={C.purple} />
-            <KpiCard label="Total Hours"    value={totalHours}                color={C.blue} />
+            <KpiCard
+              label="Total Billable"
+              value={summary.totalBillable}
+              color={C.teal}
+              onClick={() => setKpiModal({ open: true, type: "billable" })}
+            />
+            <KpiCard
+              label="Non-Billable"
+              value={summary.totalNonBillable}
+              color={C.orange}
+              onClick={() => setKpiModal({ open: true, type: "nonBillable" })}
+            />
+            <KpiCard
+              label="Internal"
+              value={summary.totalInternal ?? 0}
+              color={C.purple}
+              onClick={() => setKpiModal({ open: true, type: "internal" })}
+            />
+            <KpiCard
+              label="Total Hours"
+              value={totalHours}
+              color={C.blue}
+              onClick={() => setKpiModal({ open: true, type: "total" })}
+            />
           </div>
         )}
 
@@ -1808,8 +1884,58 @@ ${clients.map((o) => (
         accentColor={C.orange}
         totalHours={Number(orgModal.org?.total ?? orgModal.org?.actual ?? 0)}
       />
+      {kpiModal.open && (() => {
+        const cfg = _kpiConfigFor(kpiModal.type, periodLabel, clients.length);
+        const filtered = _filterEntriesFor(kpiModal.type, allEntries);
+        return (
+          <BarDetailModal
+            open
+            onClose={() => setKpiModal({ open: false, type: null })}
+            title={cfg.title}
+            subtitle={cfg.subtitle}
+            entries={filtered}
+            accentColor={cfg.accent}
+          />
+        );
+      })()}
     </div>
   );
+}
+
+// KPI-card drill-down filter rules. Matches the Internal-category set the
+// backend uses (lower-cased customer-name set), so the modal totals line up
+// with the KPI numbers exactly even when computed client-side.
+const _INTERNAL_NAMES = new Set([
+  "snmp", "breaks for teams", "choose customer",
+  "internal", "internal / other", "training", "admin", "cleanup", "allocation",
+]);
+function _isInternalEntry(e) {
+  return _INTERNAL_NAMES.has(String(e.client || "").trim().toLowerCase());
+}
+function _filterEntriesFor(type, all) {
+  switch (type) {
+    case "billable":     return all.filter((e) => !_isInternalEntry(e) && e.billable === true);
+    case "nonBillable":  return all.filter((e) => !_isInternalEntry(e) && e.billable === false);
+    case "internal":     return all.filter(_isInternalEntry);
+    case "organizations":
+    case "total":
+    default:             return all;
+  }
+}
+function _kpiConfigFor(type, periodLabel, orgCount) {
+  switch (type) {
+    case "organizations":
+      return { title: "All Organizations",  subtitle: `${orgCount} active · ${periodLabel}`,        accent: C.blue   };
+    case "billable":
+      return { title: "Total Billable",     subtitle: `Billable client work · ${periodLabel}`,      accent: C.teal   };
+    case "nonBillable":
+      return { title: "Non-Billable",       subtitle: `Client non-billable · ${periodLabel}`,       accent: C.orange };
+    case "internal":
+      return { title: "Internal Hours",     subtitle: `SNMP / Breaks / Admin / Training · ${periodLabel}`, accent: C.purple };
+    case "total":
+    default:
+      return { title: "Total Hours",        subtitle: `All activity combined · ${periodLabel}`,     accent: "#FFFFFF" };
+  }
 }
 
 // ── Most Underutilized This Week ───────────────────────────────────

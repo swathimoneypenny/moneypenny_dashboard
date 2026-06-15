@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { C, API_BASE, authFetch } from "../config";
 import { LiveIndicator, useAutoRefresh } from "../components/LiveIndicator";
 import DelayDetailModal from "../components/DelayDetailModal";
+import BarDetailModal from "../components/BarDetailModal";
 import {
   BarChart,
   Bar,
@@ -255,9 +256,23 @@ function DarkTooltip({ active, payload, label }) {
 }
 
 // ── KPI card ────────────────────────────────────────────────────
-function KpiCard({ label, value, color, suffix = "h", sublabel }) {
+function KpiCard({ label, value, color, suffix = "h", sublabel, onClick, decimals = 1 }) {
+  const clickable = typeof onClick === "function";
   return (
     <div
+      onClick={clickable ? onClick : undefined}
+      onMouseEnter={(e) => {
+        if (!clickable) return;
+        e.currentTarget.style.transform = "translateY(-2px)";
+        e.currentTarget.style.boxShadow = `0 8px 24px rgba(0,0,0,0.4), inset 0 0 20px ${color}25`;
+        e.currentTarget.style.borderColor = `${color}55`;
+      }}
+      onMouseLeave={(e) => {
+        if (!clickable) return;
+        e.currentTarget.style.transform = "translateY(0)";
+        e.currentTarget.style.boxShadow = `inset 0 0 20px ${color}10`;
+        e.currentTarget.style.borderColor = C.border;
+      }}
       style={{
         background: C.card,
         border: `1px solid ${C.border}`,
@@ -267,16 +282,36 @@ function KpiCard({ label, value, color, suffix = "h", sublabel }) {
         flex: "1 1 160px",
         minWidth: 140,
         boxShadow: `inset 0 0 20px ${color}10`,
+        position: "relative",
+        overflow: "hidden",
+        cursor: clickable ? "pointer" : "default",
+        transition: "transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease",
       }}
     >
       <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
         {label}
       </div>
       <div style={{ fontSize: 26, fontWeight: 700, color, fontFamily: "'DM Mono', monospace" }}>
-        {typeof value === "number" ? value.toFixed(1) : "—"}
+        {typeof value === "number" ? (decimals === 0 ? Math.round(value).toString() : value.toFixed(decimals)) : "—"}
         <span style={{ fontSize: 14, fontWeight: 400, marginLeft: 3, color: C.sec }}>{suffix}</span>
       </div>
       {sublabel && <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>{sublabel}</div>}
+      {clickable && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 4,
+            right: 8,
+            fontSize: 9,
+            color: "rgba(255,255,255,0.40)",
+            fontWeight: 700,
+            letterSpacing: 0.5,
+            pointerEvents: "none",
+          }}
+        >
+          CLICK FOR DETAILS →
+        </div>
+      )}
     </div>
   );
 }
@@ -913,6 +948,9 @@ export default function ClientDashboard({ clientName, onBack, onContextUpdate, o
   const trendAbortRef = useRef(null);
 
   const [lastRefreshed, setLastRefreshed] = useState(null);
+  // KPI-card drill-down modal — clicking any top KPI opens BarDetailModal with
+  // the matching filter applied to the aggregated entry list.
+  const [kpiModal, setKpiModal] = useState({ open: false, type: null });
 
   const fetchMain = useCallback((silent = false) => {
     if (mainAbortRef.current) mainAbortRef.current.abort();
@@ -1043,6 +1081,37 @@ ${Object.entries(staffObj).map(([name, v]) => {
   );
 
   const totalHours = (summary.totalBillable ?? 0) + (summary.totalNonBillable ?? 0);
+
+  // Flat list of every entry under this client for the period — sourced from
+  // each project's `entries[]` in projectsBreakdown. Project-level entries
+  // ship with `serviceCode` / `notes` / string `billable`; normalize to the
+  // BarDetailModal shape (`accountCode` / `desc` / boolean billable) so the
+  // modal can render them without per-source wiring. The project name comes
+  // from the bucket since the row itself doesn't carry it.
+  const allEntries = useMemo(
+    () => {
+      const out = [];
+      const projects = Array.isArray(data?.projectsBreakdown) ? data.projectsBreakdown : [];
+      for (const p of projects) {
+        const list = Array.isArray(p.entries) ? p.entries : [];
+        const projectName = p.projectName || p.name || "(no project)";
+        for (const e of list) {
+          out.push({
+            date:        e.date || "",
+            employee:    e.employee || "",
+            client:      clientName,
+            project:     projectName,
+            accountCode: e.serviceCode || e.accountCode || "",
+            hours:       Number(e.hours) || 0,
+            billable:    e.billable === true || e.billable === "BILLABLE",
+            desc:        e.notes || e.desc || "",
+          });
+        }
+      }
+      return out;
+    },
+    [data, clientName],
+  );
 
   const staffHours = useMemo(
     () => staff.map((s) => ({
@@ -1373,16 +1442,34 @@ ${Object.entries(staffObj).map(([name, v]) => {
                       ? `${(summary.targetHoursFull ?? 0).toFixed(1)}h full`
                       : "pro-rated to today")
               }
+              onClick={() => setKpiModal({ open: true, type: "total" })}
             />
-            <KpiCard label="Total Billable"  value={summary.totalBillable}  color={C.teal} />
-            <KpiCard label="Non-Billable" value={summary.totalNonBillable} color={C.orange} />
-            <KpiCard label="Total Hours"  value={totalHours}                color={C.purple} />
+            <KpiCard
+              label="Total Billable"
+              value={summary.totalBillable}
+              color={C.teal}
+              onClick={() => setKpiModal({ open: true, type: "billable" })}
+            />
+            <KpiCard
+              label="Non-Billable"
+              value={summary.totalNonBillable}
+              color={C.orange}
+              onClick={() => setKpiModal({ open: true, type: "nonBillable" })}
+            />
+            <KpiCard
+              label="Total Hours"
+              value={totalHours}
+              color={C.purple}
+              onClick={() => setKpiModal({ open: true, type: "total" })}
+            />
             <KpiCard
               label="Staff Count"
               value={staff.length}
               color={C.blue}
               suffix=""
               sublabel="active staff"
+              decimals={0}
+              onClick={() => setKpiModal({ open: true, type: "staff" })}
             />
           </div>
         )}
@@ -1582,6 +1669,47 @@ ${Object.entries(staffObj).map(([name, v]) => {
         clientName={clientName}
         onClose={() => setSelectedDay(null)}
       />
+      {kpiModal.open && (() => {
+        const cfg = _kpiConfigFor(kpiModal.type, periodLabel, clientName, staff.length);
+        const filtered = _filterEntriesFor(kpiModal.type, allEntries);
+        return (
+          <BarDetailModal
+            open
+            onClose={() => setKpiModal({ open: false, type: null })}
+            title={cfg.title}
+            subtitle={cfg.subtitle}
+            entries={filtered}
+            accentColor={cfg.accent}
+          />
+        );
+      })()}
     </div>
   );
+}
+
+// KPI-card drill-down filter rules for the Client View. `total` and `staff`
+// both reach the modal with every entry the client logged this period —
+// staff routes through the same modal so the By-Employee column reads as
+// the canonical breakdown for the Staff Count KPI.
+function _filterEntriesFor(type, all) {
+  switch (type) {
+    case "billable":    return all.filter((e) => e.billable === true);
+    case "nonBillable": return all.filter((e) => e.billable === false);
+    case "staff":
+    case "total":
+    default:            return all;
+  }
+}
+function _kpiConfigFor(type, periodLabel, clientName, staffCount) {
+  switch (type) {
+    case "billable":
+      return { title: `${clientName} · Billable`,       subtitle: `Billable client work · ${periodLabel}`,    accent: C.teal   };
+    case "nonBillable":
+      return { title: `${clientName} · Non-Billable`,   subtitle: `Client non-billable · ${periodLabel}`,     accent: C.orange };
+    case "staff":
+      return { title: `${clientName} · Staff (${staffCount})`, subtitle: `Per-employee breakdown · ${periodLabel}`, accent: C.blue };
+    case "total":
+    default:
+      return { title: `${clientName} · All Activity`,   subtitle: `Every entry this period · ${periodLabel}`, accent: C.purple };
+  }
 }
