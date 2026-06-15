@@ -59,11 +59,11 @@ export const TEAMS = [
 // Surface tones get progressively lighter from bg → surface → card → elevated
 // so layered panels remain visually distinct against the deep-navy background.
 export const C = {
-  // Backgrounds
-  bg:       "#080B14",  // page background — deep navy black
-  surface:  "#13182A",  // panels, inputs, table stripes
-  card:     "#1A2138",  // primary card / chart container
-  elevated: "#222B47",  // hover state, modal, popup
+  // Backgrounds — pure dark, minimal blue saturation
+  bg:       "#050810",  // page background — almost black
+  surface:  "#0A0F1C",  // panels, inputs, table stripes
+  card:     "#0E1421",  // primary card / chart container
+  elevated: "#141C30",  // hover state, modal, popup
   overlay:  "rgba(255,255,255,0.04)",  // subtle wash for stat strips
 
   // Borders

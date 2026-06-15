@@ -84,7 +84,7 @@ export default function BarDetailModal({
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          background: "#13182A",
+          background: "#0A0F1C",
           borderRadius: 12,
           borderLeft: `4px solid ${accentColor}`,
           border: "1px solid rgba(255,255,255,0.12)",

@@ -711,7 +711,7 @@ function BillableNonBillableByClient({ clients, periodLabel, loading, onBarClick
   return (
     <div
       style={{
-        background:   "#13182A",
+        background:   "#0A0F1C",
         border:       "1px solid rgba(255,255,255,0.10)",
         borderRadius: 12,
         padding:      20,
@@ -793,7 +793,7 @@ function BillableNonBillableByClient({ clients, periodLabel, loading, onBarClick
             <Tooltip
               cursor={{ fill: "rgba(255,255,255,0.08)" }}
               contentStyle={{
-                background:   "#0F1419",
+                background:   "#050810",
                 border:       "1px solid rgba(255,255,255,0.20)",
                 borderRadius: 8,
                 fontSize:     12,

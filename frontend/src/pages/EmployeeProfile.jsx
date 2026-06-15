@@ -819,7 +819,7 @@ function BillableBreakdownChart({ data, loading, onBarClick }) {
   const totalBillable = breakdown.reduce((s, b) => s + b.hours, 0);
 
   const wrapperStyle = {
-    background:   "#13182A",
+    background:   "#0A0F1C",
     border:       "1px solid rgba(255,255,255,0.10)",
     borderLeft:   `4px solid ${_BILLABLE_GREEN}`,
     borderRadius: 12,
@@ -900,7 +900,7 @@ function BillableBreakdownChart({ data, loading, onBarClick }) {
           <Tooltip
             cursor={{ fill: "rgba(255,255,255,0.08)" }}
             contentStyle={{
-              background:   "#0F1419",
+              background:   "#050810",
               border:       "1px solid rgba(255,255,255,0.20)",
               borderRadius: 8,
               fontSize:     12,
