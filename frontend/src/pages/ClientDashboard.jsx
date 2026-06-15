@@ -458,13 +458,36 @@ function projectColor(hours, redT, greenT) {
 }
 
 function ProjectDetailModal({ project, clientName, onClose }) {
+  const [sortBy, setSortBy] = useState("date_desc");
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
+  const entries = useMemo(() => {
+    const arr = [...(project?.entries || [])];
+    switch (sortBy) {
+      case "date_asc":
+        return arr.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+      case "employee_asc":
+        return arr.sort((a, b) => (a.employee || "").localeCompare(b.employee || ""));
+      case "service_asc":
+        return arr.sort((a, b) => (a.serviceCode || "").localeCompare(b.serviceCode || ""));
+      case "hours_desc":
+        return arr.sort((a, b) => (b.hours || 0) - (a.hours || 0));
+      case "hours_asc":
+        return arr.sort((a, b) => (a.hours || 0) - (b.hours || 0));
+      case "billable_first":
+        return arr.sort((a, b) => {
+          if (a.billable === b.billable) return 0;
+          return a.billable === "BILLABLE" ? -1 : 1;
+        });
+      case "date_desc":
+      default:
+        return arr.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    }
+  }, [project, sortBy]);
   if (!project) return null;
-  const entries = project.entries || [];
   return (
     <div
       onClick={onClose}
@@ -507,6 +530,53 @@ function ProjectDetailModal({ project, clientName, onClose }) {
             ✕ Close
           </button>
         </div>
+
+        {/* Sort bar */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            marginBottom: 14,
+            padding: "10px 14px",
+            background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            borderRadius: 8,
+            flexWrap: "wrap",
+          }}
+        >
+          <span style={{ fontSize: 12, color: "rgba(255,255,255,0.78)", fontWeight: 600, letterSpacing: 0.3 }}>
+            🔄 Sort by:
+          </span>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            style={{
+              background: "rgba(255,255,255,0.08)",
+              color: "#FFFFFF",
+              border: "1px solid rgba(255,255,255,0.18)",
+              borderRadius: 6,
+              padding: "6px 12px",
+              fontSize: 12,
+              cursor: "pointer",
+              outline: "none",
+              minWidth: 200,
+              fontFamily: "'DM Sans', sans-serif",
+            }}
+          >
+            <option value="date_desc"      style={{ background: "#0F1F3A", color: "#FFFFFF" }}>📅 Date (newest first)</option>
+            <option value="date_asc"       style={{ background: "#0F1F3A", color: "#FFFFFF" }}>📅 Date (oldest first)</option>
+            <option value="employee_asc"   style={{ background: "#0F1F3A", color: "#FFFFFF" }}>👤 Employee (A → Z)</option>
+            <option value="service_asc"    style={{ background: "#0F1F3A", color: "#FFFFFF" }}>🔧 Service Code (A → Z)</option>
+            <option value="hours_desc"     style={{ background: "#0F1F3A", color: "#FFFFFF" }}>⏱ Hours (highest first)</option>
+            <option value="hours_asc"      style={{ background: "#0F1F3A", color: "#FFFFFF" }}>⏱ Hours (lowest first)</option>
+            <option value="billable_first" style={{ background: "#0F1F3A", color: "#FFFFFF" }}>💰 Billable first</option>
+          </select>
+          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>
+            {entries.length} entr{entries.length === 1 ? "y" : "ies"}
+          </span>
+        </div>
+
         <div style={{ border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8, overflow: "hidden" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, color: "#FFFFFF" }}>
             <thead>
