@@ -443,7 +443,7 @@ function PerfTable({ orgs }) {
     padding: "12px 14px",
     fontSize: 13,
     color: C.pri,
-    borderBottom: `1px solid ${C.border}40`,
+    borderBottom: `1px solid rgba(255,255,255,0.05)`,
   };
 
   return (
@@ -592,6 +592,42 @@ function PerfTable({ orgs }) {
       </table>
       </div>
 
+      {/* Prominent TOTAL HOURS footer — sum of billable hours across all orgs shown. */}
+      <div
+        style={{
+          marginTop: 12,
+          padding: "14px 18px",
+          background: "rgba(255,255,255,0.08)",
+          borderTop: `2px solid ${C.accent}`,
+          borderRadius: "0 0 12px 12px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <span
+          style={{
+            fontSize: 13,
+            fontWeight: 700,
+            color: "#FFFFFF",
+            textTransform: "uppercase",
+            letterSpacing: 1,
+          }}
+        >
+          TOTAL HOURS
+        </span>
+        <span
+          style={{
+            fontSize: 18,
+            fontWeight: 700,
+            color: "#FFFFFF",
+            fontFamily: "'DM Mono', monospace",
+          }}
+        >
+          {totals.billable.toFixed(1)}h
+        </span>
+      </div>
+
       <div style={{ display: "flex", gap: 16, marginTop: 14, flexWrap: "wrap" }}>
         {[
           { color: C.yellow, label: "< 80% — Below Target" },
@@ -638,7 +674,7 @@ function MembersList({ members, emptyText = "No staff detected." }) {
         display: "flex",
         justifyContent: "space-between",
         padding: "3px 0",
-        borderBottom: i < members.length - 1 ? `1px solid ${C.border}40` : "none",
+        borderBottom: i < members.length - 1 ? `1px solid rgba(255,255,255,0.05)` : "none",
       }}
     >
       <span>{m.name}</span>
@@ -1842,7 +1878,7 @@ function CurrentlyActiveWidget({ members, onSelect }) {
     return (
       <div
         style={{
-          background: businessHours ? `${C.orange}10` : `${C.muted}10`,
+          background: businessHours ? `${C.orange}10` : "rgba(255,255,255,0.06)",
           border: `1px solid ${businessHours ? `${C.orange}30` : C.border}`,
           borderLeft: `3px solid ${color}`,
           borderRadius: 8,
@@ -2048,7 +2084,7 @@ function TeamMembersTable({ members, onSelect }) {
     padding: "12px 14px",
     fontSize: 13,
     color: C.pri,
-    borderBottom: `1px solid ${C.border}40`,
+    borderBottom: `1px solid rgba(255,255,255,0.05)`,
   };
 
   // Identify top-3 most underutilized for red accent

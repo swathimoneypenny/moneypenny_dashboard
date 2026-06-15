@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { C, authFetch } from "../config";
 
 // TL-confirmed palette (2026-06-05):
@@ -22,9 +22,9 @@ const BOOL_COLUMNS = [
 
 function YnPill({ value }) {
   const v = String(value || "na").toLowerCase();
-  if (v === "yes") return <span style={{ color: YN_COLOR.yes, fontWeight: 700 }}>✓</span>;
-  if (v === "no")  return <span style={{ color: YN_COLOR.no,  fontWeight: 700 }}>✗</span>;
-  if (v === "na")  return <span style={{ color: YN_COLOR.na }}>—</span>;
+  if (v === "yes") return <span style={{ color: YN_COLOR.yes, fontWeight: 700 }}>âœ“</span>;
+  if (v === "no")  return <span style={{ color: YN_COLOR.no,  fontWeight: 700 }}>âœ—</span>;
+  if (v === "na")  return <span style={{ color: YN_COLOR.na }}>â€”</span>;
   return <span style={{ color: YN_COLOR.other, fontSize: 11 }}>{value}</span>;
 }
 
@@ -70,7 +70,7 @@ function ChecklistSummaryCards({ summary }) {
   );
 }
 
-// Reusable dropdown — used here AND in the cross-team Admin Hour view.
+// Reusable dropdown â€” used here AND in the cross-team Admin Hour view.
 export function WeekDropdown({ weeks, selected, onChange }) {
   const list = Array.isArray(weeks) ? weeks : [];
   return (
@@ -113,8 +113,8 @@ export function WeekDropdown({ weeks, selected, onChange }) {
 
 
 // "Nothing-to-flag" values that still get shown but rendered muted (gray)
-// instead of orange — TLs use them to mark a row as actively reviewed.
-const _NIL_FLAG_TOKENS = new Set(["nil", "n/a", "na", "none", "-", "—"]);
+// instead of orange â€” TLs use them to mark a row as actively reviewed.
+const _NIL_FLAG_TOKENS = new Set(["nil", "n/a", "na", "none", "-", "â€”"]);
 
 function isNilFlag(text) {
   return _NIL_FLAG_TOKENS.has((text || "").trim().toLowerCase());
@@ -122,7 +122,7 @@ function isNilFlag(text) {
 
 function FlagCard({ flag, nil }) {
   const accent = nil ? "#6B7280" : YN_COLOR.flag;
-  const icon   = nil ? "○" : "⚠️";
+  const icon   = nil ? "â—‹" : "âš ï¸";
   return (
     <div
       style={{
@@ -147,7 +147,7 @@ function FlagCard({ flag, nil }) {
         }}
       >
         <span style={{ color: accent }}>{icon}</span>
-        <span>{flag.week} · {flag.client}</span>
+        <span>{flag.week} Â· {flag.client}</span>
       </div>
       <div
         style={{
@@ -182,9 +182,9 @@ function OpenFlagsList({ summary }) {
           flexWrap: "wrap",
         }}
       >
-        <span>🚩 Open Flags</span>
+        <span>ðŸš© Open Flags</span>
         <span style={{ fontSize: 11, color: C.muted, fontWeight: 500 }}>
-          {realFlags.length} real{nilFlags.length > 0 ? ` · ${nilFlags.length} NIL` : ""}
+          {realFlags.length} real{nilFlags.length > 0 ? ` Â· ${nilFlags.length} NIL` : ""}
         </span>
       </div>
 
@@ -204,7 +204,7 @@ function OpenFlagsList({ summary }) {
 
       {realFlags.length === 0 && nilFlags.length > 0 && (
         <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12, marginBottom: 10 }}>
-          No real flags this period — every reviewed row was marked NIL.
+          No real flags this period â€” every reviewed row was marked NIL.
         </div>
       )}
 
@@ -224,7 +224,7 @@ function OpenFlagsList({ summary }) {
               fontWeight: 600,
             }}
           >
-            {showNil ? "▾" : "▸"} {showNil ? "Hide" : "Show"} {nilFlags.length} NIL entr{nilFlags.length === 1 ? "y" : "ies"}
+            {showNil ? "â–¾" : "â–¸"} {showNil ? "Hide" : "Show"} {nilFlags.length} NIL entr{nilFlags.length === 1 ? "y" : "ies"}
           </button>
           {showNil && (
             <div style={{ marginTop: 10 }}>
@@ -261,7 +261,7 @@ function _normalizeWhaleLinks(input, urlFallback) {
       out.push({ label: (item.label || "").trim(), url: item.url });
     }
   }
-  // Backfill blank labels — match the backend numbering pattern.
+  // Backfill blank labels â€” match the backend numbering pattern.
   const blanks = out.filter((x) => !x.label);
   if (blanks.length === 1 && out.length === 1) out[0].label = "Whale SOP";
   else if (blanks.length > 0) {
@@ -277,7 +277,7 @@ function _normalizeWhaleLinks(input, urlFallback) {
 function WhaleLinkCell({ urls, url }) {
   const list = _normalizeWhaleLinks(urls, url);
   if (list.length === 0) {
-    return <span style={{ color: C.muted, fontSize: 11 }}>—</span>;
+    return <span style={{ color: C.muted, fontSize: 11 }}>â€”</span>;
   }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -300,14 +300,14 @@ function WhaleLinkCell({ urls, url }) {
             display: "inline-block",
           }}
         >
-          🐳 {link.label}
+          ðŸ³ {link.label}
         </a>
       ))}
     </div>
   );
 }
 
-// ── Per-client view helpers ─────────────────────────────────────────
+// â”€â”€ Per-client view helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // The /api/team/{id}/checklist payload is week-major (weeks[].entries[]).
 // TLs reason client-major ("what happened on Portnoy this week?"). This
 // helper inverts the shape: one rollup per logical "row" across every visible
@@ -316,7 +316,7 @@ function WhaleLinkCell({ urls, url }) {
 // "Logical row" = one client for solo entries; ALL siblings collapsed into one
 // row for multi-client entries (where the upstream CSV row listed 3 clients
 // in one cell). That way the heatmap, procedure cards, and training table all
-// show a single combined entry — "EZ Ledger, Putman, Manzelli" — instead of
+// show a single combined entry â€” "EZ Ledger, Putman, Manzelli" â€” instead of
 // three identical rows.
 function buildPerClientView(weeks) {
   const map = new Map();
@@ -339,7 +339,7 @@ function buildPerClientView(weeks) {
       if (!row) {
         const clientList = isMulti ? e.siblings.slice() : [clientLabel];
         row = {
-          // Display label — combined names for multi, plain name for solo.
+          // Display label â€” combined names for multi, plain name for solo.
           client:        isMulti ? clientList.join(", ") : clientLabel,
           clientList,
           isMultiClient: isMulti,
@@ -369,7 +369,7 @@ function buildPerClientView(weeks) {
         row.tasks[col.key] = e[col.key] || "na";
       }
 
-      // Per-client update text — preserve which client got which slice when
+      // Per-client update text â€” preserve which client got which slice when
       // _split_numbered_updates produced distinct chunks.
       const upd = (e.updated_procedure || "").trim();
       const nu  = (e.new_procedure || "").trim();
@@ -389,7 +389,7 @@ function buildPerClientView(weeks) {
       if (tp && !row.trainingPreparers.includes(tp)) row.trainingPreparers.push(tp);
       if (tt && !row.trainingTL.includes(tt))        row.trainingTL.push(tt);
 
-      // Whale links — dedupe (siblings share the same Whale list). Accept
+      // Whale links â€” dedupe (siblings share the same Whale list). Accept
       // either the new [{label, url}] shape or legacy strings.
       const links = Array.isArray(e.whale_links) ? e.whale_links
                   : (e.whale_link ? [e.whale_link] : []);
@@ -409,14 +409,14 @@ function buildPerClientView(weeks) {
 }
 
 
-// Heatmap cell glyphs — colored square per (client × task).
+// Heatmap cell glyphs â€” colored square per (client Ã— task).
 function HeatCell({ value, taskLabel, client }) {
   const v = String(value || "na").toLowerCase();
-  const meta = v === "yes" ? { glyph: "✓", color: "#10B981" }
-             : v === "no"  ? { glyph: "✗", color: "#EF4444" }
-             : v === "na"  ? { glyph: "—", color: "#6B7280" }
-             : { glyph: String(value || "·"), color: YN_COLOR.other };
-  const label = `${client} · ${taskLabel}: ${v.toUpperCase()}`;
+  const meta = v === "yes" ? { glyph: "âœ“", color: "#10B981" }
+             : v === "no"  ? { glyph: "âœ—", color: "#EF4444" }
+             : v === "na"  ? { glyph: "â€”", color: "#6B7280" }
+             : { glyph: String(value || "Â·"), color: YN_COLOR.other };
+  const label = `${client} Â· ${taskLabel}: ${v.toUpperCase()}`;
   return (
     <span
       title={label}
@@ -445,7 +445,7 @@ function PerClientComplianceHeatmap({ rows }) {
     return (
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: C.pri, marginBottom: 4 }}>
-          📊 Per-client Compliance Heatmap
+          ðŸ“Š Per-client Compliance Heatmap
         </div>
         <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12, marginTop: 4 }}>
           No client rows recorded this period.
@@ -478,11 +478,11 @@ function PerClientComplianceHeatmap({ rows }) {
     zIndex: 1,
     textAlign: "left",
   };
-  const cellPad = { padding: "14px 14px", textAlign: "center", borderBottom: `1px solid ${C.border}40` };
+  const cellPad = { padding: "14px 14px", textAlign: "center", borderBottom: `1px solid rgba(255,255,255,0.05)` };
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
       <div style={{ fontSize: 14, fontWeight: 700, color: C.pri, marginBottom: 12 }}>
-        📊 Per-client Compliance Heatmap
+        ðŸ“Š Per-client Compliance Heatmap
       </div>
       <div style={{ overflowX: "auto", maxHeight: 360, border: `1px solid ${C.border}`, borderRadius: 8 }}>
         <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%" }}>
@@ -521,12 +521,12 @@ function PerClientComplianceHeatmap({ rows }) {
                       fontStyle: row.isTeamWide ? "italic" : "normal",
                       color: row.isTeamWide ? C.muted : C.pri,
                       borderRight: `1px solid ${C.border}`,
-                      borderBottom: `1px solid ${C.border}40`,
+                      borderBottom: `1px solid rgba(255,255,255,0.05)`,
                     }}
                   >
                     {row.client}
                     <div style={{ fontSize: 10, color: C.muted, fontFamily: "'DM Mono', monospace", marginTop: 2 }}>
-                      {row.weeks.join(" · ")}
+                      {row.weeks.join(" Â· ")}
                     </div>
                   </td>
                   {BOOL_COLUMNS.map((col) => (
@@ -541,9 +541,9 @@ function PerClientComplianceHeatmap({ rows }) {
         </table>
       </div>
       <div style={{ display: "flex", gap: 14, marginTop: 10, fontSize: 11, color: C.muted }}>
-        <span><span style={{ color: "#10B981", fontWeight: 700 }}>✓</span> Yes</span>
-        <span><span style={{ color: "#EF4444", fontWeight: 700 }}>✗</span> No</span>
-        <span><span style={{ color: "#6B7280" }}>—</span> N/A</span>
+        <span><span style={{ color: "#10B981", fontWeight: 700 }}>âœ“</span> Yes</span>
+        <span><span style={{ color: "#EF4444", fontWeight: 700 }}>âœ—</span> No</span>
+        <span><span style={{ color: "#6B7280" }}>â€”</span> N/A</span>
       </div>
     </div>
   );
@@ -574,11 +574,11 @@ function FieldRow({ label, children }) {
 }
 
 // Chip-style row used in the Procedure Updates cards. Shows the TL-typed
-// label as the chip text — falls back to "Whale N" only when the source
+// label as the chip text â€” falls back to "Whale N" only when the source
 // cell had no preceding label text.
 function WhaleChipRow({ urls }) {
   const list = _normalizeWhaleLinks(urls);
-  if (list.length === 0) return <span style={{ color: C.muted }}>—</span>;
+  if (list.length === 0) return <span style={{ color: C.muted }}>â€”</span>;
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
       {list.map((link, i) => (
@@ -603,7 +603,7 @@ function WhaleChipRow({ urls }) {
             textOverflow: "ellipsis",
           }}
         >
-          🐳 {link.label}
+          ðŸ³ {link.label}
         </a>
       ))}
     </div>
@@ -623,7 +623,7 @@ function ProcedureUpdatesCards({ rows }) {
     return (
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: C.pri, marginBottom: 4 }}>
-          📝 Procedure Updates
+          ðŸ“ Procedure Updates
         </div>
         <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12, marginTop: 4 }}>
           No procedure updates recorded this period.
@@ -634,7 +634,7 @@ function ProcedureUpdatesCards({ rows }) {
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
       <div style={{ fontSize: 14, fontWeight: 700, color: C.pri, marginBottom: 12 }}>
-        📝 Procedure Updates
+        ðŸ“ Procedure Updates
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {cards.flatMap((row) => {
@@ -647,12 +647,12 @@ function ProcedureUpdatesCards({ rows }) {
                 week:         wk,
                 clientBlocks: row.weekUpdatesMap[wk],
               }))
-            : [{ week: row.weeks[0] || "—", clientBlocks: [] }];
+            : [{ week: row.weeks[0] || "â€”", clientBlocks: [] }];
 
           return blocks.map((b, j) => {
             const headerLabel = row.isMultiClient
-              ? `🏢 ${row.clientList.join(" · ")}`
-              : `🏢 ${row.client}`;
+              ? `ðŸ¢ ${row.clientList.join(" Â· ")}`
+              : `ðŸ¢ ${row.client}`;
 
             // Detect broadcast: identical (updated, new) across siblings.
             const first = b.clientBlocks[0];
@@ -691,7 +691,7 @@ function ProcedureUpdatesCards({ rows }) {
                     {headerLabel}
                     {row.isMultiClient && (
                       <span style={{ fontSize: 11, color: C.muted, fontWeight: 500, marginLeft: 8 }}>
-                        · combined entry · ×{row.clientList.length}
+                        Â· combined entry Â· Ã—{row.clientList.length}
                       </span>
                     )}
                   </div>
@@ -711,7 +711,7 @@ function ProcedureUpdatesCards({ rows }) {
                 </div>
 
                 {row.isMultiClient && b.clientBlocks.length > 0 && !allSame ? (
-                  // Distinct per-client text — render one block per sibling.
+                  // Distinct per-client text â€” render one block per sibling.
                   b.clientBlocks.map((cb, k) => (
                     <div
                       key={`${cb.client}-${k}`}
@@ -735,10 +735,10 @@ function ProcedureUpdatesCards({ rows }) {
                         {cb.client}
                       </div>
                       <FieldRow label="Updated">
-                        {cb.updated ? cb.updated : <span style={{ color: C.muted }}>—</span>}
+                        {cb.updated ? cb.updated : <span style={{ color: C.muted }}>â€”</span>}
                       </FieldRow>
                       <FieldRow label="New">
-                        {cb.new ? cb.new : <span style={{ color: C.muted }}>—</span>}
+                        {cb.new ? cb.new : <span style={{ color: C.muted }}>â€”</span>}
                       </FieldRow>
                     </div>
                   ))
@@ -749,12 +749,12 @@ function ProcedureUpdatesCards({ rows }) {
                     <FieldRow label="Updated">
                       {first && first.updated
                         ? first.updated
-                        : <span style={{ color: C.muted }}>—</span>}
+                        : <span style={{ color: C.muted }}>â€”</span>}
                     </FieldRow>
                     <FieldRow label="New">
                       {first && first.new
                         ? first.new
-                        : <span style={{ color: C.muted }}>—</span>}
+                        : <span style={{ color: C.muted }}>â€”</span>}
                     </FieldRow>
                     {row.isMultiClient && allSame && (
                       <div style={{ fontSize: 10, color: C.muted, fontStyle: "italic", marginTop: 4 }}>
@@ -785,7 +785,7 @@ function ProcedureUpdatesCards({ rows }) {
 
 function TrainingTopicsByClientTable({ rows }) {
   const [hoverRow, setHoverRow] = useState(null);
-  // Show every client row — even ones with no training noted — so the user
+  // Show every client row â€” even ones with no training noted â€” so the user
   // can scan all reviewed clients in one place. "(No training noted)" fills
   // empty cells. Multi-client siblings already collapsed in buildPerClientView.
   const allRows = rows || [];
@@ -793,7 +793,7 @@ function TrainingTopicsByClientTable({ rows }) {
     return (
       <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: C.pri, marginBottom: 4 }}>
-          🎓 Training Topics
+          ðŸŽ“ Training Topics
         </div>
         <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12, marginTop: 4 }}>
           No training topics recorded this period.
@@ -818,13 +818,13 @@ function TrainingTopicsByClientTable({ rows }) {
     padding: "12px 14px",
     fontSize: 13,
     color: C.pri,
-    borderBottom: `1px solid ${C.border}40`,
+    borderBottom: `1px solid rgba(255,255,255,0.05)`,
     verticalAlign: "top",
   };
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
       <div style={{ fontSize: 14, fontWeight: 700, color: C.pri, marginBottom: 12 }}>
-        🎓 Training Topics
+        ðŸŽ“ Training Topics
       </div>
       <div style={{ overflowX: "auto", maxHeight: 360, border: `1px solid ${C.border}`, borderRadius: 8 }}>
         <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
@@ -868,7 +868,7 @@ function TrainingTopicsByClientTable({ rows }) {
                       <>
                         <div>{row.clientList.join(", ")}</div>
                         <div style={{ fontSize: 10, color: C.muted, fontWeight: 500, marginTop: 2, fontStyle: "italic" }}>
-                          combined entry · ×{row.clientList.length}
+                          combined entry Â· Ã—{row.clientList.length}
                         </div>
                       </>
                     ) : (
@@ -878,7 +878,7 @@ function TrainingTopicsByClientTable({ rows }) {
                   <td style={td}>
                     {row.trainingPreparers.length === 0
                       ? <span style={{ color: C.muted, fontStyle: "italic", fontSize: 12 }}>
-                          {noTraining ? "(No training noted)" : "—"}
+                          {noTraining ? "(No training noted)" : "â€”"}
                         </span>
                       : row.trainingPreparers.map((t, j) => (
                           <div key={j} style={{ marginBottom: j < row.trainingPreparers.length - 1 ? 4 : 0 }}>
@@ -889,7 +889,7 @@ function TrainingTopicsByClientTable({ rows }) {
                   <td style={td}>
                     {row.trainingTL.length === 0
                       ? <span style={{ color: C.muted, fontStyle: "italic", fontSize: 12 }}>
-                          {noTraining ? "" : "—"}
+                          {noTraining ? "" : "â€”"}
                         </span>
                       : row.trainingTL.map((t, j) => (
                           <div key={j} style={{ marginBottom: j < row.trainingTL.length - 1 ? 4 : 0 }}>
@@ -942,7 +942,7 @@ function ChecklistTable({ weeks, expanded, onToggle }) {
     padding: "8px 10px",
     fontSize: 12,
     color: C.pri,
-    borderBottom: `1px solid ${C.border}40`,
+    borderBottom: `1px solid rgba(255,255,255,0.05)`,
     verticalAlign: "top",
   };
 
@@ -967,8 +967,8 @@ function ChecklistTable({ weeks, expanded, onToggle }) {
           letterSpacing: 0.8,
         }}
       >
-        <span style={{ color: C.sec }}>🗂 Detail Table ({rows.length} row{rows.length === 1 ? "" : "s"})</span>
-        <span style={{ color: C.muted, fontSize: 14 }}>{expanded ? "▾" : "▸"}</span>
+        <span style={{ color: C.sec }}>ðŸ—‚ Detail Table ({rows.length} row{rows.length === 1 ? "" : "s"})</span>
+        <span style={{ color: C.muted, fontSize: 14 }}>{expanded ? "â–¾" : "â–¸"}</span>
       </button>
       {expanded && (
         <div style={{ overflowX: "auto", borderTop: `1px solid ${C.border}` }}>
@@ -996,7 +996,7 @@ function ChecklistTable({ weeks, expanded, onToggle }) {
               {rows.map((r, i) => {
                 const baseBg = i % 2 === 0 ? "transparent" : C.surface;
                 const flagText = (r.flag_tm_ops || "").trim();
-                const flagOpen = flagText && !["nil", "n/a", "na", "none", "-", "—"].includes(flagText.toLowerCase());
+                const flagOpen = flagText && !["nil", "n/a", "na", "none", "-", "â€”"].includes(flagText.toLowerCase());
                 return (
                   <tr key={i} style={{ background: baseBg }}>
                     <td style={{ ...td, fontFamily: "'DM Mono', monospace", color: C.sec, whiteSpace: "nowrap" }}>{r.week}</td>
@@ -1006,13 +1006,13 @@ function ChecklistTable({ weeks, expanded, onToggle }) {
                         : <span style={{ color: C.muted, fontStyle: "italic", fontWeight: 500 }}>Team-wide</span>}
                     </td>
                     <td style={{ ...td, textAlign: "center" }}><YnPill value={r.reviewed_procedure} /></td>
-                    <td style={td}>{r.updated_procedure || <span style={{ color: C.muted }}>—</span>}</td>
-                    <td style={td}>{r.new_procedure || <span style={{ color: C.muted }}>—</span>}</td>
+                    <td style={td}>{r.updated_procedure || <span style={{ color: C.muted }}>â€”</span>}</td>
+                    <td style={td}>{r.new_procedure || <span style={{ color: C.muted }}>â€”</span>}</td>
                     <td style={{ ...td, textAlign: "center" }}><YnPill value={r.updated_escalation} /></td>
                     <td style={{ ...td, textAlign: "center" }}><YnPill value={r.assigned_reading} /></td>
                     <td style={{ ...td, textAlign: "center" }}><YnPill value={r.assigned_quiz} /></td>
-                    <td style={td}>{r.training_preparers || <span style={{ color: C.muted }}>—</span>}</td>
-                    <td style={td}>{r.training_myself || <span style={{ color: C.muted }}>—</span>}</td>
+                    <td style={td}>{r.training_preparers || <span style={{ color: C.muted }}>â€”</span>}</td>
+                    <td style={td}>{r.training_myself || <span style={{ color: C.muted }}>â€”</span>}</td>
                     <td style={{ ...td, textAlign: "center" }}><YnPill value={r.checked_tsheet} /></td>
                     <td style={{ ...td, textAlign: "center" }}><YnPill value={r.checked_meeting_notes} /></td>
                     <td style={{ ...td, textAlign: "center" }}><YnPill value={r.meeting_notes_shared} /></td>
@@ -1067,7 +1067,7 @@ export default function WeeklyChecklistSection({ teamId }) {
     setRefreshing(true);
     try {
       await authFetch("/api/checklist/clear-cache", { method: "POST" });
-    } catch { /* ignore — refetch still works against cached data */ }
+    } catch { /* ignore â€” refetch still works against cached data */ }
     setRefreshNonce((n) => n + 1);
     setRefreshing(false);
   }
@@ -1091,10 +1091,10 @@ export default function WeeklyChecklistSection({ teamId }) {
       >
         <div>
           <div style={{ fontSize: 14, fontWeight: 700, color: C.pri }}>
-            📋 Weekly Admin Checklist
+            ðŸ“‹ Weekly Admin Checklist
           </div>
           <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
-            Live (60s cache). Click ⟳ to force-fetch after editing the sheet.
+            Live (60s cache). Click âŸ³ to force-fetch after editing the sheet.
           </div>
         </div>
         <button
@@ -1117,7 +1117,7 @@ export default function WeeklyChecklistSection({ teamId }) {
           }}
           title="Clear server-side cache + re-fetch this team's checklist"
         >
-          {refreshing ? "⟳ Refreshing…" : "⟳ Refresh"}
+          {refreshing ? "âŸ³ Refreshingâ€¦" : "âŸ³ Refresh"}
         </button>
       </div>
       <div style={{ height: 12 }} />
@@ -1142,7 +1142,7 @@ export default function WeeklyChecklistSection({ teamId }) {
               verticalAlign: "middle",
             }}
           />
-          Loading checklist…
+          Loading checklistâ€¦
         </div>
       )}
 

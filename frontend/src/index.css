@@ -1,11 +1,14 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-  font-family: 'DM Sans', sans-serif;
-  background: #0A1628;
-  color: #E8EDF5;
+  font-family: 'Inter', 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #0A0E1A;
+  color: #FFFFFF;
   min-height: 100vh;
+  font-weight: 500;
+  letter-spacing: 0.2px;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 #root {
@@ -13,14 +16,42 @@ body {
   min-height: 100vh;
 }
 
-code, .mono {
-  font-family: 'DM Mono', monospace;
+h1, h2, h3, h4 {
+  color: #FFFFFF;
+  font-weight: 700;
+  letter-spacing: 0.5px;
 }
 
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #060d1a; }
-::-webkit-scrollbar-thumb { background: #1a3356; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #3d8ef0; }
+code, .mono {
+  font-family: 'DM Mono', 'JetBrains Mono', monospace;
+}
+
+button {
+  font-family: inherit;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: rgba(255,255,255,0.02); }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.25); }
+
+/* Subtle card hover lift — applied opt-in via className="card" */
+.card {
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+.card:hover {
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.2);
+  transform: translateY(-1px);
+}
+
+/* Subtle glow on active tab/pill — applied opt-in via className="active-tab" */
+.active-tab {
+  box-shadow: 0 0 20px rgba(242,137,90,0.3);
+}
 
 @keyframes shimmer {
   0% { background-position: -200% 0; }
@@ -28,18 +59,18 @@ code, .mono {
 }
 
 .skeleton {
-  background: linear-gradient(90deg, #0b1929 25%, #1a3356 50%, #0b1929 75%);
+  background: linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.04) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
   border-radius: 8px;
 }
 
 .kpi-skeleton {
-  background: linear-gradient(90deg, #0f2240 25%, #1a3a60 50%, #0f2240 75%);
+  background: linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.12) 50%, rgba(255,255,255,0.04) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
   border-radius: 10px;
-  border: 1px solid #1a3356;
+  border: 1px solid rgba(255,255,255,0.1);
 }
 
 @keyframes spin {
@@ -49,8 +80,8 @@ code, .mono {
 .spinner {
   width: 32px;
   height: 32px;
-  border: 3px solid #1a3356;
-  border-top-color: #3d8ef0;
+  border: 3px solid rgba(255,255,255,0.1);
+  border-top-color: #F2895A;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }

@@ -55,26 +55,41 @@ export const TEAMS = [
   { id: "team_t", name: "Team T", lead: "" },
 ];
 
+// Dark theme palette — single source of truth, consumed across all dashboards.
+// Surface tones get progressively lighter from bg → surface → card → elevated
+// so layered panels remain visually distinct against the deep-navy background.
 export const C = {
-  bg:      "#0A1628",
-  surface: "#0C1B33",
-  card:    "#0F1F3A",
-  border:  "#1F2D45",
+  // Backgrounds
+  bg:       "#0A0E1A",  // page background — deep navy black
+  surface:  "#13182A",  // panels, inputs, table stripes
+  card:     "#1A2138",  // primary card / chart container
+  elevated: "#222B47",  // hover state, modal, popup
+  overlay:  "rgba(255,255,255,0.04)",  // subtle wash for stat strips
 
+  // Borders
+  border:        "rgba(255,255,255,0.10)",
+  borderStrong:  "rgba(255,255,255,0.20)",
+
+  // Text
+  pri:   "#FFFFFF",                  // primary — pure white
+  sec:   "rgba(255,255,255,0.85)",   // secondary — body text
+  muted: "rgba(255,255,255,0.55)",   // muted — captions, hints
+
+  // Brand accent
+  accent:      "#F2895A",
+  accentLight: "rgba(242,137,90,0.15)",
+
+  // Status / chart colors — preserved for legend & threshold consistency
   teal:   "#3DC58B",
   blue:   "#4A8FE7",
-  green:  "#3DC58B",
-  red:    "#E25C5C",
+  green:  "#10B981",
+  red:    "#EF4444",
   orange: "#F2895A",
   yellow: "#F0B947",
   purple: "#9B7EE8",
 
-  pri:   "#E8EDF5",
-  sec:   "#9DB1CC",
-  muted: "#6B7A95",
-
-  statusGreen:  "rgba(61,197,139,0.12)",
-  statusRed:    "rgba(226,92,92,0.12)",
-  statusOrange: "rgba(242,137,90,0.12)",
-  statusYellow: "rgba(240,185,71,0.14)",
+  statusGreen:  "rgba(16,185,129,0.14)",
+  statusRed:    "rgba(239,68,68,0.14)",
+  statusOrange: "rgba(242,137,90,0.14)",
+  statusYellow: "rgba(240,185,71,0.16)",
 };

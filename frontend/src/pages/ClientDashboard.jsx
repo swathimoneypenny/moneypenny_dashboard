@@ -333,7 +333,7 @@ function StaffTable({ staff }) {
     padding: "12px 14px",
     fontSize: 13,
     color: C.pri,
-    borderBottom: `1px solid ${C.border}40`,
+    borderBottom: `1px solid rgba(255,255,255,0.05)`,
   };
 
   return (
@@ -840,6 +840,43 @@ function ProjectsBreakdownChart({ projects, clientName, loading }) {
           }}
         >
           Showing {processed.length} project{processed.length === 1 ? "" : "s"} with {viewMeta.label.toLowerCase()} hours · {totalShown.toFixed(1)}h total
+        </div>
+      )}
+      {/* Prominent TOTAL HOURS footer — sums the currently visible view (billable / non-billable / total). */}
+      {!loading && processed.length > 0 && (
+        <div
+          style={{
+            marginTop: 12,
+            padding: "14px 18px",
+            background: "rgba(255,255,255,0.08)",
+            borderTop: `2px solid ${C.accent}`,
+            borderRadius: "0 0 12px 12px",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <span
+            style={{
+              fontSize: 13,
+              fontWeight: 700,
+              color: "#FFFFFF",
+              textTransform: "uppercase",
+              letterSpacing: 1,
+            }}
+          >
+            TOTAL {viewMeta.label} HOURS
+          </span>
+          <span
+            style={{
+              fontSize: 18,
+              fontWeight: 700,
+              color: "#FFFFFF",
+              fontFamily: "'DM Mono', monospace",
+            }}
+          >
+            {totalShown.toFixed(1)}h
+          </span>
         </div>
       )}
       {processed.length > 15 && (
