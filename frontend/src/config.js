@@ -60,7 +60,7 @@ export const TEAMS = [
 // so layered panels remain visually distinct against the deep-navy background.
 export const C = {
   // Backgrounds
-  bg:       "#0A0E1A",  // page background — deep navy black
+  bg:       "#080B14",  // page background — deep navy black
   surface:  "#13182A",  // panels, inputs, table stripes
   card:     "#1A2138",  // primary card / chart container
   elevated: "#222B47",  // hover state, modal, popup
