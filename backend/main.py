@@ -5529,12 +5529,13 @@ def _build_employee_response(
     recent = sorted(emp_rows, key=_row_date_key, reverse=True)[:30]
     recent_out = [
         {
-            "date":     (r.get("date") or "")[:10],
-            "client":   r.get("customer") or "",
-            "project":  r.get("project") or "",
-            "hours":    round(float(r.get("hours") or 0), 1),
-            "desc":     (r.get("desc") or "").strip(),
-            "billable": bool(r.get("billable")),
+            "date":        (r.get("date") or "")[:10],
+            "client":      r.get("customer") or "",
+            "project":     r.get("project") or "",
+            "accountCode": r.get("accountCode") or "",
+            "hours":       round(float(r.get("hours") or 0), 1),
+            "desc":        (r.get("desc") or "").strip(),
+            "billable":    bool(r.get("billable")),
         }
         for r in recent
     ]
@@ -5546,12 +5547,13 @@ def _build_employee_response(
     all_entries_sorted = sorted(emp_rows, key=_row_date_key, reverse=True)
     all_entries_out = [
         {
-            "date":     (r.get("date") or "")[:10],
-            "client":   r.get("customer") or "",
-            "project":  r.get("project") or "",
-            "hours":    round(float(r.get("hours") or 0), 1),
-            "desc":     (r.get("desc") or "").strip(),
-            "billable": bool(r.get("billable")),
+            "date":        (r.get("date") or "")[:10],
+            "client":      r.get("customer") or "",
+            "project":     r.get("project") or "",
+            "accountCode": r.get("accountCode") or "",
+            "hours":       round(float(r.get("hours") or 0), 1),
+            "desc":        (r.get("desc") or "").strip(),
+            "billable":    bool(r.get("billable")),
         }
         for r in all_entries_sorted
     ]

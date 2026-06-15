@@ -626,6 +626,207 @@ const today = new Date().toLocaleDateString("en-US", {
   day: "numeric",
 });
 
+// ── Recent Work table: 7 cols (Date / Client / Project / Account Code /
+// Hours / Billable / Description) with an Account-Code filter dropdown.
+// Filtering happens client-side over the already-fetched rows so changing
+// the filter is instant and doesn't re-hit the backend.
+function RecentWorkSection({ rows, loading, acctFilter, setAcctFilter, expandedRow, setExpandedRow }) {
+  const list = Array.isArray(rows) ? rows : [];
+  const acctOptions = useMemo(() => {
+    const counts = {};
+    for (const r of list) {
+      const code = (r.accountCode || "").trim() || "—";
+      counts[code] = (counts[code] || 0) + 1;
+    }
+    return Object.entries(counts)
+      .map(([code, count]) => ({ code, count }))
+      .sort((a, b) => b.count - a.count);
+  }, [list]);
+  const filtered = useMemo(() => {
+    if (acctFilter === "all") return list;
+    return list.filter((r) => ((r.accountCode || "").trim() || "—") === acctFilter);
+  }, [list, acctFilter]);
+
+  const HEADERS = [
+    ["Date",         "left"],
+    ["Client",       "left"],
+    ["Project",      "left"],
+    ["Account Code", "left"],
+    ["Hours",        "right"],
+    ["Billable",     "left"],
+    ["Description",  "left"],
+  ];
+
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 12, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#FFFFFF", letterSpacing: 0.4 }}>
+          📋 Recent Work
+        </div>
+        {!loading && list.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.6)" }}>🔍 Filter by code:</span>
+            <select
+              value={acctFilter}
+              onChange={(e) => setAcctFilter(e.target.value)}
+              style={{
+                background: "rgba(255,255,255,0.08)",
+                color: "#FFFFFF",
+                border: "1px solid rgba(255,255,255,0.18)",
+                borderRadius: 6,
+                padding: "5px 10px",
+                fontSize: 12,
+                cursor: "pointer",
+                outline: "none",
+                minWidth: 200,
+                fontFamily: "'DM Sans', sans-serif",
+              }}
+            >
+              <option value="all" style={{ background: "#0F1F3A", color: "#FFFFFF" }}>
+                All ({list.length} entries)
+              </option>
+              {acctOptions.map((opt) => (
+                <option key={opt.code} value={opt.code} style={{ background: "#0F1F3A", color: "#FFFFFF" }}>
+                  {opt.code} ({opt.count})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
+
+      {!loading && acctFilter !== "all" && (
+        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.7)", marginBottom: 10, fontStyle: "italic" }}>
+          Showing {filtered.length} entr{filtered.length === 1 ? "y" : "ies"} for <strong style={{ color: "#C5B3FF", fontFamily: "'DM Mono', monospace" }}>{acctFilter}</strong>
+          <button
+            onClick={() => setAcctFilter("all")}
+            style={{ marginLeft: 10, background: "transparent", border: "none", color: "#4A8FE7", cursor: "pointer", fontSize: 11 }}
+          >
+            (clear filter)
+          </button>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="kpi-skeleton" style={{ height: 200 }} />
+      ) : list.length === 0 ? (
+        <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, fontStyle: "italic", padding: "16px 0" }}>
+          No recent work in this period.
+        </div>
+      ) : filtered.length === 0 ? (
+        <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, fontStyle: "italic", padding: "16px 0", textAlign: "center" }}>
+          No entries match this filter.
+        </div>
+      ) : (
+        <div style={{ overflowX: "auto", maxHeight: 480, overflowY: "auto", borderRadius: 8, border: "1px solid rgba(255,255,255,0.12)" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", color: "#FFFFFF" }}>
+            <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
+              <tr>
+                {HEADERS.map(([h, a]) => (
+                  <th
+                    key={h}
+                    style={{
+                      padding: "12px 14px",
+                      fontSize: 11,
+                      color: "#FFFFFF",
+                      fontWeight: 600,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.8,
+                      textAlign: a,
+                      background: "rgba(255,255,255,0.08)",
+                      borderBottom: "1px solid rgba(255,255,255,0.12)",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((r, i) => {
+                const expanded = expandedRow === i;
+                const desc     = r.desc ?? "";
+                const isLong   = desc.length > 80;
+                const shown    = expanded || !isLong ? desc : `${desc.slice(0, 80)}…`;
+                const baseBg   = i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.03)";
+                return (
+                  <tr
+                    key={i}
+                    onClick={() => isLong && setExpandedRow(expanded ? null : i)}
+                    style={{ background: baseBg, cursor: isLong ? "pointer" : "default", transition: "background 0.12s" }}
+                  >
+                    <td style={{ padding: "10px 14px", fontSize: 12, color: "rgba(255,255,255,0.75)", fontFamily: "'DM Mono', monospace", whiteSpace: "nowrap", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+                      {r.date || "—"}
+                    </td>
+                    <td style={{ padding: "10px 14px", fontSize: 12, color: "#FFFFFF", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+                      {r.client || "—"}
+                    </td>
+                    <td
+                      title={r.project || ""}
+                      style={{
+                        padding: "10px 14px",
+                        fontSize: 12,
+                        color: "rgba(255,255,255,0.85)",
+                        borderBottom: "1px solid rgba(255,255,255,0.08)",
+                        maxWidth: 180,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {r.project || "—"}
+                    </td>
+                    <td
+                      title={r.accountCode || ""}
+                      style={{
+                        padding: "10px 14px",
+                        fontSize: 11,
+                        color: "#C5B3FF",
+                        fontFamily: "'DM Mono', monospace",
+                        borderBottom: "1px solid rgba(255,255,255,0.08)",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {r.accountCode || "—"}
+                    </td>
+                    <td style={{ padding: "10px 14px", fontSize: 12, color: "#FFFFFF", fontFamily: "'DM Mono', monospace", fontWeight: 600, textAlign: "right", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+                      {Number(r.hours ?? 0).toFixed(2)}
+                    </td>
+                    <td style={{ padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+                      <span
+                        style={{
+                          fontSize: 9,
+                          fontWeight: 700,
+                          letterSpacing: 0.5,
+                          color: r.billable ? "#10B981" : "#F2895A",
+                          background: r.billable ? "rgba(16,185,129,0.15)" : "rgba(242,137,90,0.15)",
+                          padding: "3px 8px",
+                          borderRadius: 20,
+                        }}
+                      >
+                        {r.billable ? "BILLABLE" : "NON-BILL"}
+                      </span>
+                    </td>
+                    <td style={{ padding: "10px 14px", fontSize: 12, color: "#FFFFFF", maxWidth: 480, borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+                      {shown || <span style={{ color: "rgba(255,255,255,0.5)" }}>—</span>}
+                      {isLong && (
+                        <span style={{ color: "rgba(255,255,255,0.55)", marginLeft: 8, fontSize: 10 }}>
+                          {expanded ? "(click to collapse)" : "(click to expand)"}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function EmployeeProfile({ teamId, teamName, employeeName, onBack, onContextUpdate }) {
   const [period, setPeriod] = useState("monthly");
   const [customRange, setCustomRange]   = useState(_defaultCustomRange);
@@ -633,6 +834,8 @@ export default function EmployeeProfile({ teamId, teamName, employeeName, onBack
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [expandedRow, setExpandedRow] = useState(null);
+  const [acctFilter, setAcctFilter]   = useState("all");
+  useEffect(() => { setExpandedRow(null); }, [acctFilter]);
   const [breakdownModal, setBreakdownModal] = useState({ open: false, type: null });
   const abortRef = useRef(null);
 
@@ -965,109 +1168,14 @@ ${lines.join("\n")}`;
         <SimpleNonBillableCard data={data} loading={loading} />
 
         {/* Recent Work */}
-        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: C.sec, marginBottom: 16 }}>
-            Recent Work
-          </div>
-          {loading ? (
-            <div className="kpi-skeleton" style={{ height: 200 }} />
-          ) : (data?.recentWork?.length ?? 0) === 0 ? (
-            <div style={{ color: C.muted, fontSize: 13, fontStyle: "italic", padding: "16px 0" }}>
-              No recent work in this period.
-            </div>
-          ) : (
-            <div style={{ overflowX: "auto", maxHeight: 480, overflowY: "auto", borderRadius: 8, border: `1px solid ${C.border}` }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
-                  <tr>
-                    {["Date", "Client", "Service Title", "Hours", "Billable", "Description"].map((h) => (
-                      <th
-                        key={h}
-                        style={{
-                          padding: "12px 14px",
-                          fontSize: 11,
-                          color: C.muted,
-                          textTransform: "uppercase",
-                          letterSpacing: 0.8,
-                          textAlign: h === "Hours" ? "right" : "left",
-                          borderBottom: `1px solid ${C.border}`,
-                          background: C.card,
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.recentWork.map((r, i) => {
-                    const expanded = expandedRow === i;
-                    const desc = r.desc ?? "";
-                    const isLong = desc.length > 80;
-                    const shown = expanded || !isLong ? desc : `${desc.slice(0, 80)}…`;
-                    const baseBg = i % 2 === 0 ? "transparent" : C.surface;
-                    return (
-                      <tr
-                        key={i}
-                        onClick={() => isLong && setExpandedRow(expanded ? null : i)}
-                        style={{ background: baseBg, cursor: isLong ? "pointer" : "default", transition: "background 0.12s" }}
-                      >
-                        <td style={{ padding: "10px 14px", fontSize: 12, color: C.sec, fontFamily: "'DM Mono', monospace", borderBottom: `1px solid ${C.border}40` }}>
-                          {r.date}
-                        </td>
-                        <td style={{ padding: "10px 14px", fontSize: 12, color: C.pri, borderBottom: `1px solid ${C.border}40` }}>
-                          {r.client}
-                        </td>
-                        <td
-                          title={r.project || ""}
-                          style={{
-                            padding: "10px 14px",
-                            fontSize: 11,
-                            color: C.muted,
-                            borderBottom: `1px solid ${C.border}40`,
-                            maxWidth: 160,
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {r.project || "—"}
-                        </td>
-                        <td style={{ padding: "10px 14px", fontSize: 12, color: C.teal, fontFamily: "'DM Mono', monospace", textAlign: "right", borderBottom: `1px solid ${C.border}40` }}>
-                          {Number(r.hours ?? 0).toFixed(1)}
-                        </td>
-                        <td style={{ padding: "10px 14px", borderBottom: `1px solid ${C.border}40` }}>
-                          <span
-                            style={{
-                              fontSize: 9,
-                              fontWeight: 700,
-                              color: r.billable ? C.teal : C.orange,
-                              background: r.billable ? `${C.teal}18` : `${C.orange}18`,
-                              padding: "3px 8px",
-                              borderRadius: 20,
-                              letterSpacing: 0.5,
-                            }}
-                          >
-                            {r.billable ? "BILLABLE" : "NON-BILL"}
-                          </span>
-                        </td>
-                        <td style={{ padding: "10px 14px", fontSize: 12, color: C.sec, borderBottom: `1px solid ${C.border}40`, maxWidth: 480 }}>
-                          {shown}
-                          {isLong && (
-                            <span style={{ color: C.muted, marginLeft: 8, fontSize: 10 }}>
-                              {expanded ? "(click to collapse)" : "(click to expand)"}
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+        <RecentWorkSection
+          rows={data?.recentWork}
+          loading={loading}
+          acctFilter={acctFilter}
+          setAcctFilter={setAcctFilter}
+          expandedRow={expandedRow}
+          setExpandedRow={setExpandedRow}
+        />
       </div>
       <BreakdownModal
         open={breakdownModal.open}
