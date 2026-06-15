@@ -3920,6 +3920,11 @@ def parse_rows(data) -> list[dict]:
                 "billable":       str(row.get("BILLABLE", "0")) == "1",
                 "customer":       row.get("CUSTOMERNAME", ""),
                 "project":        row.get("PROJECTNAME", ""),
+                # Upstream service-item code, e.g. "000_OS_Admin", "888_OS_REVIEW".
+                # Surfaced by the per-client Projects breakdown so TLs can see
+                # what kind of work each entry represents (admin vs review vs
+                # client work) at a glance.
+                "accountCode":    row.get("ACCOUNTCODENAME", ""),
                 "desc":           row.get("WORKDESCRIPTION", ""),
                 "team":           team,
                 "date":           _normalize_date(date_raw),
@@ -7455,6 +7460,64 @@ async def client_trend(client_name: str):
     return result
 
 
+def _build_projects_breakdown(rows: list[dict], client_name: str) -> list[dict]:
+    """Group this client's timesheet rows by PROJECTNAME (sub-customer) and
+    emit a sorted list with hours + every underlying entry for the
+    click-through modal. Matches the same client-filter `build_client_report`
+    uses, so the projects' totals reconcile with the per-client summary.
+
+    Each entry carries:
+      date, employee, serviceCode (upstream ACCOUNTCODENAME — '000_OS_Admin',
+      '888_OS_REVIEW', etc.), notes, hours, billable.
+    """
+    cn = (client_name or "").lower()
+    buckets: dict[str, dict] = {}
+    for r in rows:
+        if cn not in (r.get("customer") or "").lower() and cn not in (r.get("desc") or "").lower():
+            continue
+        try:
+            h = float(r.get("hours") or 0)
+        except (TypeError, ValueError):
+            h = 0.0
+        if h <= 0:
+            continue
+        project = (r.get("project") or "").strip() or (r.get("customer") or "").strip() or "(General)"
+        billable = bool(r.get("billable"))
+        b = buckets.setdefault(project, {
+            "hours": 0.0, "billableHours": 0.0, "nonBillableHours": 0.0,
+            "entries": [], "uniqueEmployees": set(),
+        })
+        b["hours"] += h
+        if billable:
+            b["billableHours"] += h
+        else:
+            b["nonBillableHours"] += h
+        emp = (r.get("name") or "").strip()
+        if emp:
+            b["uniqueEmployees"].add(emp)
+        b["entries"].append({
+            "date":        (r.get("date") or "")[:10],
+            "employee":    emp,
+            "serviceCode": (r.get("accountCode") or "").strip(),
+            "notes":       (r.get("desc") or "").strip(),
+            "hours":       round(h, 2),
+            "billable":    "BILLABLE" if billable else "NON-BILL",
+        })
+    out: list[dict] = []
+    for name, b in buckets.items():
+        out.append({
+            "projectName":          name,
+            "hours":                round(b["hours"], 1),
+            "billableHours":        round(b["billableHours"], 1),
+            "nonBillableHours":     round(b["nonBillableHours"], 1),
+            "entriesCount":         len(b["entries"]),
+            "uniqueEmployeesCount": len(b["uniqueEmployees"]),
+            "entries":              sorted(b["entries"], key=lambda e: e.get("date") or "", reverse=True),
+        })
+    out.sort(key=lambda p: -p["hours"])
+    return out
+
+
 async def _client_data(
     client_name: str,
     period: str,
@@ -7477,6 +7540,10 @@ async def _client_data(
     today_iso = datetime.now().strftime("%Y-%m-%d")
     rows   = await asyncio.to_thread(get_cached_rows, start, end)
     result = build_client_report(rows, client_name, label)
+    # Per-project breakdown for the new Projects bar chart + drill-down modal.
+    # Filter mirrors build_client_report's so the totals reconcile with the
+    # summary row.
+    result["projectsBreakdown"] = _build_projects_breakdown(rows, client_name)
 
     # Pro-rated target — overlay on top of build_client_report's actual-hours
     # summary. We resolve estHrs by walking TEAM_CLIENTS for the parent team

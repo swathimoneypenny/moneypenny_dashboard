@@ -445,6 +445,206 @@ function StaffTable({ staff }) {
   );
 }
 
+// ── Projects breakdown: horizontal bar chart + drill-down modal ────
+const _PROJECT_PALETTE = ["#4A8FE7", "#3DC58B", "#F2895A", "#9B7EE8", "#F0B947", "#E25C5C", "#6B7A95"];
+
+function ProjectDetailModal({ project, clientName, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  if (!project) return null;
+  const entries = project.entries || [];
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)",
+        zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: C.surface, borderRadius: 12, borderLeft: "4px solid #4A8FE7",
+          maxWidth: 1000, width: "100%", maxHeight: "85vh", overflow: "auto",
+          padding: 24, border: `1px solid ${C.border}`,
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16, gap: 16 }}>
+          <div>
+            <div style={{ fontSize: 11, color: C.muted, letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 4 }}>
+              {clientName || ""}
+            </div>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: C.pri }}>
+              📊 {project.projectName}
+            </h2>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 6, fontFamily: "'DM Mono', monospace" }}>
+              {(project.hours ?? 0).toFixed(1)}h total ·{" "}
+              <span style={{ color: C.teal }}>{(project.billableHours ?? 0).toFixed(1)}h billable</span> ·{" "}
+              <span style={{ color: C.orange }}>{(project.nonBillableHours ?? 0).toFixed(1)}h non-bill</span> ·{" "}
+              {entries.length} entries · {project.uniqueEmployeesCount ?? 0} employee{(project.uniqueEmployeesCount ?? 0) === 1 ? "" : "s"}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background: "transparent", border: `1px solid ${C.border}`, color: C.sec,
+              fontSize: 12, lineHeight: 1, padding: "6px 12px", borderRadius: 6, cursor: "pointer",
+              flexShrink: 0,
+            }}
+          >
+            ✕ Close
+          </button>
+        </div>
+        <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: C.card }}>
+                {[["Date", "left"], ["Employee", "left"], ["Service", "left"], ["Notes", "left"], ["Hours", "right"], ["Billable", "center"]].map(([h, a]) => (
+                  <th key={h} style={{ padding: "10px 12px", textAlign: a, fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" }}>
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {entries.length === 0 ? (
+                <tr>
+                  <td colSpan={6} style={{ padding: 24, textAlign: "center", color: C.muted, fontStyle: "italic" }}>
+                    No entries for this project.
+                  </td>
+                </tr>
+              ) : entries.map((e, i) => (
+                <tr key={i} style={{ borderTop: `1px solid ${C.border}40`, background: i % 2 ? C.bg : "transparent" }}>
+                  <td style={{ padding: "8px 12px", whiteSpace: "nowrap", color: C.muted, fontFamily: "'DM Mono', monospace" }}>
+                    {e.date || "—"}
+                  </td>
+                  <td style={{ padding: "8px 12px", color: C.pri, fontWeight: 500, whiteSpace: "nowrap" }}>
+                    {e.employee || "—"}
+                  </td>
+                  <td title={e.serviceCode || ""} style={{ padding: "8px 12px", color: C.sec, fontFamily: "'DM Mono', monospace", fontSize: 11, whiteSpace: "nowrap" }}>
+                    {e.serviceCode || "—"}
+                  </td>
+                  <td style={{ padding: "8px 12px", color: C.pri }}>
+                    {e.notes || <span style={{ color: C.muted }}>—</span>}
+                  </td>
+                  <td style={{ padding: "8px 12px", textAlign: "right", fontFamily: "'DM Mono', monospace", fontWeight: 600, color: C.pri }}>
+                    {(e.hours ?? 0).toFixed(2)}
+                  </td>
+                  <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                    <span style={{
+                      fontSize: 9, fontWeight: 700, letterSpacing: 0.5, padding: "3px 8px", borderRadius: 20,
+                      color: e.billable === "BILLABLE" ? C.teal : C.orange,
+                      background: e.billable === "BILLABLE" ? `${C.teal}18` : `${C.orange}18`,
+                    }}>
+                      {e.billable}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProjectsBreakdownChart({ projects, clientName, loading }) {
+  const [selected, setSelected]   = useState(null);
+  const [showAll, setShowAll]     = useState(false);
+  const list   = Array.isArray(projects) ? projects : [];
+  const total  = useMemo(() => list.reduce((s, p) => s + (p.hours || 0), 0), [list]);
+  const shown  = showAll ? list : list.slice(0, 15);
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: "4px solid #4A8FE7", borderRadius: 12, padding: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
+        <h3 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: C.sec, textTransform: "uppercase", letterSpacing: 1 }}>
+          📊 Projects · Hours Breakdown
+        </h3>
+        {!loading && (
+          <div style={{ fontSize: 12, color: C.muted, fontFamily: "'DM Mono', monospace" }}>
+            {list.length} project{list.length === 1 ? "" : "s"} · {total.toFixed(1)}h total
+          </div>
+        )}
+      </div>
+      <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic", marginBottom: 14 }}>
+        Click any bar to see every timesheet entry under that project.
+      </div>
+      {loading ? (
+        <div className="kpi-skeleton" style={{ height: 220 }} />
+      ) : list.length === 0 ? (
+        <div style={{ padding: "24px 0", color: C.muted, fontSize: 13, fontStyle: "italic", textAlign: "center" }}>
+          No project hours logged for this client in the active period.
+        </div>
+      ) : (
+        <ResponsiveContainer width="100%" height={Math.max(180, shown.length * 34)}>
+          <BarChart
+            data={shown}
+            layout="vertical"
+            margin={{ top: 4, right: 80, bottom: 4, left: 4 }}
+            onClick={(e) => {
+              const p = e?.activePayload?.[0]?.payload;
+              if (p) setSelected(p);
+            }}
+            style={{ cursor: "pointer" }}
+          >
+            <CartesianGrid stroke={C.border} strokeDasharray="3 3" horizontal={false} />
+            <XAxis type="number" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
+            <YAxis
+              type="category"
+              dataKey="projectName"
+              tick={{ fill: C.sec, fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+              width={180}
+            />
+            <Tooltip
+              cursor={{ fill: "rgba(255,255,255,0.04)" }}
+              contentStyle={{ background: "rgba(11,25,41,0.95)", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, color: C.pri }}
+              formatter={(value, _name, props) => {
+                const p = props.payload || {};
+                return [
+                  `${value}h · ${(p.billableHours ?? 0).toFixed(1)}h bill / ${(p.nonBillableHours ?? 0).toFixed(1)}h non-bill · ${p.entriesCount ?? 0} entries`,
+                  "",
+                ];
+              }}
+            />
+            <Bar dataKey="hours" radius={[0, 4, 4, 0]} maxBarSize={22}>
+              {shown.map((entry, i) => (
+                <Cell key={i} fill={_PROJECT_PALETTE[i % _PROJECT_PALETTE.length]} />
+              ))}
+              <LabelList
+                dataKey="hours"
+                position="right"
+                formatter={(v) => `${Number(v).toFixed(1)}h`}
+                style={{ fill: C.pri, fontSize: 11, fontFamily: "'DM Mono', monospace" }}
+              />
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      )}
+      {list.length > 15 && (
+        <button
+          onClick={() => setShowAll((v) => !v)}
+          style={{
+            marginTop: 12, background: "transparent", border: `1px solid ${C.border}`,
+            color: C.sec, padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12,
+            fontFamily: "'DM Sans', sans-serif",
+          }}
+        >
+          {showAll ? "Show top 15" : `Show all ${list.length} projects`}
+        </button>
+      )}
+      {selected && (
+        <ProjectDetailModal project={selected} clientName={clientName} onClose={() => setSelected(null)} />
+      )}
+    </div>
+  );
+}
+
 // ── Main ─────────────────────────────────────────────────────────
 export default function ClientDashboard({ clientName, onBack, onContextUpdate, onOpenDepartureAnalysis }) {
   const [period, setPeriod] = useState("monthly");
@@ -933,6 +1133,13 @@ ${Object.entries(staffObj).map(([name, v]) => {
             />
           </div>
         )}
+
+        {/* Projects breakdown — bars per project, click for entries modal */}
+        <ProjectsBreakdownChart
+          projects={data?.projectsBreakdown}
+          clientName={clientName}
+          loading={loading}
+        />
 
         {/* Charts grid */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
