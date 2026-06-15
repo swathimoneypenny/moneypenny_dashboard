@@ -797,6 +797,176 @@ function SimpleNonBillableCard({ data, loading, onCategoryClick }) {
   );
 }
 
+// Billable Hours Breakdown — horizontal green bars per client (excluding
+// internal-category customers). Replaces the old Non-Billable Hours
+// Breakdown card (Penny 2026-06-15 follow-up). Bar click drills into the
+// clicked client's billable hours grouped by project.
+function BillableBreakdownChart({ data, loading, onBarClick }) {
+  const breakdown = useMemo(() => {
+    const all = Array.isArray(data?.allEntries) ? data.allEntries : [];
+    const bucket = {};
+    for (const e of all) {
+      if (_isInternalCategory(e.client)) continue;
+      if (!e.billable) continue;
+      const k = (e.client || "Unknown").trim() || "Unknown";
+      bucket[k] = (bucket[k] || 0) + (Number(e.hours) || 0);
+    }
+    return Object.entries(bucket)
+      .map(([client, hours]) => ({ client, hours: Number(hours.toFixed(1)) }))
+      .filter((b) => b.hours > 0)
+      .sort((a, b) => b.hours - a.hours);
+  }, [data]);
+  const totalBillable = breakdown.reduce((s, b) => s + b.hours, 0);
+
+  const wrapperStyle = {
+    background:   "#13182A",
+    border:       "1px solid rgba(255,255,255,0.10)",
+    borderLeft:   `4px solid ${_BILLABLE_GREEN}`,
+    borderRadius: 12,
+    padding:      "18px 20px",
+  };
+  const headerStyle = {
+    fontSize:      14,
+    fontWeight:    800,
+    color:         "#FFFFFF",
+    margin:        0,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+  };
+
+  if (loading) {
+    return (
+      <div style={wrapperStyle}>
+        <h3 style={headerStyle}>📊 Billable Hours Breakdown</h3>
+        <div className="kpi-skeleton" style={{ height: 180, marginTop: 12 }} />
+      </div>
+    );
+  }
+  if (breakdown.length === 0) {
+    return (
+      <div style={wrapperStyle}>
+        <h3 style={headerStyle}>📊 Billable Hours Breakdown</h3>
+        <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 12, marginTop: 10, fontStyle: "italic" }}>
+          No billable hours logged this period.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={wrapperStyle}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 12, flexWrap: "wrap" }}>
+        <h3 style={headerStyle}>📊 Billable Hours Breakdown</h3>
+        <div
+          style={{
+            fontSize:   13,
+            fontWeight: 800,
+            color:      _BILLABLE_GREEN,
+            fontFamily: "'DM Mono', monospace",
+          }}
+        >
+          Total: {totalBillable.toFixed(1)}h
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: "rgba(255,255,255,0.55)", fontStyle: "italic", marginBottom: 12 }}>
+        Click any bar to see this client's billable time grouped by project.
+      </div>
+      <ResponsiveContainer width="100%" height={Math.max(180, breakdown.length * 40)}>
+        <BarChart
+          data={breakdown}
+          layout="vertical"
+          margin={{ top: 4, right: 60, bottom: 4, left: 4 }}
+          onClick={(e) => {
+            const p = e?.activePayload?.[0]?.payload;
+            if (p && onBarClick) onBarClick(p.client);
+          }}
+          style={{ cursor: "pointer" }}
+        >
+          <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" horizontal={false} />
+          <XAxis
+            type="number"
+            tick={{ fill: "#FFFFFF", fontSize: 10, fontWeight: 600 }}
+            axisLine={false}
+            tickLine={false}
+          />
+          <YAxis
+            type="category"
+            dataKey="client"
+            tick={{ fill: "#FFFFFF", fontSize: 11, fontWeight: 600 }}
+            axisLine={false}
+            tickLine={false}
+            width={150}
+          />
+          <Tooltip
+            cursor={{ fill: "rgba(255,255,255,0.08)" }}
+            contentStyle={{
+              background:   "#0F1419",
+              border:       "1px solid rgba(255,255,255,0.20)",
+              borderRadius: 8,
+              fontSize:     12,
+              color:        "#FFFFFF",
+              fontWeight:   600,
+              padding:      "10px 14px",
+            }}
+            labelStyle={{ color: "#FFFFFF", fontWeight: 800 }}
+            itemStyle={{ color: "#FFFFFF" }}
+            formatter={(v) => [`${Number(v).toFixed(1)}h`, "Billable"]}
+          />
+          <Bar
+            dataKey="hours"
+            fill={_BILLABLE_GREEN}
+            radius={[0, 4, 4, 0]}
+            maxBarSize={22}
+            style={{ cursor: "pointer" }}
+            onClick={(payload) => {
+              if (payload && onBarClick) onBarClick(payload.client);
+            }}
+          >
+            <LabelList
+              dataKey="hours"
+              position="right"
+              formatter={(v) => `${Number(v).toFixed(1)}h`}
+              style={{ fill: _BILLABLE_GREEN, fontSize: 11, fontWeight: 700, fontFamily: "'DM Mono', monospace" }}
+            />
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+// SimpleBreakdownModal builder for a click on a green bar in
+// BillableBreakdownChart — slices the employee's billable entries for that
+// client and aggregates by `project`. Empty `project` falls into "(no
+// project)" so a client with one un-projected entry still shows a row.
+function _buildBillableClientModalProps(clientName, data) {
+  if (!clientName) return null;
+  const all = Array.isArray(data?.allEntries) ? data.allEntries : [];
+  const want = clientName.trim().toLowerCase();
+  const bucket = {};
+  let total = 0;
+  for (const e of all) {
+    if (!e.billable) continue;
+    if ((e.client || "").trim().toLowerCase() !== want) continue;
+    const k = (e.project || "(no project)").trim() || "(no project)";
+    const h = Number(e.hours) || 0;
+    bucket[k] = (bucket[k] || 0) + h;
+    total += h;
+  }
+  const items = Object.entries(bucket)
+    .map(([name, value]) => ({ name, value: Number(value), color: _BILLABLE_GREEN }))
+    .filter((it) => it.value > 0)
+    .sort((a, b) => b.value - a.value);
+  return {
+    title:          `💰 ${clientName} · Billable`,
+    subtitle:       `By project · ${data?.period || ""}`,
+    total:          `${total.toFixed(1)}h`,
+    accentColor:    _BILLABLE_GREEN,
+    showPercentage: true,
+    items,
+  };
+}
+
 const today = new Date().toLocaleDateString("en-US", {
   year: "numeric",
   month: "short",
@@ -1057,14 +1227,13 @@ export default function EmployeeProfile({ teamId, teamName, employeeName, onBack
   const [expandedRow, setExpandedRow] = useState(null);
   const [acctFilter, setAcctFilter]   = useState("all");
   useEffect(() => { setExpandedRow(null); }, [acctFilter]);
-  const [breakdownModal, setBreakdownModal] = useState({ open: false, type: null });
-  // Universal bar-drill-down modal opened from Non-Billable / Internal category
-  // bars. Filters the employee's allEntries client-side by the clicked
-  // customer name (no extra fetch needed).
-  const [barModal, setBarModal] = useState({ open: false, category: null, scope: null });
   // KPI-card drill-down — uses SimpleBreakdownModal (compact list, no
-  // search/sort/entries-table) like the Team / Client views.
+  // search/sort/entries-table) like the Team / Client views. Now also driven
+  // by the 3-bar comparison chart's onBarClick.
   const [kpiModal, setKpiModal] = useState({ open: false, type: null });
+  // Billable Hours Breakdown chart click → drill into that client's
+  // billable hours grouped by project. Single new state for the new chart.
+  const [billableClientModal, setBillableClientModal] = useState({ open: false, client: null });
   const abortRef = useRef(null);
 
   const [lastRefreshed, setLastRefreshed] = useState(null);
@@ -1407,23 +1576,28 @@ ${lines.join("\n")}`;
           );
         })()}
 
-        {/* Billable vs Non-Billable — side-by-side comparison. Replaces the
-            "Utilization %" KPI Penny removed 2026-06-12 — gives the same
-            ratio at a glance but with absolute hours, not a static target. */}
+        {/* Billable / Non-Billable / Internal — 3-bar comparison. Bar clicks
+            now route into the same SimpleBreakdownModal the matching KPI
+            card uses (one drill-down per category, no matter which surface
+            opened it). Mapping: "billable"→billable, "non-billable"→
+            nonBillable, "internal"→internal. */}
         <BillableVsNonBillableCard
           data={data}
           loading={loading}
-          onBarClick={(type) => setBreakdownModal({ open: true, type })}
+          onBarClick={(type) => {
+            const t = type === "non-billable" ? "nonBillable" : type;
+            setKpiModal({ open: true, type: t });
+          }}
         />
 
-        {/* Non-Billable Hours — per-category breakdown of the orange bar
-            above. Always renders; falls back to a single "Non-Billable"
-            bar from (Total - Billable) when the per-customer breakdown is
-            absent (defensive — works against any payload shape). */}
-        <SimpleNonBillableCard
+        {/* Billable Hours Breakdown — replaces the old "Non-Billable Hours
+            Breakdown" card per Penny's 2026-06-15 ask. Horizontal green bars
+            per client; click any bar to drill into that client's billable
+            time grouped by project. */}
+        <BillableBreakdownChart
           data={data}
           loading={loading}
-          onCategoryClick={(scope, category) => setBarModal({ open: true, scope, category })}
+          onBarClick={(client) => setBillableClientModal({ open: true, client })}
         />
 
         {/* Recent Work */}
@@ -1436,29 +1610,14 @@ ${lines.join("\n")}`;
           setExpandedRow={setExpandedRow}
         />
       </div>
-      <BreakdownModal
-        open={breakdownModal.open}
-        type={breakdownModal.type}
-        data={data}
-        onClose={() => setBreakdownModal({ open: false, type: null })}
-      />
-      {barModal.open && (() => {
-        const allEntries = Array.isArray(data?.allEntries) ? data.allEntries : [];
-        const cat        = (barModal.category || "").trim().toLowerCase();
-        const filtered   = allEntries.filter((e) => ((e.client || "").trim().toLowerCase() === cat));
-        const total      = filtered.reduce((s, e) => s + (Number(e.hours) || 0), 0);
-        const isInternal = barModal.scope === "internal";
-        const accent     = isInternal ? _INTERNAL_PURPLE : _NON_BILLABLE_ORANGE;
-        const subtitle   = `${isInternal ? "Internal Activities" : "Client Non-Billable"} · ${data?.period || ""}`;
+      {billableClientModal.open && (() => {
+        const props = _buildBillableClientModalProps(billableClientModal.client, data);
+        if (!props) return null;
         return (
-          <BarDetailModal
+          <SimpleBreakdownModal
             open
-            onClose={() => setBarModal({ open: false, category: null, scope: null })}
-            title={barModal.category || ""}
-            subtitle={subtitle}
-            entries={filtered}
-            accentColor={accent}
-            totalHours={total}
+            onClose={() => setBillableClientModal({ open: false, client: null })}
+            {...props}
           />
         );
       })()}
