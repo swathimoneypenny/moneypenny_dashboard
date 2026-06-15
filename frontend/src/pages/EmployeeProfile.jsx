@@ -569,9 +569,27 @@ function BillableVsNonBillableCard({ data, loading, onBarClick }) {
             content={<DarkTooltip />}
             formatter={(v, _name) => [`${Number(v).toFixed(1)}h`, ""]}
           />
-          <Bar dataKey="hours" radius={[6, 6, 0, 0]} maxBarSize={120}>
+          <Bar
+            dataKey="hours"
+            radius={[6, 6, 0, 0]}
+            maxBarSize={120}
+            style={{ cursor: onBarClick ? "pointer" : "default" }}
+            onClick={(payload) => {
+              // Per-Bar fallback — Recharts 3.x sometimes drops the
+              // chart-level onClick on vertical-layout BarCharts. The
+              // per-Bar handler fires reliably on the rectangle itself.
+              if (!onBarClick) return;
+              const t = payload?.type || payload?.payload?.type;
+              if (t) onBarClick(t);
+            }}
+          >
             {chartData.map((entry, i) => (
-              <Cell key={i} fill={entry.fill} />
+              <Cell
+                key={i}
+                fill={entry.fill}
+                style={{ cursor: onBarClick ? "pointer" : "default" }}
+                onClick={() => { if (onBarClick) onBarClick(entry.type); }}
+              />
             ))}
             <LabelList
               dataKey="hours"
@@ -1718,6 +1736,27 @@ function _buildEmployeeKpiModalProps(type, data) {
         .map(([name, value]) => ({ name, value: Number(value), color: _INTERNAL_PURPLE }))
         .filter((it) => it.value > 0)
         .sort((a, b) => b.value - a.value);
+
+      // Append reason hints — top-category callout, plus a warning when one
+      // category eats more than half the internal time (signals overuse of a
+      // single bucket — e.g. SNMP swallowing what should be billable work).
+      if (items.length > 0 && intH > 0) {
+        const top    = items[0];
+        const topPct = (top.value / intH) * 100;
+        items.push({
+          name:  `💡 Top category: ${top.name} (${topPct.toFixed(0)}%)`,
+          value: "",
+          color: "#FFFFFF",
+        });
+        if (topPct > 50) {
+          items.push({
+            name:  `⚠️ ${top.name} dominates internal time`,
+            value: "",
+            color: "#F0B947",
+          });
+        }
+      }
+
       return {
         title:          "🏢 Internal Hours Breakdown",
         subtitle:       `SNMP / Breaks / Admin / Training · ${period}`,

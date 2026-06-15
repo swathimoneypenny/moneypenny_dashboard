@@ -152,7 +152,7 @@ export default function SimpleBreakdownModal({
                   </span>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-                  {showPercentage && (
+                  {showPercentage && typeof it.value === "number" && (
                     <span
                       style={{
                         fontSize: 11, color: "rgba(255,255,255,0.55)",
