@@ -688,6 +688,165 @@ function PerfTable({ orgs, onRowClick }) {
   );
 }
 
+// "Billable vs Non-Billable by Client" — grouped vertical bar chart that
+// replaces the per-month committed/utilized view (Penny 2026-06-15). Two
+// bars per client (green billable / orange non-billable); clicking either
+// opens BarDetailModal with that client's entries pre-filtered by billable
+// flag. Internal/Other and zero-hour configured clients are dropped.
+function BillableNonBillableByClient({ clients, periodLabel, loading, onBarClick }) {
+  const real = (clients || []).filter(
+    (c) =>
+      !c.isInternalOther &&
+      c.name !== "Internal / Other" &&
+      ((Number(c.billable) || 0) > 0 || (Number(c.nonBillable) || 0) > 0),
+  );
+  const chartData = real.map((c) => ({
+    name:           c.name,
+    Billable:       Number(c.billable)    || 0,
+    "Non-Billable": Number(c.nonBillable) || 0,
+    _client:        c,
+  }));
+
+  return (
+    <div
+      style={{
+        background:   "#13182A",
+        border:       "1px solid rgba(255,255,255,0.10)",
+        borderRadius: 12,
+        padding:      20,
+      }}
+    >
+      <div
+        style={{
+          display:        "flex",
+          justifyContent: "space-between",
+          alignItems:     "center",
+          marginBottom:   16,
+          gap:            12,
+          flexWrap:       "wrap",
+        }}
+      >
+        <h3
+          style={{
+            fontSize:      14,
+            fontWeight:    800,
+            color:         "#FFFFFF",
+            margin:        0,
+            textTransform: "uppercase",
+            letterSpacing: 1,
+          }}
+        >
+          💼 Billable vs Non-Billable by Client
+        </h3>
+        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.60)", fontWeight: 600 }}>
+          {periodLabel}
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: "rgba(255,255,255,0.55)", fontStyle: "italic", marginBottom: 12 }}>
+        Click any bar to see detailed entries breakdown
+      </div>
+
+      {loading ? (
+        <div className="kpi-skeleton" style={{ height: 360 }} />
+      ) : chartData.length === 0 ? (
+        <div
+          style={{
+            height: 360, display: "flex", alignItems: "center", justifyContent: "center",
+            color: "rgba(255,255,255,0.55)", fontSize: 13, fontStyle: "italic",
+          }}
+        >
+          No client hours logged for this period.
+        </div>
+      ) : (
+        <ResponsiveContainer width="100%" height={380}>
+          <BarChart
+            data={chartData}
+            margin={{ top: 20, right: 20, bottom: 80, left: 20 }}
+            onClick={(e) => {
+              // Chart-level fallback — fires when the click misses the
+              // colored segment but still lands inside a column.
+              const hit = e?.activePayload?.[0];
+              if (hit?.payload?._client && onBarClick) {
+                onBarClick(hit.payload._client, hit.dataKey);
+              }
+            }}
+            style={{ cursor: "pointer" }}
+          >
+            <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" vertical={false} />
+            <XAxis
+              dataKey="name"
+              tick={{ fill: "#FFFFFF", fontSize: 11, fontWeight: 600 }}
+              axisLine={{ stroke: "rgba(255,255,255,0.20)" }}
+              tickLine={false}
+              angle={-45}
+              textAnchor="end"
+              height={80}
+              interval={0}
+            />
+            <YAxis
+              tick={{ fill: "#FFFFFF", fontSize: 11, fontWeight: 600 }}
+              axisLine={{ stroke: "rgba(255,255,255,0.20)" }}
+              tickLine={false}
+              label={{ value: "Hours", angle: -90, position: "insideLeft", fill: "#FFFFFF", fontSize: 11, fontWeight: 700 }}
+            />
+            <Tooltip
+              cursor={{ fill: "rgba(255,255,255,0.08)" }}
+              contentStyle={{
+                background:   "#0F1419",
+                border:       "1px solid rgba(255,255,255,0.20)",
+                borderRadius: 8,
+                fontSize:     12,
+                color:        "#FFFFFF",
+                fontWeight:   600,
+                padding:      "10px 14px",
+              }}
+              labelStyle={{ color: "#FFFFFF", fontWeight: 800, marginBottom: 6 }}
+              itemStyle={{ color: "#FFFFFF", fontWeight: 600 }}
+              formatter={(v) => [`${Number(v).toFixed(1)}h`, ""]}
+            />
+            <Legend
+              wrapperStyle={{ color: "#FFFFFF", fontWeight: 700, fontSize: 12, paddingTop: 10 }}
+              iconType="square"
+            />
+            <Bar
+              dataKey="Billable"
+              fill="#10B981"
+              radius={[4, 4, 0, 0]}
+              style={{ cursor: "pointer" }}
+              onClick={(payload) => {
+                if (payload?._client && onBarClick) onBarClick(payload._client, "Billable");
+              }}
+            >
+              <LabelList
+                dataKey="Billable"
+                position="top"
+                formatter={(v) => (v > 0 ? `${Number(v).toFixed(1)}h` : "")}
+                style={{ fill: "#10B981", fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono', monospace" }}
+              />
+            </Bar>
+            <Bar
+              dataKey="Non-Billable"
+              fill="#F2895A"
+              radius={[4, 4, 0, 0]}
+              style={{ cursor: "pointer" }}
+              onClick={(payload) => {
+                if (payload?._client && onBarClick) onBarClick(payload._client, "Non-Billable");
+              }}
+            >
+              <LabelList
+                dataKey="Non-Billable"
+                position="top"
+                formatter={(v) => (v > 0 ? `${Number(v).toFixed(1)}h` : "")}
+                style={{ fill: "#F2895A", fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono', monospace" }}
+              />
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      )}
+    </div>
+  );
+}
+
 function ChartCard({ title, children }) {
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 16px" }}>
@@ -1038,6 +1197,10 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
   // Billable, Non-Billable, Internal, Total) opens the same BarDetailModal
   // with the matching filter applied to the aggregated entry list.
   const [kpiModal, setKpiModal] = useState({ open: false, type: null });
+  // Billable / Non-Billable by Client chart — clicking either bar on a
+  // client opens BarDetailModal with that client's entries pre-filtered
+  // by billable flag (type = "Billable" or "Non-Billable").
+  const [clientBarModal, setClientBarModal] = useState({ open: false, client: null, type: null });
   const abortRef = useRef(null);
 
   const fetchData = useCallback((silent = false) => {
@@ -1712,29 +1875,20 @@ ${clients.map((o) => (
         )}
 
         {!data?.needsRosterSetup && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-          <ChartCard title={`Committed vs Utilized Hours by Month (${currentYear})`}>
-            {loading ? (
-              <div className="kpi-skeleton" style={{ height: 260 }} />
-            ) : monthlyEod.length === 0 ? (
-              <div style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic" }}>
-                No data for this period
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height={260}>
-                <ComposedChart data={monthlyEod} barGap={4} barCategoryGap="25%">
-                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                  <XAxis dataKey="month" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <Tooltip content={<DarkTooltip />} />
-                  <Legend wrapperStyle={{ fontSize: 11, color: C.sec }} />
-                  <Bar dataKey="Committed" fill={C.blue}  radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="Utilized"  fill={C.green} radius={[4, 4, 0, 0]} />
-                </ComposedChart>
-              </ResponsiveContainer>
-            )}
-          </ChartCard>
+          <BillableNonBillableByClient
+            clients={clients}
+            periodLabel={periodLabel}
+            loading={loading}
+            onBarClick={(client, type) => setClientBarModal({ open: true, client, type })}
+          />
+        )}
 
+        {!data?.needsRosterSetup && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+          {/* Hours by Organization spans both columns now that the per-month
+              committed/utilized chart was removed — otherwise it would sit
+              orphaned in the left half. */}
+          <div style={{ gridColumn: "1 / -1" }}>
           <ChartCard title="Hours by Organization">
             {loading ? (
               <div className="kpi-skeleton" style={{ height: 260 }} />
@@ -1780,6 +1934,7 @@ ${clients.map((o) => (
               </ResponsiveContainer>
             )}
           </ChartCard>
+          </div>
 
           {/* Spans both columns — third chart card on a 2-wide grid would
               otherwise sit alone in the left column. */}
@@ -1885,6 +2040,27 @@ ${clients.map((o) => (
         accentColor={C.orange}
         totalHours={Number(orgModal.org?.total ?? orgModal.org?.actual ?? 0)}
       />
+      {clientBarModal.open && (() => {
+        const client = clientBarModal.client || {};
+        const type   = clientBarModal.type;
+        const want   = type === "Billable";
+        const all    = Array.isArray(client.entries) ? client.entries : [];
+        const filtered = all.filter((e) => !!e.billable === want);
+        const total    = type === "Billable"
+          ? Number(client.billable ?? 0)
+          : Number(client.nonBillable ?? 0);
+        return (
+          <BarDetailModal
+            open
+            onClose={() => setClientBarModal({ open: false, client: null, type: null })}
+            title={`${client.name || ""} · ${type}`}
+            subtitle={`${type} hours · ${periodLabel}`}
+            entries={filtered}
+            accentColor={want ? "#10B981" : "#F2895A"}
+            totalHours={total}
+          />
+        );
+      })()}
       {kpiModal.open && (() => {
         const props = _buildKpiModalProps({
           type:        kpiModal.type,
