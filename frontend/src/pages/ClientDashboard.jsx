@@ -330,7 +330,7 @@ function SortIcon({ dir }) {
   return <span style={{ marginLeft: 4, opacity: 0.5, fontSize: 10 }}>{dir === "asc" ? "▲" : "▼"}</span>;
 }
 
-function StaffTable({ staff }) {
+function StaffTable({ staff, onRowClick }) {
   const [sort, setSort] = useState({ col: "billable", dir: "desc" });
 
   function toggle(col) {
@@ -397,12 +397,14 @@ function StaffTable({ staff }) {
             const gap = (s.billable ?? 0) - (s.committed ?? 0);
             const st = statusInfo(util);
             const baseBg = i % 2 === 0 ? "transparent" : C.surface;
+            const clickable = typeof onRowClick === "function";
             return (
               <tr
                 key={i}
+                onClick={clickable ? () => onRowClick(s) : undefined}
                 onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(61,142,240,0.05)"; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = baseBg; }}
-                style={{ transition: "background 0.12s", background: baseBg }}
+                style={{ transition: "background 0.12s", background: baseBg, cursor: clickable ? "pointer" : "default" }}
               >
                 <td style={{ ...td, textAlign: "left" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -952,6 +954,12 @@ export default function ClientDashboard({ clientName, onBack, onContextUpdate, o
   // SimpleBreakdownModal with a focused per-card list (by project / by
   // employee / 3-bucket overview). Compact, no search/sort/entries-table.
   const [kpiModal, setKpiModal] = useState({ open: false, type: null });
+  // Per-staff drill-down opened from StaffTable rows — metrics-only modal.
+  const [staffModal, setStaffModal] = useState({ open: false, staff: null });
+  // Per-month drill-down opened from Monthly Hours Trend points — uses the
+  // enriched trend payload (byEmployee / byProject per month) shipped by the
+  // /api/client/{name}/trend endpoint.
+  const [monthModal, setMonthModal] = useState({ open: false, point: null });
 
   const fetchMain = useCallback((silent = false) => {
     if (mainAbortRef.current) mainAbortRef.current.abort();
@@ -1092,24 +1100,18 @@ ${Object.entries(staffObj).map(([name, v]) => {
     [staff]
   );
 
+  // Each trend row carries the enriched per-month rollups (billable, non-
+  // billable, byEmployee, byProject) so the click-through modal can render
+  // a breakdown without a second fetch. We thread it through as `_point` on
+  // each chart datum and stay backwards-compatible with the older trend
+  // shape that only had `{month, hours}`.
   const trendChart = useMemo(
     () => trend.map((t) => ({
-      month: t.month ?? t.date ?? "",
-      Hours: t.hours ?? t.totalBillable ?? t.billable ?? 0,
+      month:  t.month ?? t.date ?? "",
+      Hours:  t.hours ?? t.totalBillable ?? t.billable ?? 0,
+      _point: t,
     })),
     [trend]
-  );
-
-  const hoursBreakdown = useMemo(
-    () => ({
-      billable:    summary.totalBillable    ?? 0,
-      nonBillable: summary.totalNonBillable ?? 0,
-      total:       totalHours,
-      // Use the pro-rated client target (estHrs scaled to working days
-      // elapsed), not the legacy totalCommitted which was just total hours.
-      target:      summary.targetHours      ?? 0,
-    }),
-    [summary.totalBillable, summary.totalNonBillable, summary.targetHours, totalHours]
   );
 
   const agingSummary   = data?.delaysAgeSummary ?? null;
@@ -1455,8 +1457,15 @@ ${Object.entries(staffObj).map(([name, v]) => {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
           {/* Monthly trend (independent loader) */}
           <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 16px" }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: C.sec, marginBottom: 16 }}>
-              Monthly Hours Trend
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: C.sec }}>
+                Monthly Hours Trend
+              </div>
+              {!trendLoading && trendChart.length > 0 && (
+                <div style={{ fontSize: 10, color: C.muted, fontStyle: "italic" }}>
+                  Click any month for the breakdown
+                </div>
+              )}
             </div>
             {trendLoading ? (
               <div
@@ -1474,12 +1483,26 @@ ${Object.entries(staffObj).map(([name, v]) => {
               </div>
             ) : (
               <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={trendChart}>
+                <LineChart
+                  data={trendChart}
+                  onClick={(e) => {
+                    const p = e?.activePayload?.[0]?.payload?._point;
+                    if (p) setMonthModal({ open: true, point: p });
+                  }}
+                  style={{ cursor: "pointer" }}
+                >
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                   <XAxis dataKey="month" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
                   <Tooltip content={<DarkTooltip />} />
-                  <Line type="monotone" dataKey="Hours" stroke={C.blue} strokeWidth={2} dot={{ fill: C.blue, r: 3 }} />
+                  <Line
+                    type="monotone"
+                    dataKey="Hours"
+                    stroke={C.blue}
+                    strokeWidth={2}
+                    dot={{ fill: C.blue, r: 4, style: { cursor: "pointer" } }}
+                    activeDot={{ r: 7, fill: C.blue, stroke: "#FFFFFF", strokeWidth: 2, style: { cursor: "pointer" } }}
+                  />
                 </LineChart>
               </ResponsiveContainer>
             )}
@@ -1574,52 +1597,6 @@ ${Object.entries(staffObj).map(([name, v]) => {
             )}
           </div>
 
-          {/* Hours Breakdown Summary */}
-          <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 22px" }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: C.sec, marginBottom: 20 }}>
-              Hours Breakdown Summary
-            </div>
-            {loading ? (
-              <div style={{ height: 200 }} className="kpi-skeleton" />
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                {[
-                  { label: "Target",       value: hoursBreakdown.target,      color: C.blue },
-                  { label: "Billable",     value: hoursBreakdown.billable,    color: C.teal },
-                  { label: "Non-Billable", value: hoursBreakdown.nonBillable, color: C.orange },
-                  { label: "Total Logged", value: hoursBreakdown.total,       color: C.purple },
-                ].map(({ label, value, color }) => {
-                  const pct = hoursBreakdown.total > 0 ? (value / hoursBreakdown.total) * 100 : 0;
-                  return (
-                    <div key={label}>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 12 }}>
-                        <span style={{ color: C.sec }}>{label}</span>
-                        <span style={{ color, fontFamily: "'DM Mono', monospace", fontWeight: 600 }}>
-                          {value.toFixed(1)}h
-                          {label !== "Total Logged" && label !== "Target" && (
-                            <span style={{ color: C.muted, fontWeight: 400, marginLeft: 6 }}>
-                              ({pct.toFixed(0)}%)
-                            </span>
-                          )}
-                        </span>
-                      </div>
-                      <div style={{ height: 6, background: C.border, borderRadius: 3, overflow: "hidden" }}>
-                        <div
-                          style={{
-                            height: "100%",
-                            width: `${Math.min(pct, 100)}%`,
-                            background: color,
-                            borderRadius: 3,
-                            transition: "width 0.4s ease",
-                          }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
         </div>
 
         {/* Staff Performance Table */}
@@ -1630,7 +1607,10 @@ ${Object.entries(staffObj).map(([name, v]) => {
           {loading ? (
             <div style={{ height: 200 }} className="kpi-skeleton" />
           ) : (
-            <StaffTable staff={staff} />
+            <StaffTable
+              staff={staff}
+              onRowClick={(s) => setStaffModal({ open: true, staff: s })}
+            />
           )}
         </div>
       </div>
@@ -1658,6 +1638,31 @@ ${Object.entries(staffObj).map(([name, v]) => {
           />
         );
       })()}
+      {staffModal.open && (() => {
+        const props = _buildStaffModalProps(
+          staffModal.staff,
+          { clientName, periodLabel, projects: data?.projectsBreakdown },
+        );
+        if (!props) return null;
+        return (
+          <SimpleBreakdownModal
+            open
+            onClose={() => setStaffModal({ open: false, staff: null })}
+            {...props}
+          />
+        );
+      })()}
+      {monthModal.open && (() => {
+        const props = _buildMonthModalProps(monthModal.point);
+        if (!props) return null;
+        return (
+          <SimpleBreakdownModal
+            open
+            onClose={() => setMonthModal({ open: false, point: null })}
+            {...props}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -1666,6 +1671,114 @@ ${Object.entries(staffObj).map(([name, v]) => {
 // focused single-column list — no search / sort / multi-section, no entries
 // table. Items come from data already on the page (projectsBreakdown for
 // project-level rollups, staff for per-employee, summary for the overview).
+// SimpleBreakdownModal builder for a click on a StaffTable row. Sources data
+// from the per-project entries (projectsBreakdown[i].entries[]) — that's the
+// only place the page already has per-staff entries; the client report
+// itself only has roll-ups. Renders metric rows (Billable / Non-Billable /
+// Days active / Avg per day / Billable %) plus top-3 project chips so the
+// modal still tells a useful story without showing the entries table.
+function _buildStaffModalProps(staff, { clientName, periodLabel, projects }) {
+  if (!staff) return null;
+  const want = String(staff.staff || staff.name || "").trim().toLowerCase();
+  if (!want) return null;
+  const projList = Array.isArray(projects) ? projects : [];
+
+  const byProject = {};
+  const byCode    = {};
+  const byDate    = {};
+  let billable    = 0;
+  let nonBillable = 0;
+  for (const p of projList) {
+    const projName = p.projectName || p.name || "(no project)";
+    const ents = Array.isArray(p.entries) ? p.entries : [];
+    for (const e of ents) {
+      const emp = (e.employee || "").trim().toLowerCase();
+      if (emp !== want) continue;
+      const h = Number(e.hours) || 0;
+      if (e.billable === true || e.billable === "BILLABLE") billable    += h;
+      else                                                  nonBillable += h;
+      const code = (e.serviceCode || e.accountCode || "—").trim() || "—";
+      const date = (e.date || "").slice(0, 10);
+      byProject[projName] = (byProject[projName] || 0) + h;
+      byCode[code]        = (byCode[code]        || 0) + h;
+      if (date) byDate[date] = (byDate[date] || 0) + h;
+    }
+  }
+
+  const total       = billable + nonBillable;
+  const daysActive  = Object.keys(byDate).length;
+  const avgPerDay   = daysActive > 0 ? total / daysActive : 0;
+  const billablePct = total > 0 ? (billable / total) * 100 : 0;
+  const topProjects = Object.entries(byProject)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([n, v]) => `${n} (${v.toFixed(1)}h)`)
+    .join(", ");
+  const topCodes = Object.entries(byCode)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([n, v]) => `${n} (${v.toFixed(1)}h)`)
+    .join(", ");
+  const sortedDates = Object.entries(byDate).sort((a, b) => b[1] - a[1]);
+  const mostActive  = sortedDates[0];
+  const leastActive = sortedDates[sortedDates.length - 1];
+
+  const items = [
+    { name: "💰 Billable hours",        value: `${billable.toFixed(1)}h`,    color: "#10B981" },
+    { name: "📋 Non-Billable hours",    value: `${nonBillable.toFixed(1)}h`, color: "#F2895A" },
+    { name: "📊 Billable %",            value: `${billablePct.toFixed(1)}%`, color: "#10B981" },
+    { name: "📅 Days active",           value: `${daysActive}`,              color: "#4A8FE7" },
+    { name: "⏱ Avg hours / active day", value: `${avgPerDay.toFixed(1)}h`,   color: "#4A8FE7" },
+  ];
+  if (topProjects) items.push({ name: "🏆 Top projects",      value: topProjects, color: "#9B7EE8" });
+  if (topCodes)    items.push({ name: "🔧 Top account codes", value: topCodes,    color: "#9B7EE8" });
+  if (mostActive)  items.push({ name: "🔥 Most active day",   value: `${mostActive[0]} (${mostActive[1].toFixed(1)}h)`, color: "#F0B947" });
+  if (leastActive && leastActive[0] !== mostActive?.[0]) {
+    items.push({ name: "🌙 Least active day", value: `${leastActive[0]} (${leastActive[1].toFixed(1)}h)`, color: "#F0B947" });
+  }
+
+  return {
+    title:       `👤 ${staff.staff || staff.name || "Unknown"}`,
+    subtitle:    `Hours summary on ${clientName} · ${periodLabel}`,
+    total:       `${total.toFixed(1)}h`,
+    accentColor: "#4A8FE7",
+    items,
+  };
+}
+
+// SimpleBreakdownModal builder for a click on the Monthly Hours Trend line.
+// Reads from the enriched trend point (byEmployee / byProject) shipped by
+// the /trend endpoint — so a click on a past month still has data without
+// any additional fetch.
+function _buildMonthModalProps(point) {
+  if (!point) return null;
+  const billable    = Number(point.billable    ?? point.hours ?? 0);
+  const nonBillable = Number(point.nonBillable ?? 0);
+  const total       = Number(point.total       ?? (billable + nonBillable));
+  const byEmployee  = Array.isArray(point.byEmployee) ? point.byEmployee : [];
+  const byProject   = Array.isArray(point.byProject)  ? point.byProject  : [];
+
+  const items = [
+    { name: "💰 Billable",     value: billable,    color: "#10B981" },
+    { name: "📋 Non-Billable", value: nonBillable, color: "#F2895A" },
+  ];
+  for (const r of byEmployee.slice(0, 5)) {
+    items.push({ name: `👤 ${r.name}`, value: Number(r.hours) || 0, color: "#4A8FE7" });
+  }
+  for (const r of byProject.slice(0, 5)) {
+    items.push({ name: `📁 ${r.name}`, value: Number(r.hours) || 0, color: "#9B7EE8" });
+  }
+
+  return {
+    title:          `📅 ${point.month || ""}`,
+    subtitle:       `Monthly hours summary`,
+    total:          `${total.toFixed(1)}h`,
+    accentColor:    "#9B7EE8",
+    showPercentage: false,
+    items,
+  };
+}
+
 function _buildClientKpiModalProps({ type, periodLabel, clientName, summary, staff, totalHours, projects }) {
   const projList = Array.isArray(projects) ? projects : [];
   switch (type) {

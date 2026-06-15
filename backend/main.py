@@ -7571,8 +7571,42 @@ async def client_trend(client_name: str):
         rows = await asyncio.to_thread(get_cached_rows, s, e)
         cn   = client_name.lower()
         client_rows = [r for r in rows if cn in r["customer"].lower() or cn in r["desc"].lower()]
-        total = sum(r["hours"] for r in client_rows if r["billable"])
-        trend.append({"month": month_start.strftime("%b %Y"), "hours": round(total, 1)})
+        # Per-month rollups that power the Monthly-Hours-Trend click-through
+        # modal (Penny 2026-06-15): without these the modal would only have
+        # one number to show for past months, since the dashboard's
+        # `allEntries` only covers the currently selected period.
+        billable_h = 0.0
+        non_h      = 0.0
+        by_emp:  dict[str, float] = {}
+        by_proj: dict[str, float] = {}
+        for r in client_rows:
+            h = float(r.get("hours") or 0)
+            if h <= 0:
+                continue
+            if r.get("billable"):
+                billable_h += h
+            else:
+                non_h += h
+            emp  = (r.get("name") or "").strip() or "Unknown"
+            proj = (r.get("project") or "").strip() or "(no project)"
+            by_emp[emp]   = by_emp.get(emp, 0.0)   + h
+            by_proj[proj] = by_proj.get(proj, 0.0) + h
+        trend.append({
+            "month":       month_start.strftime("%b %Y"),
+            "yearMonth":   month_start.strftime("%Y-%m"),
+            "hours":       round(billable_h, 1),     # kept for back-compat (billable only)
+            "billable":    round(billable_h, 1),
+            "nonBillable": round(non_h, 1),
+            "total":       round(billable_h + non_h, 1),
+            "byEmployee": sorted(
+                [{"name": k, "hours": round(v, 1)} for k, v in by_emp.items() if v > 0],
+                key=lambda x: -x["hours"],
+            ),
+            "byProject": sorted(
+                [{"name": k, "hours": round(v, 1)} for k, v in by_proj.items() if v > 0],
+                key=lambda x: -x["hours"],
+            ),
+        })
     result = {"trend": trend}
     _trend_cache[cache_key] = {"data": result, "at": datetime.now()}
     return result
