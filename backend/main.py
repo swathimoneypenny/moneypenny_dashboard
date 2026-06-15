@@ -4441,6 +4441,13 @@ async def _team_response(
     matched_rows = 0
     staff_names_found: set = set()
 
+    # Internal-category hour totals tracked at row-time (Penny 2026-06-15).
+    # Can't be derived from the "Internal / Other" org bucket later because
+    # that bucket also catches UNMAPPED client customers — only the rows
+    # that hit is_internal_code() are true internal work.
+    total_internal_b  = 0.0
+    total_internal_nb = 0.0
+
     # Match priority: assign_row_to_team (handles multi-team name ambiguity)
     # → falls back to row["team"] label equality when no roster is configured.
     def _row_matches(row) -> bool:
@@ -4464,9 +4471,14 @@ async def _team_response(
         # never get matched against TEAM_CLIENTS — they bucket directly into
         # "Internal / Other" so the hours are preserved (not silently dropped)
         # but don't pollute any configured client.
-        if is_internal_code(customer):
+        is_internal_row = is_internal_code(customer)
+        if is_internal_row:
             bucket = orgs["Internal / Other"]
             resolved = None
+            if billable:
+                total_internal_b  += h
+            else:
+                total_internal_nb += h
         else:
             # Resolve against TEAM_CLIENTS; non-matches go to "Internal / Other".
             resolved = _resolve_client_for_team(team_id, customer, desc)
@@ -4560,9 +4572,16 @@ async def _team_response(
 
     print(f"[DEBUG] team={team_id} roster={roster} staffFound={sorted(staff_names_found)[:10]}")
 
-    total_b  = round(sum(c["billable"]    for c in clients_data), 1)
-    total_nb = round(sum(c["nonBillable"] for c in clients_data), 1)
-    total    = round(total_b + total_nb, 1)
+    # Subtract Internal-category hours so totalBillable / totalNonBillable
+    # reflect ONLY client work (Penny 2026-06-15). The per-org bars in
+    # clients_data still carry their unmodified billable / nonBillable so
+    # the "Internal / Other" row (when visible to admins) still adds up.
+    total_b_all  = sum(c["billable"]    for c in clients_data)
+    total_nb_all = sum(c["nonBillable"] for c in clients_data)
+    total_internal = round(total_internal_b + total_internal_nb, 1)
+    total_b  = round(total_b_all  - total_internal_b,  1)
+    total_nb = round(total_nb_all - total_internal_nb, 1)
+    total    = round(total_b + total_nb + total_internal, 1)
 
     # EOD values came from the parallel asyncio.gather above; just count delays.
     total_delays = sum(int(e.get("delays") or 0) for e in eod_rows)
@@ -4667,8 +4686,9 @@ async def _team_response(
             "totalCommitted":        team_target,           # pro-rated
             "totalCommittedFull":    team_target_full,      # full period target
             "eodCommitted":          round(eod_committed, 1),
-            "totalBillable":         total_b,
-            "totalNonBillable":      total_nb,
+            "totalBillable":         total_b,         # excludes Internal categories
+            "totalNonBillable":      total_nb,        # excludes Internal categories
+            "totalInternal":         total_internal,  # SNMP / BREAKS / Training / Admin combined
             "totalUtilized":         total_b,
             "totalTarget":           team_target,
             "totalTargetFull":       team_target_full,

@@ -1125,7 +1125,7 @@ ${clients.map((o) => (
   }, [data, teamName]);
 
   const periodLabel = PERIODS.find((p) => p.key === period)?.label ?? "";
-  const totalHours = (summary.totalBillable ?? 0) + (summary.totalNonBillable ?? 0);
+  const totalHours = (summary.totalBillable ?? 0) + (summary.totalNonBillable ?? 0) + (summary.totalInternal ?? 0);
 
   // Chart 1 — prefer EOD-by-month when available; else fall back to monthlyTrend (rows-derived)
   const monthlyEod = useMemo(() => {
@@ -1597,9 +1597,10 @@ ${clients.map((o) => (
               decimals={0}
               sub="Active this period"
             />
-            <KpiCard label="Total Billable"  value={summary.totalBillable}  color={C.teal} />
-            <KpiCard label="Non-Billable" value={summary.totalNonBillable} color={C.orange} />
-            <KpiCard label="Total Hours"  value={totalHours}                color={C.purple} />
+            <KpiCard label="Total Billable" value={summary.totalBillable}  color={C.teal} />
+            <KpiCard label="Non-Billable"   value={summary.totalNonBillable} color={C.orange} />
+            <KpiCard label="Internal"       value={summary.totalInternal ?? 0} color={C.purple} />
+            <KpiCard label="Total Hours"    value={totalHours}                color={C.blue} />
           </div>
         )}
 
