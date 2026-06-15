@@ -47,26 +47,6 @@ app.add_middleware(
 
 
 @app.middleware("http")
-async def add_charset_header(request: Request, call_next):
-    """Force UTF-8 charset on JSON/text responses so browsers don't fall back
-    to Latin-1 (Windows-1252) and render emojis as mojibake (`📋` → `ðŸ"‹`).
-    Starlette only auto-appends `; charset=utf-8` on text/* media types — JSON
-    needs this nudge. Defensive: applied to text/html too in case any view
-    returns a plain string."""
-    response: Response = await call_next(request)
-    ct = response.headers.get("content-type", "")
-    if ct and "charset" not in ct.lower():
-        lower = ct.lower()
-        if lower.startswith("application/json"):
-            response.headers["content-type"] = "application/json; charset=utf-8"
-        elif lower.startswith("text/html"):
-            response.headers["content-type"] = "text/html; charset=utf-8"
-        elif lower.startswith("text/plain"):
-            response.headers["content-type"] = "text/plain; charset=utf-8"
-    return response
-
-
-@app.middleware("http")
 async def add_cache_control(request: Request, call_next):
     response: Response = await call_next(request)
     path = request.url.path
@@ -90,6 +70,26 @@ async def require_auth(request: Request, call_next):
     if not verify_token(token or ""):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     return await call_next(request)
+
+
+# Registered LAST so it sits OUTERMOST in the stack — runs on every response
+# including 401s short-circuited by require_auth. Forces UTF-8 charset on
+# JSON/text responses so browsers don't fall back to Latin-1 and render
+# emojis as mojibake (`📋` → `ðŸ"‹`). Starlette only auto-appends
+# `; charset=utf-8` on text/* media types — application/json needs the nudge.
+@app.middleware("http")
+async def add_charset_header(request: Request, call_next):
+    response: Response = await call_next(request)
+    ct = response.headers.get("content-type", "")
+    if ct and "charset" not in ct.lower():
+        lower = ct.lower()
+        if lower.startswith("application/json"):
+            response.headers["content-type"] = "application/json; charset=utf-8"
+        elif lower.startswith("text/html"):
+            response.headers["content-type"] = "text/html; charset=utf-8"
+        elif lower.startswith("text/plain"):
+            response.headers["content-type"] = "text/plain; charset=utf-8"
+    return response
 
 
 @app.post("/api/auth/login")
