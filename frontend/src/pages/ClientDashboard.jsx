@@ -445,8 +445,17 @@ function StaffTable({ staff }) {
   );
 }
 
-// ── Projects breakdown: horizontal bar chart + drill-down modal ────
-const _PROJECT_PALETTE = ["#4A8FE7", "#3DC58B", "#F2895A", "#9B7EE8", "#F0B947", "#E25C5C", "#6B7A95"];
+// ── Projects breakdown: vertical bar chart + drill-down modal ────
+// Hours-vs-average color bands. Computed over the FULL project list (not the
+// top-15 slice) so toggling Show All doesn't redefine the bands.
+const _PROJ_RED    = "#EF4444";  // below 0.5 × avg
+const _PROJ_YELLOW = "#F0B947";  // average band
+const _PROJ_GREEN  = "#10B981";  // above 1.5 × avg
+function projectColor(hours, redT, greenT) {
+  if (hours < redT)  return _PROJ_RED;
+  if (hours > greenT) return _PROJ_GREEN;
+  return _PROJ_YELLOW;
+}
 
 function ProjectDetailModal({ project, clientName, onClose }) {
   useEffect(() => {
@@ -474,23 +483,23 @@ function ProjectDetailModal({ project, clientName, onClose }) {
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16, gap: 16 }}>
           <div>
-            <div style={{ fontSize: 11, color: C.muted, letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 4 }}>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.65)", letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 4 }}>
               {clientName || ""}
             </div>
-            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: C.pri }}>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#FFFFFF" }}>
               📊 {project.projectName}
             </h2>
-            <div style={{ fontSize: 12, color: C.muted, marginTop: 6, fontFamily: "'DM Mono', monospace" }}>
-              {(project.hours ?? 0).toFixed(1)}h total ·{" "}
-              <span style={{ color: C.teal }}>{(project.billableHours ?? 0).toFixed(1)}h billable</span> ·{" "}
-              <span style={{ color: C.orange }}>{(project.nonBillableHours ?? 0).toFixed(1)}h non-bill</span> ·{" "}
+            <div style={{ fontSize: 12, color: "rgba(255,255,255,0.78)", marginTop: 6, fontFamily: "'DM Mono', monospace" }}>
+              <span style={{ color: "#FFFFFF", fontWeight: 600 }}>{(project.hours ?? 0).toFixed(1)}h total</span> ·{" "}
+              <span style={{ color: _PROJ_GREEN }}>{(project.billableHours ?? 0).toFixed(1)}h billable</span> ·{" "}
+              <span style={{ color: "#F2895A" }}>{(project.nonBillableHours ?? 0).toFixed(1)}h non-bill</span> ·{" "}
               {entries.length} entries · {project.uniqueEmployeesCount ?? 0} employee{(project.uniqueEmployeesCount ?? 0) === 1 ? "" : "s"}
             </div>
           </div>
           <button
             onClick={onClose}
             style={{
-              background: "transparent", border: `1px solid ${C.border}`, color: C.sec,
+              background: "transparent", border: "1px solid rgba(255,255,255,0.2)", color: "#FFFFFF",
               fontSize: 12, lineHeight: 1, padding: "6px 12px", borderRadius: 6, cursor: "pointer",
               flexShrink: 0,
             }}
@@ -498,12 +507,12 @@ function ProjectDetailModal({ project, clientName, onClose }) {
             ✕ Close
           </button>
         </div>
-        <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+        <div style={{ border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8, overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, color: "#FFFFFF" }}>
             <thead>
-              <tr style={{ background: C.card }}>
-                {[["Date", "left"], ["Employee", "left"], ["Service", "left"], ["Notes", "left"], ["Hours", "right"], ["Billable", "center"]].map(([h, a]) => (
-                  <th key={h} style={{ padding: "10px 12px", textAlign: a, fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" }}>
+              <tr style={{ background: "rgba(255,255,255,0.08)" }}>
+                {[["Date", "left"], ["Employee", "left"], ["Service Code", "left"], ["Notes", "left"], ["Hours", "right"], ["Billable", "center"]].map(([h, a]) => (
+                  <th key={h} style={{ padding: "10px 12px", textAlign: a, fontSize: 11, color: "#FFFFFF", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" }}>
                     {h}
                   </th>
                 ))}
@@ -512,32 +521,32 @@ function ProjectDetailModal({ project, clientName, onClose }) {
             <tbody>
               {entries.length === 0 ? (
                 <tr>
-                  <td colSpan={6} style={{ padding: 24, textAlign: "center", color: C.muted, fontStyle: "italic" }}>
+                  <td colSpan={6} style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.6)", fontStyle: "italic" }}>
                     No entries for this project.
                   </td>
                 </tr>
               ) : entries.map((e, i) => (
-                <tr key={i} style={{ borderTop: `1px solid ${C.border}40`, background: i % 2 ? C.bg : "transparent" }}>
-                  <td style={{ padding: "8px 12px", whiteSpace: "nowrap", color: C.muted, fontFamily: "'DM Mono', monospace" }}>
+                <tr key={i} style={{ borderTop: "1px solid rgba(255,255,255,0.08)", background: i % 2 ? "rgba(255,255,255,0.03)" : "transparent" }}>
+                  <td style={{ padding: "8px 12px", whiteSpace: "nowrap", color: "rgba(255,255,255,0.75)", fontFamily: "'DM Mono', monospace" }}>
                     {e.date || "—"}
                   </td>
-                  <td style={{ padding: "8px 12px", color: C.pri, fontWeight: 500, whiteSpace: "nowrap" }}>
+                  <td style={{ padding: "8px 12px", color: "#FFFFFF", fontWeight: 600, whiteSpace: "nowrap" }}>
                     {e.employee || "—"}
                   </td>
-                  <td title={e.serviceCode || ""} style={{ padding: "8px 12px", color: C.sec, fontFamily: "'DM Mono', monospace", fontSize: 11, whiteSpace: "nowrap" }}>
+                  <td title={e.serviceCode || ""} style={{ padding: "8px 12px", color: "#C5B3FF", fontFamily: "'DM Mono', monospace", fontSize: 11, whiteSpace: "nowrap" }}>
                     {e.serviceCode || "—"}
                   </td>
-                  <td style={{ padding: "8px 12px", color: C.pri }}>
-                    {e.notes || <span style={{ color: C.muted }}>—</span>}
+                  <td style={{ padding: "8px 12px", color: "#FFFFFF" }}>
+                    {e.notes || <span style={{ color: "rgba(255,255,255,0.5)" }}>—</span>}
                   </td>
-                  <td style={{ padding: "8px 12px", textAlign: "right", fontFamily: "'DM Mono', monospace", fontWeight: 600, color: C.pri }}>
+                  <td style={{ padding: "8px 12px", textAlign: "right", fontFamily: "'DM Mono', monospace", fontWeight: 600, color: "#FFFFFF" }}>
                     {(e.hours ?? 0).toFixed(2)}
                   </td>
                   <td style={{ padding: "8px 12px", textAlign: "center" }}>
                     <span style={{
                       fontSize: 9, fontWeight: 700, letterSpacing: 0.5, padding: "3px 8px", borderRadius: 20,
-                      color: e.billable === "BILLABLE" ? C.teal : C.orange,
-                      background: e.billable === "BILLABLE" ? `${C.teal}18` : `${C.orange}18`,
+                      color: e.billable === "BILLABLE" ? _PROJ_GREEN : "#F2895A",
+                      background: e.billable === "BILLABLE" ? "rgba(16,185,129,0.15)" : "rgba(242,137,90,0.15)",
                     }}>
                       {e.billable}
                     </span>
@@ -557,70 +566,140 @@ function ProjectsBreakdownChart({ projects, clientName, loading }) {
   const [showAll, setShowAll]     = useState(false);
   const list   = Array.isArray(projects) ? projects : [];
   const total  = useMemo(() => list.reduce((s, p) => s + (p.hours || 0), 0), [list]);
-  const shown  = showAll ? list : list.slice(0, 15);
+  // Thresholds computed over ALL projects so toggling Show All doesn't
+  // shift the color bands under the user's feet.
+  const avgHours = list.length ? total / list.length : 0;
+  const redT     = avgHours * 0.5;
+  const greenT   = avgHours * 1.5;
+  const shown    = showAll ? list : list.slice(0, 15);
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: "4px solid #4A8FE7", borderRadius: 12, padding: 20 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
-        <h3 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: C.sec, textTransform: "uppercase", letterSpacing: 1 }}>
+        <h3 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#FFFFFF", textTransform: "uppercase", letterSpacing: 1 }}>
           📊 Projects · Hours Breakdown
         </h3>
         {!loading && (
-          <div style={{ fontSize: 12, color: C.muted, fontFamily: "'DM Mono', monospace" }}>
+          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.75)", fontFamily: "'DM Mono', monospace" }}>
             {list.length} project{list.length === 1 ? "" : "s"} · {total.toFixed(1)}h total
           </div>
         )}
       </div>
-      <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic", marginBottom: 14 }}>
-        Click any bar to see every timesheet entry under that project.
+      <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", fontStyle: "italic", marginBottom: 12 }}>
+        Click any bar to see every timesheet entry under that project. Color bands are vs. project average ({avgHours.toFixed(1)}h).
       </div>
+
+      {/* Color-band legend */}
+      {!loading && list.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            gap: 16,
+            padding: "10px 14px",
+            background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            borderRadius: 8,
+            marginBottom: 14,
+            fontSize: 12,
+            color: "#FFFFFF",
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ width: 14, height: 14, background: _PROJ_RED, borderRadius: 3, flexShrink: 0 }} />
+            <span>Below average · &lt; {redT.toFixed(1)}h</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ width: 14, height: 14, background: _PROJ_YELLOW, borderRadius: 3, flexShrink: 0 }} />
+            <span>Average · {redT.toFixed(1)}h – {greenT.toFixed(1)}h</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ width: 14, height: 14, background: _PROJ_GREEN, borderRadius: 3, flexShrink: 0 }} />
+            <span>Above average · &gt; {greenT.toFixed(1)}h</span>
+          </div>
+        </div>
+      )}
+
       {loading ? (
-        <div className="kpi-skeleton" style={{ height: 220 }} />
+        <div className="kpi-skeleton" style={{ height: 320 }} />
       ) : list.length === 0 ? (
-        <div style={{ padding: "24px 0", color: C.muted, fontSize: 13, fontStyle: "italic", textAlign: "center" }}>
+        <div style={{ padding: "24px 0", color: "rgba(255,255,255,0.6)", fontSize: 13, fontStyle: "italic", textAlign: "center" }}>
           No project hours logged for this client in the active period.
         </div>
       ) : (
-        <ResponsiveContainer width="100%" height={Math.max(180, shown.length * 34)}>
+        <ResponsiveContainer width="100%" height={360}>
           <BarChart
             data={shown}
-            layout="vertical"
-            margin={{ top: 4, right: 80, bottom: 4, left: 4 }}
+            margin={{ top: 20, right: 16, bottom: 90, left: 8 }}
             onClick={(e) => {
+              // Chart-level fallback — fires when the click lands anywhere
+              // along the column's x-band, even outside the colored bar.
               const p = e?.activePayload?.[0]?.payload;
               if (p) setSelected(p);
             }}
             style={{ cursor: "pointer" }}
           >
-            <CartesianGrid stroke={C.border} strokeDasharray="3 3" horizontal={false} />
-            <XAxis type="number" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
-            <YAxis
-              type="category"
+            <CartesianGrid stroke="rgba(255,255,255,0.1)" strokeDasharray="3 3" vertical={false} />
+            <XAxis
               dataKey="projectName"
-              tick={{ fill: C.sec, fontSize: 11 }}
-              axisLine={false}
+              tick={{ fill: "#FFFFFF", fontSize: 10 }}
+              axisLine={{ stroke: "rgba(255,255,255,0.2)" }}
               tickLine={false}
-              width={180}
+              angle={-45}
+              textAnchor="end"
+              height={90}
+              interval={0}
+            />
+            <YAxis
+              tick={{ fill: "#FFFFFF", fontSize: 10 }}
+              axisLine={{ stroke: "rgba(255,255,255,0.2)" }}
+              tickLine={false}
+              label={{ value: "Hours", angle: -90, position: "insideLeft", fill: "#FFFFFF", fontSize: 11 }}
             />
             <Tooltip
-              cursor={{ fill: "rgba(255,255,255,0.04)" }}
-              contentStyle={{ background: "rgba(11,25,41,0.95)", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, color: C.pri }}
+              cursor={{ fill: "rgba(255,255,255,0.08)" }}
+              contentStyle={{
+                background: "rgba(0,0,0,0.9)",
+                border: "1px solid rgba(255,255,255,0.2)",
+                borderRadius: 6,
+                fontSize: 11,
+                padding: "8px 12px",
+                color: "#FFFFFF",
+              }}
+              labelStyle={{ color: "#FFFFFF", fontWeight: 700, marginBottom: 4 }}
+              itemStyle={{ color: "#FFFFFF" }}
               formatter={(value, _name, props) => {
                 const p = props.payload || {};
                 return [
-                  `${value}h · ${(p.billableHours ?? 0).toFixed(1)}h bill / ${(p.nonBillableHours ?? 0).toFixed(1)}h non-bill · ${p.entriesCount ?? 0} entries`,
-                  "",
+                  `${Number(value).toFixed(1)}h · ${(p.billableHours ?? 0).toFixed(1)}h bill / ${(p.nonBillableHours ?? 0).toFixed(1)}h non-bill · ${p.entriesCount ?? 0} entries`,
+                  "Total",
                 ];
               }}
             />
-            <Bar dataKey="hours" radius={[0, 4, 4, 0]} maxBarSize={22}>
+            <Bar
+              dataKey="hours"
+              radius={[4, 4, 0, 0]}
+              maxBarSize={48}
+              onClick={(payload) => {
+                // Recharts hands the bar's data as the first arg when this
+                // prop is on <Bar>. Fires on direct hits on the colored
+                // segment; chart-level onClick covers everything else.
+                if (payload) setSelected(payload);
+              }}
+              style={{ cursor: "pointer" }}
+            >
               {shown.map((entry, i) => (
-                <Cell key={i} fill={_PROJECT_PALETTE[i % _PROJECT_PALETTE.length]} />
+                <Cell
+                  key={i}
+                  fill={projectColor(entry.hours, redT, greenT)}
+                  style={{ cursor: "pointer" }}
+                  onClick={() => setSelected(entry)}
+                />
               ))}
               <LabelList
                 dataKey="hours"
-                position="right"
+                position="top"
                 formatter={(v) => `${Number(v).toFixed(1)}h`}
-                style={{ fill: C.pri, fontSize: 11, fontFamily: "'DM Mono', monospace" }}
+                style={{ fill: "#FFFFFF", fontSize: 10, fontFamily: "'DM Mono', monospace" }}
               />
             </Bar>
           </BarChart>
@@ -630,8 +709,8 @@ function ProjectsBreakdownChart({ projects, clientName, loading }) {
         <button
           onClick={() => setShowAll((v) => !v)}
           style={{
-            marginTop: 12, background: "transparent", border: `1px solid ${C.border}`,
-            color: C.sec, padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12,
+            marginTop: 12, background: "transparent", border: "1px solid rgba(255,255,255,0.2)",
+            color: "#FFFFFF", padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12,
             fontFamily: "'DM Sans', sans-serif",
           }}
         >
