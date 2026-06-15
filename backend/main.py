@@ -5290,6 +5290,30 @@ _PER_PREPARER_DAILY = 16.0
 _EMPLOYEE_DAILY_QUOTA = 8.0
 
 
+# Customer-name strings that the timesheet upstream uses for *internal* time
+# (training, breaks, admin, allocation, etc.) — not client work. The employee
+# dashboard splits these into their own "Internal" bucket so the
+# Non-Billable bar reflects ONLY client non-billable work, which is what
+# Penny wanted to see (2026-06-15). Match is lower-cased + stripped.
+_INTERNAL_CATEGORY_NAMES = {
+    "snmp",
+    "breaks for teams",
+    "choose customer",
+    "internal",
+    "internal / other",
+    "training",
+    "admin",
+    "cleanup",
+    "allocation",
+}
+
+
+def _is_internal_category(customer_name) -> bool:
+    if not customer_name:
+        return False
+    return str(customer_name).strip().lower() in _INTERNAL_CATEGORY_NAMES
+
+
 def get_employee_committed_hours(
     team_id: str,
     period:  str,
@@ -5459,10 +5483,28 @@ def _build_employee_response(
     emp_rows, strategy = _match_employee_rows(rows, employee_name)
     canonical_name = (emp_rows[0].get("name") if emp_rows else employee_name)
 
-    total_h     = sum(float(r.get("hours") or 0) for r in emp_rows)
-    billable_h  = sum(float(r.get("hours") or 0) for r in emp_rows if r.get("billable"))
-    nonbill_h   = total_h - billable_h
-    bill_pct    = round(billable_h / total_h * 100, 1) if total_h > 0 else 0.0
+    # Three-bucket split (Penny 2026-06-15): Internal categories (SNMP,
+    # BREAKS, Training, Admin, etc.) come out of the customer name and
+    # become their own bucket — Non-Billable now reflects ONLY client
+    # non-billable work, which is what she wants to read at a glance.
+    # Billable rows from internal customers still count as Internal so
+    # the bucket sum equals all time on internal activities.
+    total_h    = sum(float(r.get("hours") or 0) for r in emp_rows)
+    billable_h = 0.0
+    nonbill_h  = 0.0   # client non-billable only
+    internal_h = 0.0
+    for r in emp_rows:
+        h = float(r.get("hours") or 0)
+        if h <= 0:
+            continue
+        if _is_internal_category(r.get("customer")):
+            internal_h += h
+            continue
+        if r.get("billable"):
+            billable_h += h
+        else:
+            nonbill_h += h
+    bill_pct = round(billable_h / total_h * 100, 1) if total_h > 0 else 0.0
 
     # Individual Employee Dashboard uses an 8h/working-day quota — overrides
     # the team-level 16h-derived bucket totals so the target reflects what
@@ -5503,23 +5545,30 @@ def _build_employee_response(
         for name, v in sorted(by_client.items(), key=lambda kv: -kv[1]["hours"])
     ][:5]
 
-    # Non-billable breakdown by raw customer name (per Penny's 2026-06-10 ask).
-    # We bucket every non-billable row under its customer field — that's what
-    # the source data carries (no PTO / Training / Internal-Meeting category
-    # column exists). Bars will be Training / Admin / BREAKS FOR TEAMS / SNMP
-    # / Choose Customer / etc. — whatever's actually in the timesheets.
+    # Non-billable breakdown by raw customer name (per Penny's 2026-06-10 ask),
+    # split into CLIENT non-billable vs INTERNAL activities (2026-06-15) so the
+    # Non-Billable chart shows only real client non-billable categories. Internal
+    # hours (billable + non-billable) get their own bucket per category.
     nb_buckets: dict[str, float] = {}
+    internal_buckets: dict[str, float] = {}
     for r in emp_rows:
-        if r.get("billable"):
-            continue
         h = float(r.get("hours") or 0)
         if h <= 0:
             continue
         cat = (r.get("customer") or "").strip() or "Unspecified"
+        if _is_internal_category(cat):
+            internal_buckets[cat] = internal_buckets.get(cat, 0.0) + h
+            continue
+        if r.get("billable"):
+            continue
         nb_buckets[cat] = nb_buckets.get(cat, 0.0) + h
     non_billable_breakdown = [
         {"category": k, "hours": round(v, 1)}
         for k, v in sorted(nb_buckets.items(), key=lambda kv: -kv[1])
+    ]
+    internal_breakdown = [
+        {"category": k, "hours": round(v, 1)}
+        for k, v in sorted(internal_buckets.items(), key=lambda kv: -kv[1])
     ]
 
     # Recent work — top 30 rows sorted by date desc
@@ -5633,8 +5682,10 @@ def _build_employee_response(
         "period":                label,
         "totalHours":            round(total_h, 1),
         "billableHours":         round(billable_h, 1),
-        "nonBillableHours":      round(nonbill_h, 1),
+        "nonBillableHours":      round(nonbill_h, 1),        # client non-billable only
+        "internalHours":         round(internal_h, 1),
         "nonBillableBreakdown":  non_billable_breakdown,
+        "internalBreakdown":     internal_breakdown,
         "billablePct":           bill_pct,
         "committedHours":        round(committed, 1),         # pro-rated
         "committedHoursFull":    round(committed_full, 1),    # full period target

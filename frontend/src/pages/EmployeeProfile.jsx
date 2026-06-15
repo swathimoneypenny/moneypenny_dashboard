@@ -116,12 +116,35 @@ function ChartCard({ title, children }) {
   );
 }
 
-// Billable vs Non-Billable — two-bar comparison card. Penny removed the
-// "Utilization %" KPI 2026-06-12 in favour of this absolute-hours view.
+// Billable / Non-Billable / Internal — three-bar comparison card. Penny removed
+// the "Utilization %" KPI 2026-06-12 in favour of this absolute-hours view, and
+// asked 2026-06-15 to split Internal (SNMP / BREAKS / Training / Admin / etc.)
+// out of Non-Billable so the orange bar reflects only client non-billable time.
 // Same orange-left-border styling as SimpleNonBillableCard below so the two
 // cards read as a pair.
-const _BILLABLE_GREEN  = "#3DC58B";
+const _BILLABLE_GREEN      = "#3DC58B";
 const _NON_BILLABLE_ORANGE = "#F2895A";
+const _INTERNAL_PURPLE     = "#9B7EE8";
+
+// Internal-customer name set (matches backend _INTERNAL_CATEGORY_NAMES). Used
+// only by the BreakdownModal to filter `allEntries` client-side when a bar
+// click resolves to a category — totals already arrive pre-split from the
+// backend, so this exists purely for the drill-down list view.
+const _INTERNAL_CATEGORY_NAMES = new Set([
+  "snmp",
+  "breaks for teams",
+  "choose customer",
+  "internal",
+  "internal / other",
+  "training",
+  "admin",
+  "cleanup",
+  "allocation",
+]);
+function _isInternalCategory(name) {
+  if (!name) return false;
+  return _INTERNAL_CATEGORY_NAMES.has(String(name).trim().toLowerCase());
+}
 
 
 // Drill-down modal opened by clicking a bar in the Billable vs Non-Billable
@@ -138,9 +161,18 @@ function BreakdownModal({ open, type, data, onClose }) {
 
   if (!open) return null;
 
-  const isBillable = type === "billable";
-  const accent     = isBillable ? _BILLABLE_GREEN : _NON_BILLABLE_ORANGE;
-  const title      = isBillable ? "📊 Billable Breakdown" : "📊 Non-Billable Breakdown";
+  // Three drill-down modes — internal categories are excluded from the
+  // billable / non-billable filters so each bucket's modal list adds up to
+  // the bar height the user just clicked.
+  const isBillable    = type === "billable";
+  const isNonBillable = type === "non-billable";
+  const isInternal    = type === "internal";
+  const accent = isInternal
+    ? _INTERNAL_PURPLE
+    : (isBillable ? _BILLABLE_GREEN : _NON_BILLABLE_ORANGE);
+  const title = isInternal
+    ? "📊 Internal Breakdown"
+    : (isBillable ? "📊 Billable Breakdown" : "📊 Non-Billable Breakdown");
 
   // Pull from allEntries (full set) when present so totals match the chart
   // bars exactly; fall back to recentWork (top 30) for back-compat with any
@@ -148,13 +180,21 @@ function BreakdownModal({ open, type, data, onClose }) {
   const source = Array.isArray(data?.allEntries) && data.allEntries.length > 0
     ? data.allEntries
     : (data?.recentWork ?? []);
-  const filtered = source.filter((r) => !!r.billable === isBillable);
+  const filtered = source.filter((r) => {
+    const internal = _isInternalCategory(r.client);
+    if (isInternal)    return internal;
+    if (isBillable)    return !internal && !!r.billable;
+    if (isNonBillable) return !internal && !r.billable;
+    return false;
+  });
 
   // The chart's authoritative totals — show these so the modal header matches
   // the bar height the user just clicked.
-  const headerTotal = isBillable
-    ? Number(data?.billableHours ?? 0)
-    : Number(data?.nonBillableHours ?? Math.max(0, (data?.totalHours ?? 0) - (data?.billableHours ?? 0)));
+  const headerTotal = isInternal
+    ? Number(data?.internalHours ?? 0)
+    : (isBillable
+        ? Number(data?.billableHours ?? 0)
+        : Number(data?.nonBillableHours ?? 0));
 
   // Aggregate by project (closest field to "service item") and by client.
   const byProject = new Map();
@@ -264,7 +304,7 @@ function BreakdownModal({ open, type, data, onClose }) {
 
         {filtered.length === 0 ? (
           <div style={{ color: C.muted, fontStyle: "italic", fontSize: 13, padding: "20px 0", textAlign: "center" }}>
-            No {isBillable ? "billable" : "non-billable"} entries this period.
+            No {isInternal ? "internal" : (isBillable ? "billable" : "non-billable")} entries this period.
           </div>
         ) : (
           <>
@@ -356,10 +396,13 @@ function BillableVsNonBillableCard({ data, loading, onBarClick }) {
   const totalHours    = Number(data?.totalHours    ?? data?.total_hours    ?? 0) || 0;
   const billableHours = Number(data?.billableHours ?? data?.billable_hours ?? 0) || 0;
   const reportedNb    = Number(data?.nonBillableHours ?? data?.non_billable_hours ?? NaN);
-  const nonBillable   = Number.isFinite(reportedNb)
+  const internalHours = Number(data?.internalHours ?? data?.internal_hours ?? 0) || 0;
+  // Fall back to (Total − Billable − Internal) only when the backend payload
+  // pre-dates the 2026-06-15 split and didn't ship a nonBillableHours field.
+  const nonBillable = Number.isFinite(reportedNb)
     ? reportedNb
-    : Math.max(0, totalHours - billableHours);
-  const grandTotal = totalHours || (billableHours + nonBillable);
+    : Math.max(0, totalHours - billableHours - internalHours);
+  const grandTotal = totalHours || (billableHours + nonBillable + internalHours);
 
   const wrapperStyle = {
     background:   C.card,
@@ -380,15 +423,16 @@ function BillableVsNonBillableCard({ data, loading, onBarClick }) {
   if (loading) {
     return (
       <div style={wrapperStyle}>
-        <div style={headerStyle}>📊 Billable vs Non-Billable</div>
+        <div style={headerStyle}>📊 Hours Breakdown</div>
         <div className="kpi-skeleton" style={{ height: 200, marginTop: 12 }} />
       </div>
     );
   }
 
   const chartData = [
-    { name: "Billable",     hours: Number(billableHours.toFixed(1)), fill: _BILLABLE_GREEN },
-    { name: "Non-Billable", hours: Number(nonBillable.toFixed(1)),   fill: _NON_BILLABLE_ORANGE },
+    { name: "Billable",     type: "billable",     hours: Number(billableHours.toFixed(1)), fill: _BILLABLE_GREEN },
+    { name: "Non-Billable", type: "non-billable", hours: Number(nonBillable.toFixed(1)),   fill: _NON_BILLABLE_ORANGE },
+    { name: "Internal",     type: "internal",     hours: Number(internalHours.toFixed(1)), fill: _INTERNAL_PURPLE },
   ];
 
   return (
@@ -403,7 +447,7 @@ function BillableVsNonBillableCard({ data, loading, onBarClick }) {
           gap:            8,
         }}
       >
-        <h3 style={headerStyle}>📊 Billable vs Non-Billable</h3>
+        <h3 style={headerStyle}>📊 Billable vs Non-Billable vs Internal</h3>
         <div
           style={{
             fontSize:   12,
@@ -419,7 +463,7 @@ function BillableVsNonBillableCard({ data, loading, onBarClick }) {
         <BarChart
           data={chartData}
           margin={{ top: 24, right: 16, bottom: 4, left: 4 }}
-          barCategoryGap="30%"
+          barCategoryGap="25%"
           onClick={(e) => {
             // Recharts onClick fires for clicks anywhere in the chart and
             // exposes the activePayload[].payload of the bar that was hit.
@@ -428,7 +472,7 @@ function BillableVsNonBillableCard({ data, loading, onBarClick }) {
             // background of the category column).
             const p = e?.activePayload?.[0]?.payload;
             if (!p || !onBarClick) return;
-            onBarClick(p.name === "Billable" ? "billable" : "non-billable");
+            onBarClick(p.type);
           }}
           style={{ cursor: onBarClick ? "pointer" : "default" }}
         >
@@ -498,28 +542,103 @@ const _NB_PALETTE = [
   "#6B7A95",  // muted slate
 ];
 
+// One labelled horizontal-bar section used by SimpleNonBillableCard for the
+// CLIENT NON-BILLABLE block and the INTERNAL ACTIVITIES block. Keeping them
+// in one component lets us share styling without duplicating chart wiring.
+function CategoryBarSection({ title, total, color, breakdown }) {
+  if (!breakdown || breakdown.length === 0) return null;
+  const data = breakdown.map((b) => ({ category: b.category, hours: Number(b.hours) || 0 }));
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div
+        style={{
+          display:        "flex",
+          justifyContent: "space-between",
+          alignItems:     "center",
+          marginBottom:   10,
+          gap:            8,
+        }}
+      >
+        <span
+          style={{
+            fontSize:      11,
+            fontWeight:    700,
+            color:         C.muted,
+            textTransform: "uppercase",
+            letterSpacing: 1,
+          }}
+        >
+          {title}
+        </span>
+        <span
+          style={{
+            fontSize:   13,
+            fontWeight: 700,
+            color,
+            fontFamily: "'DM Mono', monospace",
+          }}
+        >
+          {total.toFixed(1)}h
+        </span>
+      </div>
+      <ResponsiveContainer width="100%" height={Math.max(120, data.length * 36)}>
+        <BarChart
+          data={data}
+          layout="vertical"
+          margin={{ top: 4, right: 60, bottom: 4, left: 4 }}
+        >
+          <CartesianGrid stroke={C.border} strokeDasharray="3 3" horizontal={false} />
+          <XAxis type="number" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
+          <YAxis
+            type="category"
+            dataKey="category"
+            tick={{ fill: C.sec, fontSize: 11 }}
+            axisLine={false}
+            tickLine={false}
+            width={150}
+          />
+          <Tooltip
+            cursor={{ fill: "rgba(255,255,255,0.04)" }}
+            content={<DarkTooltip />}
+            formatter={(v) => [`${Number(v).toFixed(1)}h`, title]}
+          />
+          <Bar dataKey="hours" radius={[0, 4, 4, 0]} maxBarSize={22} fill={color}>
+            <LabelList
+              dataKey="hours"
+              position="right"
+              formatter={(v) => `${Number(v).toFixed(1)}h`}
+              style={{ fill: C.sec, fontSize: 11, fontFamily: "'DM Mono', monospace" }}
+            />
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 function SimpleNonBillableCard({ data, loading }) {
   const totalHours    = Number(data?.totalHours    ?? data?.total_hours    ?? 0) || 0;
   const billableHours = Number(data?.billableHours ?? data?.billable_hours ?? 0) || 0;
+  const internalHours = Number(data?.internalHours ?? data?.internal_hours ?? 0) || 0;
   const reportedNb    = Number(data?.nonBillableHours ?? data?.non_billable_hours ?? NaN);
-  const derivedNb     = Math.max(0, totalHours - billableHours);
+  const derivedNb     = Math.max(0, totalHours - billableHours - internalHours);
   const nonBillable   = Number.isFinite(reportedNb) ? reportedNb : derivedNb;
 
-  const breakdown = Array.isArray(data?.nonBillableBreakdown)
+  const nbBreakdown = Array.isArray(data?.nonBillableBreakdown)
     ? data.nonBillableBreakdown
     : Array.isArray(data?.non_billable_breakdown)
       ? data.non_billable_breakdown
       : [];
-
-  // Fall back to a single "Non-Billable" bar if no per-customer breakdown.
-  const chartData = breakdown.length > 0
-    ? breakdown.map((b) => ({ category: b.category, hours: Number(b.hours) || 0 }))
-    : [{ category: "Non-Billable", hours: nonBillable }];
+  const internalBreakdown = Array.isArray(data?.internalBreakdown)
+    ? data.internalBreakdown
+    : Array.isArray(data?.internal_breakdown)
+      ? data.internal_breakdown
+      : [];
 
   const wrapperStyle = {
     background:   C.card,
     border:       `1px solid ${C.border}`,
-    borderLeft:   `4px solid #F2895A`,
+    borderLeft:   `4px solid ${_NON_BILLABLE_ORANGE}`,
     borderRadius: 12,
     padding:      "18px 20px",
   };
@@ -535,18 +654,18 @@ function SimpleNonBillableCard({ data, loading }) {
   if (loading) {
     return (
       <div style={wrapperStyle}>
-        <div style={headerStyle}>📊 Non-Billable Hours</div>
-        <div className="kpi-skeleton" style={{ height: 140, marginTop: 12 }} />
+        <div style={headerStyle}>📊 Non-Billable &amp; Internal Breakdown</div>
+        <div className="kpi-skeleton" style={{ height: 200, marginTop: 12 }} />
       </div>
     );
   }
 
-  if (nonBillable <= 0 && breakdown.length === 0) {
+  if (nbBreakdown.length === 0 && internalBreakdown.length === 0 && nonBillable <= 0 && internalHours <= 0) {
     return (
       <div style={wrapperStyle}>
-        <div style={headerStyle}>📊 Non-Billable Hours</div>
+        <div style={headerStyle}>📊 Non-Billable &amp; Internal Breakdown</div>
         <div style={{ color: C.muted, fontSize: 12, marginTop: 8, fontStyle: "italic" }}>
-          No non-billable hours logged this period.
+          No non-billable or internal hours logged this period.
         </div>
       </div>
     );
@@ -559,63 +678,35 @@ function SimpleNonBillableCard({ data, loading }) {
           display:        "flex",
           justifyContent: "space-between",
           alignItems:     "center",
-          marginBottom:   14,
+          marginBottom:   4,
           flexWrap:       "wrap",
           gap:            8,
         }}
       >
-        <h3 style={headerStyle}>📊 Non-Billable Hours</h3>
+        <h3 style={headerStyle}>📊 Non-Billable &amp; Internal Breakdown</h3>
         <div
           style={{
-            fontSize:   13,
-            fontWeight: 700,
-            color:      "#F2895A",
+            fontSize:   12,
+            color:      C.muted,
             fontFamily: "'DM Mono', monospace",
           }}
         >
-          {nonBillable.toFixed(1)}h
+          {nonBillable.toFixed(1)}h client · {internalHours.toFixed(1)}h internal
         </div>
       </div>
 
-      <ResponsiveContainer width="100%" height={Math.max(140, chartData.length * 38)}>
-        <BarChart
-          data={chartData}
-          layout="vertical"
-          margin={{ top: 4, right: 60, bottom: 4, left: 4 }}
-        >
-          <CartesianGrid stroke={C.border} strokeDasharray="3 3" horizontal={false} />
-          <XAxis
-            type="number"
-            tick={{ fill: C.muted, fontSize: 10 }}
-            axisLine={false}
-            tickLine={false}
-          />
-          <YAxis
-            type="category"
-            dataKey="category"
-            tick={{ fill: C.sec, fontSize: 11 }}
-            axisLine={false}
-            tickLine={false}
-            width={140}
-          />
-          <Tooltip
-            cursor={{ fill: "rgba(255,255,255,0.04)" }}
-            content={<DarkTooltip />}
-            formatter={(v) => [`${Number(v).toFixed(1)}h`, "Non-billable"]}
-          />
-          <Bar dataKey="hours" radius={[0, 4, 4, 0]} maxBarSize={22}>
-            {chartData.map((_, i) => (
-              <Cell key={i} fill={_NB_PALETTE[i % _NB_PALETTE.length]} />
-            ))}
-            <LabelList
-              dataKey="hours"
-              position="right"
-              formatter={(v) => `${Number(v).toFixed(1)}h`}
-              style={{ fill: C.sec, fontSize: 11, fontFamily: "'DM Mono', monospace" }}
-            />
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
+      <CategoryBarSection
+        title="Client Non-Billable"
+        total={nonBillable}
+        color={_NON_BILLABLE_ORANGE}
+        breakdown={nbBreakdown}
+      />
+      <CategoryBarSection
+        title="Internal Activities"
+        total={internalHours}
+        color={_INTERNAL_PURPLE}
+        breakdown={internalBreakdown}
+      />
     </div>
   );
 }
@@ -1145,8 +1236,12 @@ ${lines.join("\n")}`;
           // payload-shape edge case (snake_case, missing field, etc.).
           const totalH = Number(data?.totalHours    ?? data?.total_hours    ?? 0) || 0;
           const billH  = Number(data?.billableHours ?? data?.billable_hours ?? 0) || 0;
+          const intH   = Number(data?.internalHours ?? data?.internal_hours ?? 0) || 0;
           const reported = Number(data?.nonBillableHours ?? data?.non_billable_hours ?? NaN);
-          const nbH = Number.isFinite(reported) ? reported : Math.max(0, totalH - billH);
+          // Non-billable is CLIENT non-billable only (Penny 2026-06-15). When
+          // the backend predates the split and didn't ship the field, derive
+          // it as (Total − Billable − Internal) so the % still lines up.
+          const nbH = Number.isFinite(reported) ? reported : Math.max(0, totalH - billH - intH);
           const nbPct = totalH > 0 ? (nbH / totalH * 100) : 0;
           return (
             <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
@@ -1155,6 +1250,7 @@ ${lines.join("\n")}`;
               <KpiCard label="Billable %"         value={data?.billablePct}   color={C.green}  suffix="%" />
               <KpiCard label="Non-Billable Hours" value={nbH}                 color="#F2895A" />
               <KpiCard label="Non-Billable %"     value={nbPct}               color="#F2895A" suffix="%" />
+              <KpiCard label="Internal Hours"     value={intH}                color={_INTERNAL_PURPLE} />
             </div>
           );
         })()}
