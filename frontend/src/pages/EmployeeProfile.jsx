@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { C, authFetch } from "../config";
 import { LiveIndicator, useAutoRefresh, timeAgo, formatTimeIST } from "../components/LiveIndicator";
 import BarDetailModal from "../components/BarDetailModal";
+import SimpleBreakdownModal from "../components/SimpleBreakdownModal";
 import {
   BarChart,
   Bar,
@@ -78,12 +79,26 @@ function DarkTooltip({ active, payload, label }) {
   );
 }
 
-function KpiCard({ label, value, color, suffix = "h", decimals = 1 }) {
+function KpiCard({ label, value, color, suffix = "h", decimals = 1, onClick }) {
   const display = typeof value === "number"
     ? (decimals === 0 ? Math.round(value).toString() : value.toFixed(decimals))
     : "—";
+  const clickable = typeof onClick === "function";
   return (
     <div
+      onClick={clickable ? onClick : undefined}
+      onMouseEnter={(e) => {
+        if (!clickable) return;
+        e.currentTarget.style.transform   = "translateY(-2px)";
+        e.currentTarget.style.boxShadow   = `0 8px 24px rgba(0,0,0,0.4), inset 0 0 24px ${color}1F`;
+        e.currentTarget.style.borderColor = `${color}55`;
+      }}
+      onMouseLeave={(e) => {
+        if (!clickable) return;
+        e.currentTarget.style.transform   = "translateY(0)";
+        e.currentTarget.style.boxShadow   = `0 2px 8px rgba(0,0,0,0.25), inset 0 0 24px ${color}0F`;
+        e.currentTarget.style.borderColor = C.border;
+      }}
       style={{
         background: `linear-gradient(180deg, ${C.card} 0%, ${C.surface} 100%)`,
         border: `1px solid ${C.border}`,
@@ -93,6 +108,10 @@ function KpiCard({ label, value, color, suffix = "h", decimals = 1 }) {
         flex: "1 1 200px",
         minWidth: 180,
         boxShadow: `0 2px 8px rgba(0,0,0,0.25), inset 0 0 24px ${color}0F`,
+        position: "relative",
+        overflow: "hidden",
+        cursor: clickable ? "pointer" : "default",
+        transition: "transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease",
       }}
     >
       <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 14, fontWeight: 600 }}>
@@ -104,6 +123,21 @@ function KpiCard({ label, value, color, suffix = "h", decimals = 1 }) {
           <span style={{ fontSize: 16, fontWeight: 400, marginLeft: 4, color: C.sec }}>{suffix}</span>
         )}
       </div>
+      {clickable && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 6, right: 10,
+            fontSize: 9,
+            color: "rgba(255,255,255,0.40)",
+            fontWeight: 700,
+            letterSpacing: 0.5,
+            pointerEvents: "none",
+          }}
+        >
+          CLICK FOR DETAILS →
+        </div>
+      )}
     </div>
   );
 }
@@ -302,6 +336,46 @@ function BreakdownModal({ open, type, data, onClose }) {
             ✕ Close
           </button>
         </div>
+
+        {/* Reason / context banner per category — small explainer + suggestion
+            line right under the header so the modal isn't just numbers. */}
+        {(() => {
+          const banner = isInternal
+            ? {
+                accent: _INTERNAL_PURPLE,
+                hint:   "Internal time covers training, breaks, admin, SNMP / allocation work.",
+                tip:    "Keep an eye on this share — typical guidance is <30% of total hours.",
+              }
+            : isBillable
+              ? {
+                  accent: _BILLABLE_GREEN,
+                  hint:   "Direct billable client work — revenue-generating hours.",
+                  tip:    "Higher is better; aim for the team's billable-% target.",
+                }
+              : {
+                  accent: _NON_BILLABLE_ORANGE,
+                  hint:   "Client work that isn't directly billable (reviews, admin on the client's account).",
+                  tip:    "Track to improve billable utilization — move into scoped work where possible.",
+                };
+          return (
+            <div
+              style={{
+                background:   `${banner.accent}1A`,
+                borderLeft:   `3px solid ${banner.accent}`,
+                borderRadius: 6,
+                padding:      "10px 12px",
+                marginBottom: 20,
+              }}
+            >
+              <div style={{ fontSize: 12, color: "#FFFFFF", fontWeight: 700, marginBottom: 4 }}>
+                {banner.hint}
+              </div>
+              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.75)", fontWeight: 600 }}>
+                💡 {banner.tip}
+              </div>
+            </div>
+          );
+        })()}
 
         {filtered.length === 0 ? (
           <div style={{ color: C.muted, fontStyle: "italic", fontSize: 13, padding: "20px 0", textAlign: "center" }}>
@@ -646,11 +720,6 @@ function SimpleNonBillableCard({ data, loading, onCategoryClick }) {
     : Array.isArray(data?.non_billable_breakdown)
       ? data.non_billable_breakdown
       : [];
-  const internalBreakdown = Array.isArray(data?.internalBreakdown)
-    ? data.internalBreakdown
-    : Array.isArray(data?.internal_breakdown)
-      ? data.internal_breakdown
-      : [];
 
   const wrapperStyle = {
     background:   C.card,
@@ -671,18 +740,22 @@ function SimpleNonBillableCard({ data, loading, onCategoryClick }) {
   if (loading) {
     return (
       <div style={wrapperStyle}>
-        <div style={headerStyle}>📊 Non-Billable &amp; Internal Breakdown</div>
-        <div className="kpi-skeleton" style={{ height: 200, marginTop: 12 }} />
+        <div style={headerStyle}>📊 Non-Billable Hours Breakdown</div>
+        <div className="kpi-skeleton" style={{ height: 160, marginTop: 12 }} />
       </div>
     );
   }
 
-  if (nbBreakdown.length === 0 && internalBreakdown.length === 0 && nonBillable <= 0 && internalHours <= 0) {
+  // Penny 2026-06-15 follow-up: the combined "Non-Billable & Internal"
+  // card was reverted — Internal already has its own KPI card and
+  // SimpleBreakdownModal drill-down. This card again shows ONLY client
+  // non-billable categories, like before.
+  if (nbBreakdown.length === 0 && nonBillable <= 0) {
     return (
       <div style={wrapperStyle}>
-        <div style={headerStyle}>📊 Non-Billable &amp; Internal Breakdown</div>
+        <div style={headerStyle}>📊 Non-Billable Hours Breakdown</div>
         <div style={{ color: C.muted, fontSize: 12, marginTop: 8, fontStyle: "italic" }}>
-          No non-billable or internal hours logged this period.
+          No client non-billable hours logged this period.
         </div>
       </div>
     );
@@ -700,15 +773,16 @@ function SimpleNonBillableCard({ data, loading, onCategoryClick }) {
           gap:            8,
         }}
       >
-        <h3 style={headerStyle}>📊 Non-Billable &amp; Internal Breakdown</h3>
+        <h3 style={headerStyle}>📊 Non-Billable Hours Breakdown</h3>
         <div
           style={{
-            fontSize:   12,
-            color:      C.muted,
+            fontSize:   13,
+            fontWeight: 700,
+            color:      _NON_BILLABLE_ORANGE,
             fontFamily: "'DM Mono', monospace",
           }}
         >
-          {nonBillable.toFixed(1)}h client · {internalHours.toFixed(1)}h internal
+          {nonBillable.toFixed(1)}h
         </div>
       </div>
 
@@ -718,13 +792,6 @@ function SimpleNonBillableCard({ data, loading, onCategoryClick }) {
         color={_NON_BILLABLE_ORANGE}
         breakdown={nbBreakdown}
         onBarClick={onCategoryClick ? (cat) => onCategoryClick("nonBillable", cat) : null}
-      />
-      <CategoryBarSection
-        title="Internal Activities"
-        total={internalHours}
-        color={_INTERNAL_PURPLE}
-        breakdown={internalBreakdown}
-        onBarClick={onCategoryClick ? (cat) => onCategoryClick("internal", cat) : null}
       />
     </div>
   );
@@ -940,6 +1007,43 @@ function RecentWorkSection({ rows, loading, acctFilter, setAcctFilter, expandedR
           </table>
         </div>
       )}
+
+      {/* Prominent TOTAL HOURS footer — sums the currently visible filter
+          (or the full list when no account-code filter is applied). */}
+      {!loading && filtered.length > 0 && (() => {
+        const filteredTotal = filtered.reduce((s, r) => s + (Number(r.hours) || 0), 0);
+        return (
+          <div
+            style={{
+              marginTop:   12,
+              padding:     "14px 18px",
+              background:  "rgba(255,255,255,0.08)",
+              borderTop:   `2px solid ${_NON_BILLABLE_ORANGE}`,
+              borderRadius: "0 0 8px 8px",
+              display:     "flex",
+              justifyContent: "space-between",
+              alignItems:  "center",
+            }}
+          >
+            <span
+              style={{
+                fontSize: 12, fontWeight: 800, color: "#FFFFFF",
+                textTransform: "uppercase", letterSpacing: 1,
+              }}
+            >
+              TOTAL{acctFilter !== "all" ? ` (${acctFilter})` : ""}
+            </span>
+            <span
+              style={{
+                fontSize: 20, fontWeight: 800, color: "#FFFFFF",
+                fontFamily: "'DM Mono', monospace",
+              }}
+            >
+              {filteredTotal.toFixed(1)}h
+            </span>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -958,6 +1062,9 @@ export default function EmployeeProfile({ teamId, teamName, employeeName, onBack
   // bars. Filters the employee's allEntries client-side by the clicked
   // customer name (no extra fetch needed).
   const [barModal, setBarModal] = useState({ open: false, category: null, scope: null });
+  // KPI-card drill-down — uses SimpleBreakdownModal (compact list, no
+  // search/sort/entries-table) like the Team / Client views.
+  const [kpiModal, setKpiModal] = useState({ open: false, type: null });
   const abortRef = useRef(null);
 
   const [lastRefreshed, setLastRefreshed] = useState(null);
@@ -1268,12 +1375,34 @@ ${lines.join("\n")}`;
           const nbPct = totalH > 0 ? (nbH / totalH * 100) : 0;
           return (
             <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-              <KpiCard label="Total Hours"        value={data?.totalHours}    color={C.purple} />
-              <KpiCard label="Billable Hours"     value={data?.billableHours} color={C.teal} />
+              <KpiCard
+                label="Total Hours"
+                value={data?.totalHours}
+                color={C.purple}
+                onClick={() => setKpiModal({ open: true, type: "total" })}
+              />
+              <KpiCard
+                label="Billable Hours"
+                value={data?.billableHours}
+                color={C.teal}
+                onClick={() => setKpiModal({ open: true, type: "billable" })}
+              />
+              {/* Pure ratio cards stay non-clickable per spec — they don't
+                  have a meaningful drill-down. */}
               <KpiCard label="Billable %"         value={data?.billablePct}   color={C.green}  suffix="%" />
-              <KpiCard label="Non-Billable Hours" value={nbH}                 color="#F2895A" />
+              <KpiCard
+                label="Non-Billable Hours"
+                value={nbH}
+                color="#F2895A"
+                onClick={() => setKpiModal({ open: true, type: "nonBillable" })}
+              />
               <KpiCard label="Non-Billable %"     value={nbPct}               color="#F2895A" suffix="%" />
-              <KpiCard label="Internal Hours"     value={intH}                color={_INTERNAL_PURPLE} />
+              <KpiCard
+                label="Internal Hours"
+                value={intH}
+                color={_INTERNAL_PURPLE}
+                onClick={() => setKpiModal({ open: true, type: "internal" })}
+              />
             </div>
           );
         })()}
@@ -1333,6 +1462,113 @@ ${lines.join("\n")}`;
           />
         );
       })()}
+      {kpiModal.open && (() => {
+        const props = _buildEmployeeKpiModalProps(kpiModal.type, data);
+        if (!props) return null;
+        return (
+          <SimpleBreakdownModal
+            open
+            onClose={() => setKpiModal({ open: false, type: null })}
+            {...props}
+          />
+        );
+      })()}
     </div>
   );
+}
+
+// Per-KPI breakdown builder. Each card type slices the employee's allEntries
+// list (already on the page) into the right view: by-client for Billable /
+// Non-Billable, by-internal-category for Internal, or the 3-bucket overview
+// for Total. Same Internal name set used in the backend lives in
+// _INTERNAL_CATEGORY_NAMES at the top of this file so the totals reconcile.
+function _buildEmployeeKpiModalProps(type, data) {
+  const all = Array.isArray(data?.allEntries) ? data.allEntries : [];
+  const totalH = Number(data?.totalHours ?? 0);
+  const billH  = Number(data?.billableHours ?? 0);
+  const nbH    = Number(data?.nonBillableHours ?? 0);
+  const intH   = Number(data?.internalHours ?? 0);
+  const period = data?.period || "";
+
+  switch (type) {
+    case "total": {
+      const items = [
+        { name: "Billable",     value: billH, color: _BILLABLE_GREEN      },
+        { name: "Non-Billable", value: nbH,   color: _NON_BILLABLE_ORANGE },
+        { name: "Internal",     value: intH,  color: _INTERNAL_PURPLE     },
+      ].filter((it) => it.value > 0);
+      return {
+        title:          "📊 Total Hours Overview",
+        subtitle:       period,
+        total:          `${totalH.toFixed(1)}h`,
+        accentColor:    "#FFFFFF",
+        showPercentage: true,
+        items,
+      };
+    }
+    case "billable": {
+      const bucket = {};
+      for (const e of all) {
+        if (_isInternalCategory(e.client)) continue;
+        if (!e.billable) continue;
+        const k = (e.client || "Unknown").trim() || "Unknown";
+        bucket[k] = (bucket[k] || 0) + (Number(e.hours) || 0);
+      }
+      const items = Object.entries(bucket)
+        .map(([name, value]) => ({ name, value: Number(value), color: _BILLABLE_GREEN }))
+        .filter((it) => it.value > 0)
+        .sort((a, b) => b.value - a.value);
+      return {
+        title:          "💰 Billable Breakdown",
+        subtitle:       `By client · ${period}`,
+        total:          `${billH.toFixed(1)}h`,
+        accentColor:    _BILLABLE_GREEN,
+        showPercentage: true,
+        items,
+      };
+    }
+    case "nonBillable": {
+      const bucket = {};
+      for (const e of all) {
+        if (_isInternalCategory(e.client)) continue;
+        if (e.billable) continue;
+        const k = (e.client || "Unknown").trim() || "Unknown";
+        bucket[k] = (bucket[k] || 0) + (Number(e.hours) || 0);
+      }
+      const items = Object.entries(bucket)
+        .map(([name, value]) => ({ name, value: Number(value), color: _NON_BILLABLE_ORANGE }))
+        .filter((it) => it.value > 0)
+        .sort((a, b) => b.value - a.value);
+      return {
+        title:          "📋 Non-Billable Breakdown",
+        subtitle:       `By client (excludes Internal) · ${period}`,
+        total:          `${nbH.toFixed(1)}h`,
+        accentColor:    _NON_BILLABLE_ORANGE,
+        showPercentage: true,
+        items,
+      };
+    }
+    case "internal": {
+      const bucket = {};
+      for (const e of all) {
+        if (!_isInternalCategory(e.client)) continue;
+        const k = (e.client || "Unspecified").trim() || "Unspecified";
+        bucket[k] = (bucket[k] || 0) + (Number(e.hours) || 0);
+      }
+      const items = Object.entries(bucket)
+        .map(([name, value]) => ({ name, value: Number(value), color: _INTERNAL_PURPLE }))
+        .filter((it) => it.value > 0)
+        .sort((a, b) => b.value - a.value);
+      return {
+        title:          "🏢 Internal Hours Breakdown",
+        subtitle:       `SNMP / Breaks / Admin / Training · ${period}`,
+        total:          `${intH.toFixed(1)}h`,
+        accentColor:    _INTERNAL_PURPLE,
+        showPercentage: true,
+        items,
+      };
+    }
+    default:
+      return null;
+  }
 }
