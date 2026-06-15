@@ -3,7 +3,6 @@ import Home from "./pages/Home";
 import TeamDashboard from "./pages/TeamDashboard";
 import ClientDashboard from "./pages/ClientDashboard";
 import EmployeeProfile from "./pages/EmployeeProfile";
-import AdminHourPage from "./pages/AdminHourPage";
 import ClientDepartureAnalysisPage from "./pages/ClientDepartureAnalysisPage";
 import WhaleSOPsPage from "./pages/WhaleSOPsPage";
 import LoginPage from "./pages/LoginPage";
@@ -57,7 +56,6 @@ export default function App() {
     if (view.page === "client")              return `Viewing client: ${view.clientName}`;
     if (view.page === "employee")            return `Viewing employee: ${view.employeeName} (${view.teamName})`;
     if (view.page === "team")                return `Viewing team: ${view.teamName}`;
-    if (view.page === "admin_hour")          return "Viewing Admin Hour cross-team overview";
     if (view.page === "departure_analysis")  return `Viewing departure analysis: ${view.clientSlug}`;
     if (view.page === "whale_sops")          return "Viewing Whale SOPs library";
     return "Viewing MoneyPenny Dashboard home screen";
@@ -158,18 +156,6 @@ export default function App() {
     );
   }
 
-  if (view.page === "admin_hour") {
-    return (
-      <>
-        <AdminHourPage
-          onBack={() => setView({ page: "home" })}
-          onSelectTeam={(team) => setView({ page: "team", teamId: team.id, teamName: team.name })}
-        />
-        <Chatbot context={context} viewHint={viewHint} />
-      </>
-    );
-  }
-
   if (view.page === "whale_sops") {
     return (
       <>
@@ -190,7 +176,6 @@ export default function App() {
           setRichContext("");
           setView({ page: "client", clientName: client.name });
         }}
-        onOpenAdminHour={() => setView({ page: "admin_hour" })}
         onOpenWhale={() => setView({ page: "whale_sops" })}
       />
       <Chatbot context={context} viewHint={viewHint} />
