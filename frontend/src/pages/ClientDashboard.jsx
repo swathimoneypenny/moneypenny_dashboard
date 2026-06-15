@@ -631,35 +631,82 @@ function ProjectDetailModal({ project, clientName, onClose }) {
   );
 }
 
+const _VIEW_MODES = {
+  billable:    { label: "Billable Only",     title: "Billable Hours",     option: "💰 Billable Only" },
+  nonBillable: { label: "Non-Billable Only", title: "Non-Billable Hours", option: "📋 Non-Billable Only" },
+  total:       { label: "Total (Both)",      title: "Total Hours",        option: "📊 Total (Both)" },
+};
+
+function _projectValueFor(p, mode) {
+  if (mode === "billable")    return Number(p.billableHours    || 0);
+  if (mode === "nonBillable") return Number(p.nonBillableHours || 0);
+  return Number(p.hours || 0);
+}
+
 function ProjectsBreakdownChart({ projects, clientName, loading }) {
   const [selected, setSelected]   = useState(null);
   const [showAll, setShowAll]     = useState(false);
+  const [viewMode, setViewMode]   = useState("billable");
   const list   = Array.isArray(projects) ? projects : [];
-  const total  = useMemo(() => list.reduce((s, p) => s + (p.hours || 0), 0), [list]);
-  // Thresholds computed over ALL projects so toggling Show All doesn't
-  // shift the color bands under the user's feet.
-  const avgHours = list.length ? total / list.length : 0;
+
+  // Mode-specific list: each project gets a displayValue per the active view,
+  // zero-value projects are dropped, and the list is re-sorted by value desc.
+  // Thresholds and totals are recomputed from this slice so the legend,
+  // header summary, and bar colors all stay self-consistent per view.
+  const processed = useMemo(() => {
+    return list
+      .map((p) => ({ ...p, displayValue: _projectValueFor(p, viewMode) }))
+      .filter((p) => p.displayValue > 0)
+      .sort((a, b) => b.displayValue - a.displayValue);
+  }, [list, viewMode]);
+  const totalShown = useMemo(
+    () => processed.reduce((s, p) => s + p.displayValue, 0),
+    [processed],
+  );
+  const avgHours = processed.length ? totalShown / processed.length : 0;
   const redT     = avgHours * 0.5;
   const greenT   = avgHours * 1.5;
-  const shown    = showAll ? list : list.slice(0, 15);
+  const shown    = showAll ? processed : processed.slice(0, 15);
+  const viewMeta = _VIEW_MODES[viewMode] || _VIEW_MODES.billable;
+
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: "4px solid #4A8FE7", borderRadius: 12, padding: 20 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 12 }}>
         <h3 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#FFFFFF", textTransform: "uppercase", letterSpacing: 1 }}>
-          📊 Projects · Hours Breakdown
+          📊 Projects · {viewMeta.title}
         </h3>
         {!loading && (
-          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.75)", fontFamily: "'DM Mono', monospace" }}>
-            {list.length} project{list.length === 1 ? "" : "s"} · {total.toFixed(1)}h total
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.6)" }}>👁 View:</span>
+            <select
+              value={viewMode}
+              onChange={(e) => setViewMode(e.target.value)}
+              style={{
+                background: "rgba(255,255,255,0.08)",
+                color: "#FFFFFF",
+                border: "1px solid rgba(255,255,255,0.18)",
+                borderRadius: 6,
+                padding: "5px 10px",
+                fontSize: 12,
+                cursor: "pointer",
+                outline: "none",
+                minWidth: 180,
+                fontFamily: "'DM Sans', sans-serif",
+              }}
+            >
+              <option value="billable"    style={{ background: "#0F1F3A", color: "#FFFFFF" }}>{_VIEW_MODES.billable.option}</option>
+              <option value="nonBillable" style={{ background: "#0F1F3A", color: "#FFFFFF" }}>{_VIEW_MODES.nonBillable.option}</option>
+              <option value="total"       style={{ background: "#0F1F3A", color: "#FFFFFF" }}>{_VIEW_MODES.total.option}</option>
+            </select>
           </div>
         )}
       </div>
       <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", fontStyle: "italic", marginBottom: 12 }}>
-        Click any bar to see every timesheet entry under that project. Color bands are vs. project average ({avgHours.toFixed(1)}h).
+        Click any bar to see every timesheet entry under that project (the modal always shows billable + non-billable rows). Color bands are vs. project average ({avgHours.toFixed(1)}h) in this view.
       </div>
 
       {/* Color-band legend */}
-      {!loading && list.length > 0 && (
+      {!loading && processed.length > 0 && (
         <div
           style={{
             display: "flex",
@@ -694,6 +741,10 @@ function ProjectsBreakdownChart({ projects, clientName, loading }) {
       ) : list.length === 0 ? (
         <div style={{ padding: "24px 0", color: "rgba(255,255,255,0.6)", fontSize: 13, fontStyle: "italic", textAlign: "center" }}>
           No project hours logged for this client in the active period.
+        </div>
+      ) : processed.length === 0 ? (
+        <div style={{ padding: "24px 0", color: "rgba(255,255,255,0.6)", fontSize: 13, fontStyle: "italic", textAlign: "center" }}>
+          No {viewMeta.label.toLowerCase()} hours logged for any project in this period.
         </div>
       ) : (
         <ResponsiveContainer width="100%" height={360}>
@@ -741,12 +792,12 @@ function ProjectsBreakdownChart({ projects, clientName, loading }) {
                 const p = props.payload || {};
                 return [
                   `${Number(value).toFixed(1)}h · ${(p.billableHours ?? 0).toFixed(1)}h bill / ${(p.nonBillableHours ?? 0).toFixed(1)}h non-bill · ${p.entriesCount ?? 0} entries`,
-                  "Total",
+                  viewMeta.title,
                 ];
               }}
             />
             <Bar
-              dataKey="hours"
+              dataKey="displayValue"
               radius={[4, 4, 0, 0]}
               maxBarSize={48}
               onClick={(payload) => {
@@ -760,13 +811,13 @@ function ProjectsBreakdownChart({ projects, clientName, loading }) {
               {shown.map((entry, i) => (
                 <Cell
                   key={i}
-                  fill={projectColor(entry.hours, redT, greenT)}
+                  fill={projectColor(entry.displayValue, redT, greenT)}
                   style={{ cursor: "pointer" }}
                   onClick={() => setSelected(entry)}
                 />
               ))}
               <LabelList
-                dataKey="hours"
+                dataKey="displayValue"
                 position="top"
                 formatter={(v) => `${Number(v).toFixed(1)}h`}
                 style={{ fill: "#FFFFFF", fontSize: 10, fontFamily: "'DM Mono', monospace" }}
@@ -775,7 +826,23 @@ function ProjectsBreakdownChart({ projects, clientName, loading }) {
           </BarChart>
         </ResponsiveContainer>
       )}
-      {list.length > 15 && (
+      {!loading && processed.length > 0 && (
+        <div
+          style={{
+            marginTop: 12,
+            padding: "8px 14px",
+            background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            borderRadius: 8,
+            fontSize: 11,
+            color: "rgba(255,255,255,0.78)",
+            fontFamily: "'DM Mono', monospace",
+          }}
+        >
+          Showing {processed.length} project{processed.length === 1 ? "" : "s"} with {viewMeta.label.toLowerCase()} hours · {totalShown.toFixed(1)}h total
+        </div>
+      )}
+      {processed.length > 15 && (
         <button
           onClick={() => setShowAll((v) => !v)}
           style={{
@@ -784,7 +851,7 @@ function ProjectsBreakdownChart({ projects, clientName, loading }) {
             fontFamily: "'DM Sans', sans-serif",
           }}
         >
-          {showAll ? "Show top 15" : `Show all ${list.length} projects`}
+          {showAll ? "Show top 15" : `Show all ${processed.length} projects`}
         </button>
       )}
       {selected && (

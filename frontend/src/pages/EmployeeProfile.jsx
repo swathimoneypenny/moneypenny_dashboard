@@ -632,15 +632,22 @@ const today = new Date().toLocaleDateString("en-US", {
 // the filter is instant and doesn't re-hit the backend.
 function RecentWorkSection({ rows, loading, acctFilter, setAcctFilter, expandedRow, setExpandedRow }) {
   const list = Array.isArray(rows) ? rows : [];
+  const totalHours = useMemo(
+    () => list.reduce((s, r) => s + (Number(r.hours) || 0), 0),
+    [list],
+  );
   const acctOptions = useMemo(() => {
-    const counts = {};
+    const stats = {};
     for (const r of list) {
       const code = (r.accountCode || "").trim() || "—";
-      counts[code] = (counts[code] || 0) + 1;
+      const entry = stats[code] || { code, count: 0, hours: 0 };
+      entry.count += 1;
+      entry.hours += Number(r.hours) || 0;
+      stats[code] = entry;
     }
-    return Object.entries(counts)
-      .map(([code, count]) => ({ code, count }))
-      .sort((a, b) => b.count - a.count);
+    return Object.values(stats)
+      .map((s) => ({ ...s, hours: Number(s.hours.toFixed(1)) }))
+      .sort((a, b) => b.hours - a.hours);
   }, [list]);
   const filtered = useMemo(() => {
     if (acctFilter === "all") return list;
@@ -683,11 +690,11 @@ function RecentWorkSection({ rows, loading, acctFilter, setAcctFilter, expandedR
               }}
             >
               <option value="all" style={{ background: "#0F1F3A", color: "#FFFFFF" }}>
-                All ({list.length} entries)
+                All ({list.length} entries · {totalHours.toFixed(1)}h)
               </option>
               {acctOptions.map((opt) => (
                 <option key={opt.code} value={opt.code} style={{ background: "#0F1F3A", color: "#FFFFFF" }}>
-                  {opt.code} ({opt.count})
+                  {opt.code} · {opt.hours.toFixed(1)}h
                 </option>
               ))}
             </select>
