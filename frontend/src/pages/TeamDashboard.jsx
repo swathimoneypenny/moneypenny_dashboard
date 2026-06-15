@@ -4,6 +4,7 @@ import { LiveIndicator, useAutoRefresh, timeAgo, formatTimeIST } from "../compon
 import DelayDetailModal from "../components/DelayDetailModal";
 import BarDetailModal from "../components/BarDetailModal";
 import SimpleBreakdownModal from "../components/SimpleBreakdownModal";
+import PerformanceReasonModal from "../components/PerformanceReasonModal";
 import WeeklyReviewSection from "../components/WeeklyReviewSection";
 import WeeklyChecklistSection from "../components/WeeklyChecklistSection";
 import {
@@ -1201,6 +1202,10 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
   // client opens BarDetailModal with that client's entries pre-filtered
   // by billable flag (type = "Billable" or "Non-Billable").
   const [clientBarModal, setClientBarModal] = useState({ open: false, client: null, type: null });
+  // Performance-by-Organization row click → reason modal (WHY behind target /
+  // HOW to fix). Stays separate from `orgModal` (Hours-by-Org chart bar
+  // click → entries table) — different surfaces, different drill-downs.
+  const [perfModal, setPerfModal] = useState({ open: false, org: null });
   const abortRef = useRef(null);
 
   const fetchData = useCallback((silent = false) => {
@@ -2009,7 +2014,7 @@ ${clients.map((o) => (
           ) : (
             <PerfTable
               orgs={clients}
-              onRowClick={(org) => setOrgModal({ open: true, org })}
+              onRowClick={(org) => setPerfModal({ open: true, org })}
             />
           )}
         </div>
@@ -2039,6 +2044,13 @@ ${clients.map((o) => (
         entries={orgModal.org?.entries || []}
         accentColor={C.orange}
         totalHours={Number(orgModal.org?.total ?? orgModal.org?.actual ?? 0)}
+      />
+      <PerformanceReasonModal
+        open={perfModal.open}
+        onClose={() => setPerfModal({ open: false, org: null })}
+        org={perfModal.org}
+        periodLabel={periodLabel}
+        workingDays={Number(summary?.workingDaysElapsed) || 1}
       />
       {clientBarModal.open && (() => {
         const client = clientBarModal.client || {};

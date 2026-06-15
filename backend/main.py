@@ -4528,12 +4528,13 @@ async def _team_response(
         actual = h["billable"] + h["nonBillable"]
         # Period-aware committed: org_committed = (preparers on this org) ×
         # per-preparer target for the period. Falls back to the implied count
-        # from the configured monthly estHrs (estHrs / 320, min 1) when no one
+        # from the configured monthly estHrs (estHrs / 160, min 1) when no one
         # has logged hours yet — otherwise day-0 of a period would show 0h
-        # committed and make the row useless.
+        # committed and make the row useless. The divisor matches the new
+        # per-preparer monthly target (8h × 20 working days = 160h).
         staff_count = len(h["staff"])
         if staff_count == 0 and h["isConfig"] and (h["estHrs"] or 0) > 0:
-            implied_members = max(1, int(round((h["estHrs"] or 0) / 320)))
+            implied_members = max(1, int(round((h["estHrs"] or 0) / 160)))
             org_member_count = implied_members
         else:
             org_member_count = staff_count
@@ -5323,26 +5324,28 @@ def _team_member_count(team_id: str) -> int:
 # Daily = 16h, Weekly = 16 × 5 working days = 80h, Monthly = 16 × 20 working days = 320h.
 # 142h is the MAX cap per preparer per week (not a target) and is enforced elsewhere.
 PER_PREPARER_TARGET: dict[str, float] = {
-    "today":   16.0,
-    "weekly":  80.0,
-    "monthly": 320.0,
+    "today":   8.0,
+    "weekly":  40.0,
+    "monthly": 160.0,
 }
 
 
 def _full_committed_for_period(period: str) -> float:
     """Per-preparer target hours for the FULL period, before pro-rating.
-    today=16, weekly=80, monthly=320."""
+    today=8, weekly=40, monthly=160 (one preparer × 8h/day × working days)."""
     return float(PER_PREPARER_TARGET.get(period, PER_PREPARER_TARGET["monthly"]))
 
 
-# Daily per-preparer rate — derived from monthly target / 20 working days.
-# Used for custom-range targets where the period length isn't a fixed bucket.
-_PER_PREPARER_DAILY = 16.0
+# Daily per-preparer rate. Penny 2026-06-15: dropped from 16h (legacy 2-
+# preparers-per-seat model) to 8h so every "Committed Hours" total across
+# the dashboard reads as "8h × working days × members" — single source of
+# truth for targets at every level (employee / org / team / leaderboard).
+_PER_PREPARER_DAILY = 8.0
 
-# Per-employee daily quota used ONLY by the Individual Employee Dashboard
-# (_build_employee_response). Team-level + leaderboard + client paths still
-# default to _PER_PREPARER_DAILY = 16h, because those reflect the
-# 2-preparers-per-seat staffing model the org targets are sized against.
+# Per-employee daily quota used by the Individual Employee Dashboard
+# (_build_employee_response). Now numerically equal to _PER_PREPARER_DAILY
+# but kept as a separate symbol — easier to dial one surface independently
+# without retesting all team-level targets.
 _EMPLOYEE_DAILY_QUOTA = 8.0
 
 
