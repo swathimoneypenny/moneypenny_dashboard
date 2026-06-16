@@ -38,6 +38,7 @@ export default function BodEodReview({ teamId }) {
   const [customStart, setCustomStart]       = useState("");
   const [customEnd, setCustomEnd]           = useState("");
   const [modal, setModal]                   = useState({ open: false, type: null, data: null });
+  const [activeCategory, setActiveCategory] = useState("monthly"); // monthly | daily | weekly | special
 
   async function load() {
     setLoading(true);
@@ -381,121 +382,18 @@ export default function BodEodReview({ teamId }) {
         </div>
       )}
 
-      {/* BOD plan vs EOD actual — grouped bars per category. Latest day
-          only (per spec). Click any bar pair to drill in. */}
+      {/* Category breakdown — 4-tab switcher (Monthly / Daily / Weekly /
+          Special Task). Each tab renders BOD vs EOD side-by-side for that
+          specific status block, a per-category Plan vs Actual chart, and
+          auto-generated Key Observations. Replaces the previous monthly-
+          only BOD/EOD bars + Status Progression + Daily Variance. */}
       {latestEntry && (
-        <div style={panelStyle()}>
-          <ChartHeader
-            title={`🔄 BOD Plan vs EOD Actual · ${latestEntry.date}`}
-            hint="Click any bar to see what changed and why"
-          />
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart
-              data={buildComparisonData(latestEntry)}
-              onClick={(e) => {
-                const p = e?.activePayload?.[0]?.payload;
-                if (p) openCategoryModal(p, latestEntry, setModal);
-              }}
-              margin={{ top: 12, right: 16, left: 0, bottom: 4 }}
-            >
-              <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="category" tick={{ fill: C.sec, fontSize: 11, fontWeight: 700 }} interval={0} />
-              <YAxis tick={{ fill: C.muted, fontSize: 10, fontWeight: 700 }} />
-              <Tooltip cursor={{ fill: "rgba(255,255,255,0.04)" }} contentStyle={tooltipStyle()} />
-              <Legend wrapperStyle={{ color: C.pri, fontWeight: 700 }} />
-              <Bar
-                dataKey="Plan"
-                fill={BLUE}
-                radius={[6, 6, 0, 0]}
-                style={{ cursor: "pointer" }}
-                onClick={(p) => openCategoryModal(p?.payload || p, latestEntry, setModal)}
-              />
-              <Bar
-                dataKey="Actual"
-                fill={GREEN}
-                radius={[6, 6, 0, 0]}
-                style={{ cursor: "pointer" }}
-                onClick={(p) => openCategoryModal(p?.payload || p, latestEntry, setModal)}
-              />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-
-      {/* File Status Progression — 5 colored stage boxes for the latest day. */}
-      {latestEntry && (() => {
-        const eodActuals = latestEntry?.eod?.monthly_actual || {};
-        const stages = STAGE_ORDER.map((s) => ({
-          stage: s,
-          count: Number(eodActuals[s]) || 0,
-          color: STAGE_COLORS[s],
-        }));
-        const anyData = stages.some((s) => s.count > 0);
-        if (!anyData) return null;
-        return (
-          <div style={panelStyle()}>
-            <ChartHeader title={`📊 File Status Progression · ${latestEntry.date}`} hint="Click any stage for a breakdown" />
-            <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
-              {stages.map((s, i) => (
-                <StageBox key={i} stage={s} onClick={() => openStageModal(s, latestEntry, setModal)} />
-              ))}
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Daily Variance — one bar per day, green/red. Uses DAILY delta
-          (today's booked − today's target), not cumulative — otherwise a
-          chronically-behind client would show the same growing red bar
-          every day and you couldn't tell which specific days went bad. */}
-      {filteredEntries.length > 0 && (
-        <div style={panelStyle()}>
-          <ChartHeader
-            title="⚖️ Daily Variance (Today's Booked − Today's Target)"
-            hint="Click any bar to see reasons for that day's variance"
-          />
-          <ResponsiveContainer width="100%" height={240}>
-            <BarChart
-              data={filteredEntries.map((e) => {
-                const dc = Number(e.daily_committed) || 0;
-                const db = Number(e.daily_booked)    || 0;
-                return { date: e.date, variance: db - dc, _src: e };
-              })}
-              margin={{ top: 12, right: 16, left: 0, bottom: 4 }}
-              onClick={(e) => {
-                const src = e?.activePayload?.[0]?.payload?._src;
-                if (src) openDayModal(src, setModal);
-              }}
-            >
-              <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="date" tick={{ fill: C.sec, fontSize: 10, fontWeight: 700 }} />
-              <YAxis tick={{ fill: C.muted, fontSize: 10, fontWeight: 700 }} tickFormatter={(v) => `${v}h`} />
-              <Tooltip
-                cursor={{ fill: "rgba(255,255,255,0.04)" }}
-                contentStyle={tooltipStyle()}
-                formatter={(v) => [`${Number(v).toFixed(1)}h`, "Variance"]}
-              />
-              <Bar
-                dataKey="variance"
-                radius={[6, 6, 0, 0]}
-                style={{ cursor: "pointer" }}
-                onClick={(p) => { const src = p?.payload?._src || p?._src; if (src) openDayModal(src, setModal); }}
-              >
-                {filteredEntries.map((e, i) => {
-                  const dv = (Number(e.daily_booked) || 0) - (Number(e.daily_committed) || 0);
-                  return (
-                    <Cell
-                      key={i}
-                      fill={dv >= 0 ? GREEN : RED}
-                      style={{ cursor: "pointer" }}
-                      onClick={() => openDayModal(e, setModal)}
-                    />
-                  );
-                })}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
+        <CategorySection
+          entry={latestEntry}
+          activeCategory={activeCategory}
+          setActiveCategory={setActiveCategory}
+          setModal={setModal}
+        />
       )}
 
       {/* Unified detail modal */}
@@ -1027,6 +925,406 @@ function BodEodSidePanel({ color, title, data }) {
       ))}
     </div>
   );
+}
+
+// ── Category section (tabs + side-by-side + chart + observations) ──
+
+const CATEGORY_TABS = [
+  { key: "monthly", label: "📋 Monthly",      color: BLUE   },
+  { key: "daily",   label: "📌 Daily",        color: YELLOW },
+  { key: "weekly",  label: "📅 Weekly",       color: PURPLE },
+  { key: "special", label: "⭐ Special Task", color: ORANGE },
+];
+
+function getCategoryData(entry, category) {
+  if (!entry) return { bod: {}, eod: {} };
+  switch (category) {
+    case "monthly":
+      return {
+        bod: entry.bod?.monthly_plan   || {},
+        eod: entry.eod?.monthly_actual || {},
+      };
+    case "daily":
+      return {
+        bod: entry.bod?.daily_plan   || {},
+        eod: entry.eod?.daily_actual || {},
+      };
+    case "weekly":
+      return {
+        bod: entry.bod?.weekly_plan   || {},
+        eod: entry.eod?.weekly_actual || {},
+      };
+    case "special":
+      return {
+        bod: { text: entry.bod?.special_task_plan   || "" },
+        eod: { text: entry.eod?.special_task_actual || "" },
+      };
+    default:
+      return { bod: {}, eod: {} };
+  }
+}
+
+function CategorySection({ entry, activeCategory, setActiveCategory, setModal }) {
+  const catData = useMemo(() => getCategoryData(entry, activeCategory), [entry, activeCategory]);
+  const isSpecial = activeCategory === "special";
+
+  // Union of keys (preserves BOD order, then appends EOD-only keys) for
+  // the per-category Plan vs Actual chart. Strings are dropped — only
+  // numeric pairs make it onto the bar chart.
+  const chartRows = useMemo(() => {
+    if (isSpecial) return [];
+    const seen = new Set();
+    const order = [];
+    for (const k of Object.keys(catData.bod)) { if (!seen.has(k)) { seen.add(k); order.push(k); } }
+    for (const k of Object.keys(catData.eod)) { if (!seen.has(k)) { seen.add(k); order.push(k); } }
+    return order
+      .map((k) => ({
+        category: k,
+        Plan:     typeof catData.bod[k] === "number" ? catData.bod[k] : 0,
+        Actual:   typeof catData.eod[k] === "number" ? catData.eod[k] : 0,
+      }))
+      .filter((r) => r.Plan > 0 || r.Actual > 0);
+  }, [catData, isSpecial]);
+
+  const observations = useMemo(
+    () => buildCategoryObservations(catData, activeCategory, entry),
+    [catData, activeCategory, entry]
+  );
+
+  return (
+    <>
+      {/* Tab selector */}
+      <div style={{
+        background: C.card, border: `1px solid ${C.border}`, borderRadius: 12,
+        padding: 8, display: "flex", gap: 4,
+      }}>
+        {CATEGORY_TABS.map((tab) => {
+          const active = activeCategory === tab.key;
+          return (
+            <button
+              key={tab.key}
+              onClick={() => setActiveCategory(tab.key)}
+              style={{
+                flex: 1,
+                background: active
+                  ? `linear-gradient(135deg, ${tab.color}40 0%, ${tab.color}20 100%)`
+                  : "transparent",
+                color: C.pri,
+                border: active ? `2px solid ${tab.color}` : "1px solid transparent",
+                borderRadius: 8,
+                padding: "10px 16px",
+                fontWeight: 800,
+                cursor: "pointer",
+                fontSize: 13,
+                letterSpacing: 0.5,
+                textTransform: "uppercase",
+                fontFamily: "inherit",
+                transition: "all 0.2s ease",
+              }}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Side-by-side BOD vs EOD cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <BodEodSideCard
+          accent={BLUE}
+          icon="🌅"
+          label={`BOD — ${activeCategory.toUpperCase()} PLAN`}
+          date={entry?.date}
+          data={catData.bod}
+          isSpecial={isSpecial}
+          emptyText={isSpecial ? "No special task planned" : `No ${activeCategory} plan recorded`}
+          compareTo={null}
+        />
+        <BodEodSideCard
+          accent={GREEN}
+          icon="🌆"
+          label={`EOD — ${activeCategory.toUpperCase()} ACTUAL`}
+          date={entry?.date}
+          data={catData.eod}
+          isSpecial={isSpecial}
+          emptyText={isSpecial ? "No special task completed" : `No ${activeCategory} actual recorded`}
+          compareTo={catData.bod}
+        />
+      </div>
+
+      {/* Per-category Plan vs Actual bars (skip special) */}
+      {!isSpecial && chartRows.length > 0 && (
+        <div style={panelStyle()}>
+          <ChartHeader
+            title={`⚖️ ${activeCategory.toUpperCase()} · Plan vs Actual`}
+            hint="Click any bar to see what changed and why"
+          />
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart
+              data={chartRows}
+              margin={{ top: 12, right: 16, left: 0, bottom: 60 }}
+              onClick={(e) => {
+                const p = e?.activePayload?.[0]?.payload;
+                if (p) openCategoryModal(p, entry, setModal);
+              }}
+            >
+              <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" vertical={false} />
+              <XAxis
+                dataKey="category"
+                tick={{ fill: C.sec, fontSize: 11, fontWeight: 700 }}
+                angle={-25}
+                textAnchor="end"
+                interval={0}
+                height={70}
+              />
+              <YAxis tick={{ fill: C.muted, fontSize: 10, fontWeight: 700 }} />
+              <Tooltip cursor={{ fill: "rgba(255,255,255,0.04)" }} contentStyle={tooltipStyle()} />
+              <Legend wrapperStyle={{ color: C.pri, fontWeight: 700 }} />
+              <Bar
+                dataKey="Plan"
+                fill={BLUE}
+                radius={[6, 6, 0, 0]}
+                style={{ cursor: "pointer" }}
+                onClick={(p) => openCategoryModal(p?.payload || p, entry, setModal)}
+              />
+              <Bar
+                dataKey="Actual"
+                fill={GREEN}
+                radius={[6, 6, 0, 0]}
+                style={{ cursor: "pointer" }}
+                onClick={(p) => openCategoryModal(p?.payload || p, entry, setModal)}
+              />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Key Observations */}
+      <KeyObservations category={activeCategory} observations={observations} />
+    </>
+  );
+}
+
+function BodEodSideCard({ accent, icon, label, date, data, isSpecial, emptyText, compareTo }) {
+  const entries = isSpecial ? [] : Object.entries(data || {});
+  return (
+    <div style={{
+      background:   C.card,
+      border:       `1px solid ${accent}33`,
+      borderLeft:   `4px solid ${accent}`,
+      borderRadius: 12,
+      padding:      20,
+    }}>
+      <div style={{
+        display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16,
+      }}>
+        <h3 style={{
+          color: accent, fontSize: 13, fontWeight: 800,
+          textTransform: "uppercase", letterSpacing: 1, margin: 0,
+        }}>
+          {icon} {label}
+        </h3>
+        {date && (
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, fontFamily: "'DM Mono', monospace" }}>
+            {date}
+          </div>
+        )}
+      </div>
+
+      {isSpecial ? (
+        <div style={{
+          padding: 14, background: `${accent}14`, borderRadius: 8,
+          color: C.pri, fontSize: 13, fontWeight: 600, lineHeight: 1.5, minHeight: 60,
+          whiteSpace: "pre-wrap",
+        }}>
+          {data.text
+            ? data.text
+            : <span style={{ color: C.muted, fontStyle: "italic", fontWeight: 600 }}>{emptyText}</span>}
+        </div>
+      ) : entries.length === 0 ? (
+        <div style={{
+          color: C.muted, fontStyle: "italic", padding: 12,
+          fontSize: 12, fontWeight: 600,
+        }}>
+          {emptyText}
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {entries.map(([k, v], i) => {
+            const planValue = compareTo ? compareTo[k] : null;
+            const diff =
+              typeof v === "number" && typeof planValue === "number"
+                ? v - planValue
+                : null;
+            return (
+              <div key={i} style={{
+                display: "flex", justifyContent: "space-between", alignItems: "center",
+                padding: "10px 14px",
+                background: `${accent}14`,
+                border: `1px solid ${accent}26`,
+                borderRadius: 6,
+              }}>
+                <span style={{ color: C.pri, fontSize: 12, fontWeight: 700 }}>{k}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{
+                    color: accent, fontSize: 16, fontWeight: 900,
+                    fontFamily: "'DM Mono', monospace",
+                  }}>
+                    {formatCatValue(v)}
+                  </span>
+                  {diff !== null && diff !== 0 && (
+                    <span style={{
+                      fontSize: 10, fontWeight: 800,
+                      color:      diff > 0 ? GREEN : RED,
+                      background: diff > 0 ? "rgba(16,185,129,0.15)" : "rgba(239,68,68,0.15)",
+                      padding:    "2px 6px",
+                      borderRadius: 4,
+                      fontFamily: "'DM Mono', monospace",
+                    }}>
+                      {diff > 0 ? "+" : ""}{diff}
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function KeyObservations({ category, observations }) {
+  const COLORS = {
+    success: { bg: "rgba(16,185,129,0.08)",  border: GREEN  },
+    warning: { bg: "rgba(240,185,71,0.08)",  border: YELLOW },
+    info:    { bg: "rgba(74,143,231,0.08)",  border: BLUE   },
+  };
+  return (
+    <div style={panelStyle()}>
+      <h3 style={{
+        color: C.pri, fontSize: 13, fontWeight: 800,
+        textTransform: "uppercase", letterSpacing: 1, margin: "0 0 12px 0",
+      }}>
+        💡 Key Observations — {category.toUpperCase()}
+      </h3>
+      {observations.length === 0 ? (
+        <div style={{ color: C.muted, fontStyle: "italic", padding: 12, fontWeight: 600, fontSize: 12 }}>
+          No observations for this category
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {observations.map((o, i) => {
+            const c = COLORS[o.type] || COLORS.info;
+            return (
+              <div key={i} style={{
+                background: c.bg, borderLeft: `3px solid ${c.border}`,
+                padding: "10px 14px", borderRadius: 6,
+                color: C.pri, fontSize: 12, fontWeight: 600,
+                display: "flex", alignItems: "center", gap: 10,
+              }}>
+                <span style={{ fontSize: 16, lineHeight: 1 }}>{o.icon}</span>
+                <span>{o.text}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function buildCategoryObservations(catData, category, entry) {
+  const obs = [];
+  if (category === "monthly") {
+    const total       = Number(catData.eod["Total Files"])   || 0;
+    const completed   = Number(catData.eod["Completed"])     || 0;
+    const inProcess   = Number(catData.eod["In Process"])    || 0;
+    const review      = Number(catData.eod["Review"])        || 0;
+    const query       = Number(catData.eod["Posted Query"])  || 0;
+    const notStarted  = Number(catData.eod["Not Started"])   || 0;
+    if (total > 0) {
+      const pct = Math.round((completed / total) * 100);
+      obs.push({
+        icon: "📈",
+        text: `Completion rate: ${pct}% (${completed} of ${total} files)`,
+        type: pct >= 50 ? "success" : "warning",
+      });
+    }
+    if (inProcess > 5)  obs.push({ icon: "⚠️", text: `${inProcess} files in process — possible bottleneck`, type: "warning" });
+    if (review > 3)     obs.push({ icon: "👀", text: `${review} files pending review — needs attention`,    type: "warning" });
+    if (query > 0)      obs.push({ icon: "❓", text: `${query} files waiting for client response`,           type: "info"    });
+    if (notStarted > 0) obs.push({ icon: "⏸️", text: `${notStarted} files not yet started`,                  type: "info"    });
+  } else if (category === "daily") {
+    const planTasks   = Number(catData.bod["Daily Tasks"]) || 0;
+    const actualTasks = Number(catData.eod["Daily Tasks"]) || 0;
+    if (planTasks || actualTasks) {
+      obs.push({
+        icon: planTasks === actualTasks ? "✓" : "⚠️",
+        text: `Daily tasks: planned ${planTasks}, completed ${actualTasks}`,
+        type: planTasks === actualTasks ? "success" : "warning",
+      });
+    }
+    // Generic per-key plan vs actual for whatever the TL filled in
+    for (const [k, planV] of Object.entries(catData.bod)) {
+      if (k === "Daily Tasks" || typeof planV !== "number") continue;
+      const actualV = Number(catData.eod[k]) || 0;
+      if (planV === actualV) continue;
+      obs.push({
+        icon: actualV >= planV ? "✓" : "⚠️",
+        text: `${k}: planned ${planV}, actual ${actualV}`,
+        type: actualV >= planV ? "success" : "warning",
+      });
+    }
+  } else if (category === "weekly") {
+    const planKeys = Object.entries(catData.bod).filter(([, v]) => typeof v === "number");
+    if (planKeys.length === 0) {
+      obs.push({ icon: "📅", text: `No weekly numeric targets recorded for ${entry?.date}`, type: "info" });
+    } else {
+      for (const [k, planV] of planKeys) {
+        const actualV = Number(catData.eod[k]) || 0;
+        obs.push({
+          icon: actualV >= planV ? "✓" : "⚠️",
+          text: `${k}: planned ${planV}, actual ${actualV}`,
+          type: actualV >= planV ? "success" : "warning",
+        });
+      }
+    }
+  } else if (category === "special") {
+    const planText   = (catData.bod.text || "").trim();
+    const actualText = (catData.eod.text || "").trim();
+    const noneish    = (s) => !s || s.toUpperCase() === "NIL" || s.toUpperCase() === "N/A";
+    if (!noneish(actualText)) {
+      obs.push({
+        icon: "✓",
+        text: `Special task completed: ${truncate(actualText, 100)}`,
+        type: "success",
+      });
+    } else if (!noneish(planText)) {
+      obs.push({
+        icon: "⚠️",
+        text: `Special task planned but not yet completed: ${truncate(planText, 80)}`,
+        type: "warning",
+      });
+    } else {
+      obs.push({ icon: "📭", text: "No special task on today's plan or EOD", type: "info" });
+    }
+  }
+  if (entry?.notes && String(entry.notes).trim()) {
+    obs.push({
+      icon: "📝",
+      text: `Note: ${truncate(entry.notes, 120)}`,
+      type: "info",
+    });
+  }
+  return obs;
+}
+
+function formatCatValue(v) {
+  if (typeof v === "number") {
+    return Number.isInteger(v) ? String(v) : v.toFixed(1);
+  }
+  return String(v);
 }
 
 // ── helpers ────────────────────────────────────────────────────────
