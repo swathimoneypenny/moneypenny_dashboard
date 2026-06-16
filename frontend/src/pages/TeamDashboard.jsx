@@ -7,6 +7,7 @@ import SimpleBreakdownModal from "../components/SimpleBreakdownModal";
 import PerformanceReasonModal from "../components/PerformanceReasonModal";
 import WeeklyReviewSection from "../components/WeeklyReviewSection";
 import WeeklyChecklistSection from "../components/WeeklyChecklistSection";
+import BodEodReview from "../components/BodEodReview";
 import {
   BarChart,
   Bar,
@@ -30,6 +31,7 @@ const PERIODS = [
   { key: "monthly", label: "This Month" },
   { key: "custom",  label: "📅 Custom Range" },
   { key: "review",  label: "📋 Weekly Review" },
+  { key: "bodEod",  label: "📊 BOD/EOD Review" },
 ];
 
 // Default custom range = last 7 days ending today.
@@ -1209,9 +1211,10 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
   const abortRef = useRef(null);
 
   const fetchData = useCallback((silent = false) => {
-    // The Weekly Review tab has its own data source (admin-review endpoint) —
+    // The Weekly Review and BOD/EOD tabs have their own data sources —
     // don't hit /api/team/{id}/review (would 404 / hit the period catch-all).
     if (period === "review") return;
+    if (period === "bodEod") return;
     if (period === "custom" && (!customRange.from || !customRange.to)) return;
     if (abortRef.current) abortRef.current.abort();
     const ctrl = new AbortController();
@@ -1272,6 +1275,7 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
   // Leaderboard for the active period (drives Team Members table).
   useEffect(() => {
     if (period === "review") return;
+    if (period === "bodEod") return;
     if (period === "custom" && (!customRange.from || !customRange.to)) return;
     if (lbAbortRef.current) lbAbortRef.current.abort();
     const ctrl = new AbortController();
@@ -1571,7 +1575,7 @@ ${clients.map((o) => (
                 fontWeight: 600,
                 fontFamily: "'DM Sans', sans-serif",
                 transition: "all 0.15s",
-                background: period === p.key ? (p.key === "review" ? "#7C3AED" : p.key === "custom" ? "#F2895A" : C.blue) : "transparent",
+                background: period === p.key ? (p.key === "review" ? "#7C3AED" : p.key === "bodEod" ? "#3DC58B" : p.key === "custom" ? "#F2895A" : C.blue) : "transparent",
                 color: period === p.key ? "#fff" : C.sec,
               }}
             >
@@ -1749,6 +1753,8 @@ ${clients.map((o) => (
               <WeeklyChecklistSection teamId={teamId} />
             )}
           </>
+        ) : period === "bodEod" ? (
+          <BodEodReview teamId={teamId} />
         ) : (<>
         {/* Roster info banner */}
         {!loading && data && !data.error && !data.needsRosterSetup && (

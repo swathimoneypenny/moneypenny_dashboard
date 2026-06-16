@@ -2154,6 +2154,20 @@ WEEKLY_CHECKLIST_COLUMNS = {
     "whale_links":           15,   # URL
 }
 
+# ── BOD/EOD Review per-client tabs ─────────────────────────────────
+# Each team has a set of client tabs on its main sheet (TEAM_LETTER_MAP.sheetId).
+# Each tab carries one row per day with columns: A=Date, B=Committed,
+# C=Booked, D-F=BOD admin checks, G-J=BOD plan blocks, K-N=EOD workflow,
+# O-R=EOD actual blocks, S-U=notes/reply/training. Only Team A populated for
+# now — extend per-team as the lead supplies the gids.
+BOD_EOD_TAB_GIDS: dict[str, dict[str, str]] = {
+    "team_a": {
+        "Bookkeeping Doctor": "273916475",
+        "Ollinbalance":       "677777582",
+        "24 Hrs Bookkeeper":  "930660300",
+    },
+}
+
 # Boolean-ish columns we run through compliance % math. Free-text columns
 # (updated_procedure, new_procedure, training_*, flag_tm_ops, whale_links,
 # identified_turn) are excluded — they don't have a yes/no axis.
@@ -8466,6 +8480,275 @@ async def client_departure_endpoint(client_slug: str):
         }, status_code=200)
 
 
+# ── BOD/EOD Review fetch + parse ─────────────────────────────────────
+_bod_eod_csv_cache: dict[tuple[str, str], dict] = {}
+_BOD_EOD_CSV_TTL = 60  # match Weekly Checklist — TLs edit these live
+
+
+def _fetch_bod_eod_csv(sheet_id: str, gid: str) -> str:
+    """Cached CSV export for a BOD/EOD client tab. 60s TTL per (sheet, gid).
+    Returns '' on any failure so downstream parsing yields an empty client
+    (the endpoint still 200s with a friendly entries=[] shape)."""
+    if not sheet_id or not gid:
+        return ""
+    key = (sheet_id, gid)
+    entry = _bod_eod_csv_cache.get(key)
+    now = datetime.now()
+    if entry and (now - entry["at"]).total_seconds() < _BOD_EOD_CSV_TTL:
+        return entry["csv"]
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
+    try:
+        resp = requests.get(url, timeout=15, allow_redirects=True)
+        if resp.status_code != 200:
+            print(f"[bod-eod] fetch gid={gid} returned {resp.status_code}")
+            _bod_eod_csv_cache[key] = {"at": now, "csv": ""}
+            return ""
+        csv_text = resp.content.decode("utf-8", errors="replace")
+    except Exception as e:
+        print(f"[bod-eod] fetch gid={gid} error: {e}")
+        _bod_eod_csv_cache[key] = {"at": now, "csv": ""}
+        return ""
+    _bod_eod_csv_cache[key] = {"at": now, "csv": csv_text}
+    return csv_text
+
+
+_BOD_EOD_DATE_RE = re.compile(r"^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$")
+
+
+def _bod_eod_is_data_row(date_str: str) -> bool:
+    """Accept rows whose first cell looks like a date. Rejects header rows,
+    blanks, and Penny's 'sample row' marker (0/0/00)."""
+    if not date_str:
+        return False
+    s = date_str.strip()
+    if not s or s.lower() in {"date", "0/0/00", "0/0/0000"}:
+        return False
+    return bool(_BOD_EOD_DATE_RE.match(s))
+
+
+def _bod_eod_parse_status_block(text: str) -> dict:
+    """Parse a multi-line status block.
+
+    Real cells look like:
+        Total no. of files: 12
+        Not yet started: 3
+        In process: 6
+        Completed: 3
+
+    We accept ':' or '-' as the separator, coerce values to float when
+    possible (so we can chart counts) but pass strings through otherwise
+    (so descriptive notes still surface)."""
+    if not text:
+        return {}
+    out: dict = {}
+    for raw in str(text).split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        # Split on the FIRST ':' or ' - ' — values may legitimately contain
+        # commas or further dashes ("Completed - awaiting QC review").
+        if ":" in line:
+            k, v = line.split(":", 1)
+        elif " - " in line:
+            k, v = line.split(" - ", 1)
+        else:
+            continue
+        k = k.strip()
+        v = v.strip()
+        if not k:
+            continue
+        try:
+            out[k] = float(v.replace(",", ""))
+        except ValueError:
+            out[k] = v
+    return out
+
+
+def _bod_eod_cell(row: list[str], idx: int) -> str:
+    """Safe row[idx] with whitespace strip — sheets pad short rows so we
+    can't rely on len(row)."""
+    if idx < len(row):
+        v = row[idx]
+        return v.strip() if isinstance(v, str) else (str(v) if v is not None else "")
+    return ""
+
+
+def _bod_eod_float(row: list[str], idx: int) -> float:
+    raw = _bod_eod_cell(row, idx).replace(",", "").strip()
+    if not raw:
+        return 0.0
+    try:
+        return float(raw)
+    except ValueError:
+        return 0.0
+
+
+def _bod_eod_build_comparison(bod: dict, eod: dict) -> dict:
+    """Plan-vs-actual for the rows we can chart. Walks the UNION of keys
+    that appeared on either side so descriptive labels added later still
+    surface — but only numeric pairs make it into the comparison."""
+    plan = bod.get("monthly_plan") or {}
+    act  = eod.get("monthly_actual") or {}
+    keys = []
+    seen = set()
+    for k in list(plan.keys()) + list(act.keys()):
+        if k not in seen:
+            seen.add(k)
+            keys.append(k)
+    out: dict = {}
+    for k in keys:
+        p = plan.get(k, 0)
+        a = act.get(k, 0)
+        if isinstance(p, (int, float)) and isinstance(a, (int, float)):
+            out[k] = {"planned": float(p), "actual": float(a), "diff": float(a) - float(p)}
+    return out
+
+
+def _bod_eod_parse_rows(client_name: str, csv_text: str) -> dict:
+    """Drive the parse: skip the 2 header rows the sheet template ships with,
+    then turn each data row into a structured entry."""
+    entries: list[dict] = []
+    if csv_text:
+        reader = csv.reader(io.StringIO(csv_text))
+        rows = list(reader)
+        # Header rows: typical sheet template has 2 header rows. We
+        # tolerate variance by detecting the first data row (date-looking
+        # first cell) rather than hard-coded skip.
+        for raw in rows:
+            if not raw:
+                continue
+            date_str = _bod_eod_cell(raw, 0)
+            if not _bod_eod_is_data_row(date_str):
+                continue
+            committed = _bod_eod_float(raw, 1)
+            booked    = _bod_eod_float(raw, 2)
+            bod = {
+                "practice_protect":   _bod_eod_cell(raw, 3),
+                "email_checked":      _bod_eod_cell(raw, 4),
+                "staff_coverage":     _bod_eod_cell(raw, 5),
+                "monthly_plan":       _bod_eod_parse_status_block(_bod_eod_cell(raw, 6)),
+                "daily_plan":         _bod_eod_parse_status_block(_bod_eod_cell(raw, 7)),
+                "weekly_plan":        _bod_eod_parse_status_block(_bod_eod_cell(raw, 8)),
+                "special_task_plan":  _bod_eod_cell(raw, 9),
+            }
+            eod = {
+                "whale_updates":        _bod_eod_cell(raw, 10),
+                "timesheets":           _bod_eod_cell(raw, 11),
+                "review":               _bod_eod_cell(raw, 12),
+                "workflow":             _bod_eod_cell(raw, 13),
+                "monthly_actual":       _bod_eod_parse_status_block(_bod_eod_cell(raw, 14)),
+                "daily_actual":         _bod_eod_parse_status_block(_bod_eod_cell(raw, 15)),
+                "weekly_actual":        _bod_eod_parse_status_block(_bod_eod_cell(raw, 16)),
+                "special_task_actual":  _bod_eod_cell(raw, 17),
+            }
+            variance = booked - committed
+            efficiency = (booked / committed * 100.0) if committed > 0 else 0.0
+            entries.append({
+                "date":            date_str,
+                "committed_hours": round(committed, 2),
+                "booked_hours":    round(booked, 2),
+                "variance_hours":  round(variance, 2),
+                "efficiency_pct":  round(efficiency, 1),
+                "bod":             bod,
+                "eod":             eod,
+                "notes":           _bod_eod_cell(raw, 18),
+                "mpllc_reply":     _bod_eod_cell(raw, 19),
+                "training":        _bod_eod_cell(raw, 20),
+                "comparison":      _bod_eod_build_comparison(bod, eod),
+            })
+    last = entries[-1] if entries else {}
+    return {
+        "client_name": client_name,
+        "entries":     entries,
+        "summary": {
+            "total_committed": float(last.get("committed_hours", 0)),
+            "total_booked":    float(last.get("booked_hours", 0)),
+            "total_variance":  float(last.get("variance_hours", 0)),
+            "days_tracked":    len(entries),
+        },
+    }
+
+
+def _bod_eod_build_team_summary(clients: list[dict]) -> dict:
+    """Cross-client roll-up. Each client contributes its LAST row's
+    committed/booked (cumulative-by-day), matching how the user reads
+    'total committed today' on the sheet."""
+    total_committed = 0.0
+    total_booked    = 0.0
+    days_tracked    = 0
+    for c in clients:
+        ents = c.get("entries") or []
+        if ents:
+            last = ents[-1]
+            total_committed += float(last.get("committed_hours", 0))
+            total_booked    += float(last.get("booked_hours", 0))
+            days_tracked    = max(days_tracked, len(ents))
+    variance = total_booked - total_committed
+    efficiency = (total_booked / total_committed * 100.0) if total_committed > 0 else 0.0
+    return {
+        "total_committed": round(total_committed, 2),
+        "total_booked":    round(total_booked, 2),
+        "variance":        round(variance, 2),
+        "efficiency_pct":  round(efficiency, 1),
+        "days_tracked":    days_tracked,
+        "clients_count":   len(clients),
+    }
+
+
+@app.get("/api/team/{team_id}/bod-eod")
+def get_bod_eod_review(team_id: str):
+    """Per-client BOD vs EOD comparison for a team.
+    Always 200s — surfaces config gaps via the `error` key so the UI can
+    render a friendly empty state instead of throwing on a 4xx."""
+    cfg = TEAM_LETTER_MAP.get(team_id)
+    if not cfg:
+        return {"team_id": team_id, "error": "unknown_team", "clients": [], "summary": {}}
+    sheet_id = cfg.get("sheetId")
+    clients_gid_map = BOD_EOD_TAB_GIDS.get(team_id) or {}
+    if not sheet_id:
+        return {
+            "team_id":      team_id,
+            "team_label":   cfg.get("label", team_id),
+            "error":        "no_sheet_id",
+            "error_detail": f"Team {team_id!r} has no Google Sheet configured in TEAM_LETTER_MAP.",
+            "clients":      [],
+            "summary":      {},
+        }
+    if not clients_gid_map:
+        return {
+            "team_id":      team_id,
+            "team_label":   cfg.get("label", team_id),
+            "sheet_id":     sheet_id,
+            "error":        "no_bod_eod_mapping",
+            "error_detail": (
+                f"No BOD/EOD client-tab gids registered for {team_id!r}. "
+                f"Add an entry to BOD_EOD_TAB_GIDS in backend/main.py."
+            ),
+            "clients":      [],
+            "summary":      {},
+        }
+    clients: list[dict] = []
+    for client_name, gid in clients_gid_map.items():
+        try:
+            csv_text = _fetch_bod_eod_csv(sheet_id, gid)
+            clients.append(_bod_eod_parse_rows(client_name, csv_text))
+        except Exception as e:
+            print(f"[bod-eod] parse {client_name} gid={gid} error: {e}")
+            clients.append({
+                "client_name": client_name,
+                "error":       str(e),
+                "entries":     [],
+                "summary":     {"total_committed": 0, "total_booked": 0, "total_variance": 0, "days_tracked": 0},
+            })
+    return {
+        "team_id":    team_id,
+        "team_label": cfg.get("label", team_id),
+        "sheet_id":   sheet_id,
+        "clients":    clients,
+        "summary":    _bod_eod_build_team_summary(clients),
+    }
+
+
 @app.get("/api/clear-cache")
 @app.post("/api/clear-cache")
 async def clear_cache():
@@ -8483,6 +8766,7 @@ async def clear_cache():
     _delays_csv_cache.clear()
     _checklist_csv_cache.clear()
     _checklist_cross_team_cache.clear()
+    _bod_eod_csv_cache.clear()
     _departure_analysis_cache.clear()
     return {"ok": True, "status": "all caches cleared", "time": datetime.now().isoformat()}
 
