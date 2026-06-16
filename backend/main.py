@@ -8630,6 +8630,7 @@ def _bod_eod_canonical_key(label: str) -> str:
     if not label:
         return label
     s = label.strip().lower()
+    s_compact = s.replace(" ", "")
     # Whole-word matches first (so "AP" doesn't get swallowed by a substring
     # rule below).
     for canon, exact in _BOD_EOD_EXACT_RULES:
@@ -8637,7 +8638,9 @@ def _bod_eod_canonical_key(label: str) -> str:
             return canon
     for canon, needles in _BOD_EOD_CATEGORY_RULES:
         for n in needles:
-            if n in s:
+            # Match with and without spaces — TLs occasionally type
+            # "Bookedhours" or "totalfiles" with collapsed spacing.
+            if n in s or n.replace(" ", "") in s_compact:
                 return canon
     return label.strip()
 
