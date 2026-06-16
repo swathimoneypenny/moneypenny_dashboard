@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, Legend, Cell,
+  Tooltip, ResponsiveContainer, Legend, Cell, ReferenceLine,
 } from "recharts";
 import { authFetch, C } from "../config";
 
@@ -164,6 +164,22 @@ export default function BodEodReview({ teamId }) {
   const latestEntry = filteredEntries.length
     ? filteredEntries[filteredEntries.length - 1]
     : null;
+
+  // Today's row often has no EOD yet (TL hasn't filed by mid-day). Walk
+  // backwards to find the latest entry that actually has EOD data so the
+  // CategorySection's EOD card + observations show meaningful content
+  // instead of "Not yet recorded". BOD card keeps using `latestEntry`
+  // since BOD plans are filed in the morning and reflect today's intent.
+  const latestWithEOD = useMemo(() => {
+    if (!filteredEntries.length) return null;
+    for (let i = filteredEntries.length - 1; i >= 0; i--) {
+      const e = filteredEntries[i];
+      const hasEodMonthly = e.eod?.monthly_actual && Object.keys(e.eod.monthly_actual).length > 0;
+      const hasBooked     = (Number(e.cumulative_booked ?? e.booked_hours) || 0) > 0;
+      if (hasEodMonthly || hasBooked) return e;
+    }
+    return filteredEntries[filteredEntries.length - 1];
+  }, [filteredEntries]);
 
   if (loading) {
     return (
@@ -340,9 +356,22 @@ export default function BodEodReview({ teamId }) {
             title="📈 Committed vs Booked Hours"
             hint="Click any point to see daily breakdown & reasons"
           />
-          <ResponsiveContainer width="100%" height={280}>
+          <div style={{
+            display: "flex", gap: 16, marginBottom: 12, fontSize: 11,
+            color: C.pri, fontWeight: 700, flexWrap: "wrap",
+          }}>
+            <LegendItem color={BLUE}  label="Committed (Target)" />
+            <LegendItem color={GREEN} label="Booked (Actual)" />
+            <LegendItem color={RED}   label="Difference (Booked − Committed)" dashed />
+          </div>
+          <ResponsiveContainer width="100%" height={300}>
             <LineChart
-              data={filteredEntries}
+              data={filteredEntries.map((e) => ({
+                ...e,
+                variance_cumulative:
+                  (Number(e.booked_hours)    || 0) -
+                  (Number(e.committed_hours) || 0),
+              }))}
               margin={{ top: 12, right: 20, left: 0, bottom: 4 }}
               onClick={(e) => {
                 const p = e?.activePayload?.[0]?.payload;
@@ -354,22 +383,40 @@ export default function BodEodReview({ teamId }) {
               <XAxis dataKey="date" tick={{ fill: C.sec, fontSize: 10, fontWeight: 700 }} />
               <YAxis tick={{ fill: C.muted, fontSize: 10, fontWeight: 700 }} tickFormatter={(v) => `${v}h`} />
               <Tooltip
-                cursor={{ stroke: "rgba(255,255,255,0.20)" }}
+                cursor={{ stroke: ORANGE, strokeWidth: 1, strokeDasharray: "3 3" }}
                 contentStyle={tooltipStyle()}
-                formatter={(v, n) => [`${Number(v).toFixed(1)}h`, n]}
+                formatter={(v, n) => {
+                  const num = Number(v) || 0;
+                  if (n === "Difference (Cumulative)") {
+                    return [
+                      `${num >= 0 ? "+" : ""}${num.toFixed(1)}h`,
+                      num >= 0 ? "🟢 Ahead" : "🔴 Behind",
+                    ];
+                  }
+                  return [`${num.toFixed(1)}h`, n];
+                }}
               />
-              <Legend wrapperStyle={{ color: C.pri, fontWeight: 700 }} />
+              {/* y=0 baseline for the variance line */}
+              <ReferenceLine y={0} stroke="rgba(255,255,255,0.25)" />
               <Line
                 type="monotone" dataKey="committed_hours" stroke={BLUE} strokeWidth={3}
                 name="Committed (Cumulative)"
-                dot={{ r: 5, fill: BLUE, cursor: "pointer" }}
-                activeDot={{ r: 7, stroke: "#FFFFFF", strokeWidth: 2 }}
+                dot={{ r: 5, fill: BLUE, stroke: "#FFFFFF", strokeWidth: 2, cursor: "pointer" }}
+                activeDot={{ r: 8, fill: BLUE, stroke: "#FFFFFF", strokeWidth: 3 }}
               />
               <Line
                 type="monotone" dataKey="booked_hours" stroke={GREEN} strokeWidth={3}
                 name="Booked (Cumulative)"
-                dot={{ r: 5, fill: GREEN, cursor: "pointer" }}
-                activeDot={{ r: 7, stroke: "#FFFFFF", strokeWidth: 2 }}
+                dot={{ r: 5, fill: GREEN, stroke: "#FFFFFF", strokeWidth: 2, cursor: "pointer" }}
+                activeDot={{ r: 8, fill: GREEN, stroke: "#FFFFFF", strokeWidth: 3 }}
+              />
+              {/* Cumulative difference: red dashed, sits relative to y=0 */}
+              <Line
+                type="monotone" dataKey="variance_cumulative" stroke={RED} strokeWidth={2.5}
+                strokeDasharray="5 5"
+                name="Difference (Cumulative)"
+                dot={{ r: 4, fill: RED, stroke: "#FFFFFF", strokeWidth: 1, cursor: "pointer" }}
+                activeDot={{ r: 7, fill: RED, stroke: "#FFFFFF", strokeWidth: 2 }}
               />
             </LineChart>
           </ResponsiveContainer>
@@ -377,7 +424,7 @@ export default function BodEodReview({ teamId }) {
             fontSize: 10, color: C.muted, fontStyle: "italic",
             marginTop: 6, textAlign: "center", letterSpacing: 0.3,
           }}>
-            Lines show running totals (each point = month-to-date through that day)
+            Click any point for that day's stats + reasons · running totals through each date
           </div>
         </div>
       )}
@@ -389,7 +436,8 @@ export default function BodEodReview({ teamId }) {
           only BOD/EOD bars + Status Progression + Daily Variance. */}
       {latestEntry && (
         <CategorySection
-          entry={latestEntry}
+          bodEntry={latestEntry}
+          eodEntry={latestWithEOD || latestEntry}
           activeCategory={activeCategory}
           setActiveCategory={setActiveCategory}
           setModal={setModal}
@@ -662,6 +710,19 @@ function StageBox({ stage, onClick }) {
         {stage.stage}
       </div>
     </button>
+  );
+}
+
+function LegendItem({ color, label, dashed = false }) {
+  return (
+    <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <span style={{
+        width: 18, height: 3, background: dashed ? "transparent" : color,
+        borderTop: dashed ? `2px dashed ${color}` : "none",
+        borderRadius: 2,
+      }} />
+      {label}
+    </span>
   );
 }
 
@@ -964,9 +1025,11 @@ function getCategoryData(entry, category) {
   }
 }
 
-function CategorySection({ entry, activeCategory, setActiveCategory, setModal }) {
-  const catData = useMemo(() => getCategoryData(entry, activeCategory), [entry, activeCategory]);
+function CategorySection({ bodEntry, eodEntry, activeCategory, setActiveCategory, setModal }) {
+  const bodData = useMemo(() => getCategoryData(bodEntry, activeCategory).bod, [bodEntry, activeCategory]);
+  const eodData = useMemo(() => getCategoryData(eodEntry, activeCategory).eod, [eodEntry, activeCategory]);
   const isSpecial = activeCategory === "special";
+  const eodIsStale = bodEntry && eodEntry && bodEntry.date !== eodEntry.date;
 
   // Union of keys (preserves BOD order, then appends EOD-only keys) for
   // the per-category Plan vs Actual chart. Strings are dropped — only
@@ -975,20 +1038,22 @@ function CategorySection({ entry, activeCategory, setActiveCategory, setModal })
     if (isSpecial) return [];
     const seen = new Set();
     const order = [];
-    for (const k of Object.keys(catData.bod)) { if (!seen.has(k)) { seen.add(k); order.push(k); } }
-    for (const k of Object.keys(catData.eod)) { if (!seen.has(k)) { seen.add(k); order.push(k); } }
+    for (const k of Object.keys(bodData)) { if (!seen.has(k)) { seen.add(k); order.push(k); } }
+    for (const k of Object.keys(eodData)) { if (!seen.has(k)) { seen.add(k); order.push(k); } }
     return order
       .map((k) => ({
         category: k,
-        Plan:     typeof catData.bod[k] === "number" ? catData.bod[k] : 0,
-        Actual:   typeof catData.eod[k] === "number" ? catData.eod[k] : 0,
+        Plan:     typeof bodData[k] === "number" ? bodData[k] : 0,
+        Actual:   typeof eodData[k] === "number" ? eodData[k] : 0,
       }))
       .filter((r) => r.Plan > 0 || r.Actual > 0);
-  }, [catData, isSpecial]);
+  }, [bodData, eodData, isSpecial]);
 
+  // Observations use the entry with actual EOD data — otherwise today's
+  // empty-EOD row would always produce "0 completed" warnings.
   const observations = useMemo(
-    () => buildCategoryObservations(catData, activeCategory, entry),
-    [catData, activeCategory, entry]
+    () => buildCategoryObservations({ bod: bodData, eod: eodData }, activeCategory, eodEntry),
+    [bodData, eodData, activeCategory, eodEntry]
   );
 
   return (
@@ -1028,14 +1093,27 @@ function CategorySection({ entry, activeCategory, setActiveCategory, setModal })
         })}
       </div>
 
+      {/* Stale-EOD chip — only when we fell back to a prior day for EOD */}
+      {eodIsStale && (
+        <div style={{
+          fontSize: 11, color: YELLOW,
+          background: "rgba(240,185,71,0.08)",
+          border: `1px solid rgba(240,185,71,0.25)`,
+          padding: "8px 12px", borderRadius: 8, fontWeight: 700,
+          display: "flex", alignItems: "center", gap: 8,
+        }}>
+          ⚠ Showing last EOD recorded: <span style={{ fontFamily: "'DM Mono', monospace" }}>{eodEntry.date}</span> — today's EOD ({bodEntry.date}) not yet filled
+        </div>
+      )}
+
       {/* Side-by-side BOD vs EOD cards */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <BodEodSideCard
           accent={BLUE}
           icon="🌅"
           label={`BOD — ${activeCategory.toUpperCase()} PLAN`}
-          date={entry?.date}
-          data={catData.bod}
+          date={bodEntry?.date}
+          data={bodData}
           isSpecial={isSpecial}
           emptyText={isSpecial ? "No special task planned" : `No ${activeCategory} plan recorded`}
           compareTo={null}
@@ -1044,11 +1122,11 @@ function CategorySection({ entry, activeCategory, setActiveCategory, setModal })
           accent={GREEN}
           icon="🌆"
           label={`EOD — ${activeCategory.toUpperCase()} ACTUAL`}
-          date={entry?.date}
-          data={catData.eod}
+          date={eodEntry?.date}
+          data={eodData}
           isSpecial={isSpecial}
           emptyText={isSpecial ? "No special task completed" : `No ${activeCategory} actual recorded`}
-          compareTo={catData.bod}
+          compareTo={bodData}
         />
       </div>
 
@@ -1065,7 +1143,7 @@ function CategorySection({ entry, activeCategory, setActiveCategory, setModal })
               margin={{ top: 12, right: 16, left: 0, bottom: 60 }}
               onClick={(e) => {
                 const p = e?.activePayload?.[0]?.payload;
-                if (p) openCategoryModal(p, entry, setModal);
+                if (p) openCategoryModal(p, eodEntry, setModal);
               }}
             >
               <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" vertical={false} />
@@ -1085,14 +1163,14 @@ function CategorySection({ entry, activeCategory, setActiveCategory, setModal })
                 fill={BLUE}
                 radius={[6, 6, 0, 0]}
                 style={{ cursor: "pointer" }}
-                onClick={(p) => openCategoryModal(p?.payload || p, entry, setModal)}
+                onClick={(p) => openCategoryModal(p?.payload || p, eodEntry, setModal)}
               />
               <Bar
                 dataKey="Actual"
                 fill={GREEN}
                 radius={[6, 6, 0, 0]}
                 style={{ cursor: "pointer" }}
-                onClick={(p) => openCategoryModal(p?.payload || p, entry, setModal)}
+                onClick={(p) => openCategoryModal(p?.payload || p, eodEntry, setModal)}
               />
             </BarChart>
           </ResponsiveContainer>
