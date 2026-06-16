@@ -8585,18 +8585,76 @@ def _bod_eod_is_data_row(date_str: str) -> bool:
     return bool(_BOD_EOD_DATE_RE.match(s))
 
 
+# Canonical status-block category keys. Real sheets use variants like
+# "Total no. of files", "Not yet started", "Review pending", "Posted Query
+# (Client)" — we normalize so the heatmap aligns BOD vs EOD on the same
+# category rows regardless of TL phrasing.
+_BOD_EOD_CATEGORY_RULES = (
+    # (canonical key, list of lowercased substrings any of which matches)
+    ("Total Files",      ("total no", "total file", "no. of files", "number of files")),
+    ("Not Started",      ("not yet started", "not started", "yet to start")),
+    ("In Process",       ("in process", "in progress", "in-process")),
+    ("Review",           ("review pending", "review")),
+    ("Posted Query",     ("posted query", "query posted", " query")),
+    ("Client Responded", ("client responded", "client response", "responded")),
+    ("Completed",        ("completed", "done")),
+    ("Est Hours",        ("est hour", "est hrs", "est. hours", "estimated hour")),
+    ("Booked Hours",     ("booked hour", "booked hrs")),
+    ("Daily Tasks",      ("daily task",)),
+    ("Payroll",          ("payroll",)),
+    ("Allocation",       ("allocation",)),
+)
+
+# Whole-word matches: "AP" / "AR" / "MB" are common 2-letter task codes the
+# substring rule would over-match (e.g. "AP" hits "approved"). Handled
+# separately below.
+_BOD_EOD_EXACT_RULES = (
+    ("AP", "ap"),
+    ("AR", "ar"),
+    ("MB", "mb"),
+)
+
+# Tighter than the spec's regex — accepts an "X - 5" / "X: 5" pair where the
+# value is the first standalone number on the line, ignoring suffix notes
+# like "3 (On Hold)" or "5 files".
+_BOD_EOD_STATUS_RE = re.compile(
+    r"^\s*([^\-:]+?)\s*[-:]\s*([\d.,]+)"
+)
+
+
+def _bod_eod_canonical_key(label: str) -> str:
+    """Map a TL's free-text label to one of the canonical category keys so
+    the heatmap can stack BOD vs EOD on the same row. Falls back to the raw
+    label (title-cased) when nothing matches — that lets new categories
+    surface without dropping data."""
+    if not label:
+        return label
+    s = label.strip().lower()
+    # Whole-word matches first (so "AP" doesn't get swallowed by a substring
+    # rule below).
+    for canon, exact in _BOD_EOD_EXACT_RULES:
+        if s == exact:
+            return canon
+    for canon, needles in _BOD_EOD_CATEGORY_RULES:
+        for n in needles:
+            if n in s:
+                return canon
+    return label.strip()
+
+
 def _bod_eod_parse_status_block(text: str) -> dict:
     """Parse a multi-line status block.
 
     Real cells look like:
-        Total no. of files: 12
-        Not yet started: 3
+        Total no. of files - 10
+        Not yet started - 3 (On Hold)
         In process: 6
-        Completed: 3
+        Completed - 3
 
-    We accept ':' or '-' as the separator, coerce values to float when
-    possible (so we can chart counts) but pass strings through otherwise
-    (so descriptive notes still surface)."""
+    Returns the canonical-key map: {'Total Files': 10, 'Not Started': 3,
+    'In Process': 6, 'Completed': 3}. Lines we can't parse are dropped —
+    descriptive notes ("Awaiting QC review") would pollute heatmap columns
+    otherwise. Numeric coercion strips commas."""
     if not text:
         return {}
     out: dict = {}
@@ -8604,22 +8662,23 @@ def _bod_eod_parse_status_block(text: str) -> dict:
         line = raw.strip()
         if not line:
             continue
-        # Split on the FIRST ':' or ' - ' — values may legitimately contain
-        # commas or further dashes ("Completed - awaiting QC review").
-        if ":" in line:
-            k, v = line.split(":", 1)
-        elif " - " in line:
-            k, v = line.split(" - ", 1)
-        else:
+        m = _BOD_EOD_STATUS_RE.match(line)
+        if not m:
             continue
-        k = k.strip()
-        v = v.strip()
-        if not k:
-            continue
+        label_raw = m.group(1).strip()
+        num_raw   = m.group(2).strip().replace(",", "")
         try:
-            out[k] = float(v.replace(",", ""))
+            value = float(num_raw)
         except ValueError:
-            out[k] = v
+            continue
+        key = _bod_eod_canonical_key(label_raw)
+        if not key:
+            continue
+        # Sum duplicate rows (rare — sometimes TLs split "In process - 2"
+        # across two lines). Drop NaN if it sneaks in.
+        if value != value:  # NaN check
+            continue
+        out[key] = out.get(key, 0.0) + value
     return out
 
 
@@ -8715,33 +8774,120 @@ def _bod_eod_parse_rows(client_name: str, csv_text: str) -> dict:
                 "training":        _bod_eod_cell(raw, 20),
                 "comparison":      _bod_eod_build_comparison(bod, eod),
             })
+    # For the per-client summary, prefer the latest row that actually has
+    # booked hours filled in — `today` is usually mid-day, the EOD column
+    # still 0, and reporting "0 booked vs 88 committed" looks like a
+    # parser bug. We still show today's row in the daily history and the
+    # heatmaps.
     last = entries[-1] if entries else {}
+    latest_complete = next(
+        (e for e in reversed(entries) if float(e.get("booked_hours", 0)) > 0),
+        None,
+    )
+    summary_row = latest_complete or last
     return {
         "client_name": client_name,
         "entries":     entries,
+        "heatmap":     _bod_eod_build_heatmaps(entries),
         "summary": {
-            "total_committed": float(last.get("committed_hours", 0)),
-            "total_booked":    float(last.get("booked_hours", 0)),
-            "total_variance":  float(last.get("variance_hours", 0)),
+            "total_committed": float(summary_row.get("committed_hours", 0)),
+            "total_booked":    float(summary_row.get("booked_hours", 0)),
+            "total_variance":  float(summary_row.get("variance_hours", 0)),
             "days_tracked":    len(entries),
         },
     }
 
 
+# Canonical row ordering for the heatmap so BOD/EOD/Diff line up regardless
+# of which categories actually appeared in each client's sheet.
+_BOD_EOD_HEATMAP_ROW_ORDER = (
+    "Total Files",
+    "Not Started",
+    "In Process",
+    "Review",
+    "Posted Query",
+    "Client Responded",
+    "Completed",
+    "Daily Tasks",
+    "Payroll",
+    "AP",
+    "AR",
+    "MB",
+    "Allocation",
+    "Est Hours",
+    "Booked Hours",
+)
+
+
+def _bod_eod_build_heatmaps(entries: list[dict]) -> dict:
+    """Build BOD / EOD / Diff heatmap data from a client's daily entries.
+
+    Shape: {dates: [d1,d2,...], categories: [c1,c2,...],
+            bod:  {cat: {date: value}},
+            eod:  {cat: {date: value}},
+            diff: {cat: {date: actual - planned}}}
+    """
+    if not entries:
+        return {"dates": [], "categories": [], "bod": {}, "eod": {}, "diff": {}}
+
+    dates = [e.get("date") for e in entries if e.get("date")]
+
+    # Collect every category that appeared on either side across the whole
+    # date range — same category set drives all 3 heatmaps so they line up.
+    seen: set[str] = set()
+    for e in entries:
+        seen.update((e.get("bod") or {}).get("monthly_plan", {}).keys())
+        seen.update((e.get("eod") or {}).get("monthly_actual", {}).keys())
+
+    ordered: list[str] = [c for c in _BOD_EOD_HEATMAP_ROW_ORDER if c in seen]
+    ordered.extend(sorted([c for c in seen if c not in _BOD_EOD_HEATMAP_ROW_ORDER]))
+
+    bod:  dict[str, dict[str, float]] = {c: {} for c in ordered}
+    eod:  dict[str, dict[str, float]] = {c: {} for c in ordered}
+    diff: dict[str, dict[str, float]] = {c: {} for c in ordered}
+
+    for e in entries:
+        date = e.get("date")
+        if not date:
+            continue
+        plan   = (e.get("bod") or {}).get("monthly_plan", {})
+        actual = (e.get("eod") or {}).get("monthly_actual", {})
+        for cat in ordered:
+            p = plan.get(cat)
+            a = actual.get(cat)
+            # Only chart numeric values; descriptive strings are dropped so
+            # the cell rendering math stays clean.
+            p_num = float(p) if isinstance(p, (int, float)) else None
+            a_num = float(a) if isinstance(a, (int, float)) else None
+            if p_num is not None:
+                bod[cat][date] = p_num
+            if a_num is not None:
+                eod[cat][date] = a_num
+            if p_num is not None and a_num is not None:
+                diff[cat][date] = a_num - p_num
+
+    return {"dates": dates, "categories": ordered, "bod": bod, "eod": eod, "diff": diff}
+
+
 def _bod_eod_build_team_summary(clients: list[dict]) -> dict:
-    """Cross-client roll-up. Each client contributes its LAST row's
-    committed/booked (cumulative-by-day), matching how the user reads
-    'total committed today' on the sheet."""
+    """Cross-client roll-up. Each client contributes the LATEST row that
+    actually has booked hours filled in — skipping today's row when the
+    EOD column is still blank prevents the dashboard from reading 'team
+    efficiency 0%' just because nobody's done EOD yet."""
     total_committed = 0.0
     total_booked    = 0.0
     days_tracked    = 0
     for c in clients:
         ents = c.get("entries") or []
-        if ents:
-            last = ents[-1]
-            total_committed += float(last.get("committed_hours", 0))
-            total_booked    += float(last.get("booked_hours", 0))
-            days_tracked    = max(days_tracked, len(ents))
+        if not ents:
+            continue
+        days_tracked = max(days_tracked, len(ents))
+        latest_complete = next(
+            (e for e in reversed(ents) if float(e.get("booked_hours", 0)) > 0),
+            ents[-1],
+        )
+        total_committed += float(latest_complete.get("committed_hours", 0))
+        total_booked    += float(latest_complete.get("booked_hours", 0))
     variance = total_booked - total_committed
     efficiency = (total_booked / total_committed * 100.0) if total_committed > 0 else 0.0
     return {

@@ -48,6 +48,7 @@ export default function BodEodReview({ teamId }) {
   const entries = client?.entries || [];
   const latest  = entries.length ? entries[entries.length - 1] : null;
   const summary = payload?.summary || {};
+  const heatmap = client?.heatmap || { dates: [], categories: [], bod: {}, eod: {}, diff: {} };
 
   if (loading) {
     return (
@@ -199,77 +200,70 @@ export default function BodEodReview({ teamId }) {
         </div>
       )}
 
-      {/* BOD vs EOD side-by-side — latest day */}
-      {latest && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-          <SidePanel
-            color={BLUE}
-            title={`🌅 BOD — Plan (${latest.date})`}
-            adminRows={[
-              ["Practice Protect", latest.bod.practice_protect],
-              ["Email Checked",    latest.bod.email_checked],
-              ["Staff Coverage",   latest.bod.staff_coverage],
-            ]}
-            blocks={[
-              ["📋 Monthly Plan", latest.bod.monthly_plan],
-              ["📌 Daily Plan",   latest.bod.daily_plan],
-              ["📅 Weekly Plan",  latest.bod.weekly_plan],
-            ]}
-            footer={latest.bod.special_task_plan && (
-              <FooterRow label="Special Task" value={latest.bod.special_task_plan} />
-            )}
+      {/* Three heatmaps: BOD plan, EOD actual, Diff. Built from the
+          backend-shipped client.heatmap payload — same date axis + same
+          canonical category rows across all three so they line up. */}
+      {heatmap.dates.length > 0 && heatmap.categories.length > 0 && (
+        <>
+          <Heatmap
+            title={`BOD — Daily Plans · ${client?.client_name}`}
+            icon="🌅"
+            colorRgb="74, 143, 231"
+            dates={heatmap.dates}
+            categories={heatmap.categories}
+            data={heatmap.bod}
           />
-          <SidePanel
-            color={GREEN}
-            title={`🌆 EOD — Actual (${latest.date})`}
-            adminRows={[
-              ["Whale Updates", latest.eod.whale_updates],
-              ["Timesheets",    latest.eod.timesheets],
-              ["Review",        latest.eod.review],
-              ["Workflow",      latest.eod.workflow],
-            ]}
-            blocks={[
-              ["📋 Monthly Actual", latest.eod.monthly_actual],
-              ["📌 Daily Actual",   latest.eod.daily_actual],
-              ["📅 Weekly Actual",  latest.eod.weekly_actual],
-            ]}
-            footer={latest.eod.special_task_actual && (
-              <FooterRow label="Special Task" value={latest.eod.special_task_actual} />
-            )}
+          <Heatmap
+            title={`EOD — Daily Actuals · ${client?.client_name}`}
+            icon="🌆"
+            colorRgb="16, 185, 129"
+            dates={heatmap.dates}
+            categories={heatmap.categories}
+            data={heatmap.eod}
           />
-        </div>
+          <Heatmap
+            title={`Comparison — Diff (EOD Actual − BOD Plan) · ${client?.client_name}`}
+            icon="⚖️"
+            colorRgb=""
+            dates={heatmap.dates}
+            categories={heatmap.categories}
+            data={heatmap.diff}
+            isDiff
+          />
+        </>
       )}
 
-      {/* BOD plan vs EOD actual variance bar chart */}
-      {latest?.comparison && Object.keys(latest.comparison).length > 0 && (
-        <div style={panelStyle()}>
-          <SectionTitle>🔄 BOD Plan vs EOD Actual · {latest.date}</SectionTitle>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart
-              data={Object.entries(latest.comparison).map(([k, v]) => ({
-                category: shortLabel(k),
-                Planned:  v.planned,
-                Actual:   v.actual,
-              }))}
-              margin={{ top: 16, right: 20, left: 0, bottom: 50 }}
-            >
-              <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" vertical={false} />
-              <XAxis
-                dataKey="category"
-                tick={{ fill: C.sec, fontSize: 10, fontWeight: 700 }}
-                angle={-25}
-                textAnchor="end"
-                interval={0}
-                height={60}
-              />
-              <YAxis tick={{ fill: C.muted, fontSize: 10, fontWeight: 700 }} />
-              <Tooltip cursor={{ fill: "rgba(255,255,255,0.04)" }} contentStyle={tooltipStyle()} />
-              <Legend wrapperStyle={{ color: C.pri, fontWeight: 700 }} />
-              <Bar dataKey="Planned" fill={BLUE}  radius={[4, 4, 0, 0]} />
-              <Bar dataKey="Actual"  fill={GREEN} radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
+      {/* Latest-day notes / EOD-only fields that don't fit the heatmap */}
+      {latest && (
+        ((latest.bod && (latest.bod.special_task_plan || latest.bod.practice_protect || latest.bod.email_checked || latest.bod.staff_coverage))
+        || (latest.eod && (latest.eod.special_task_actual || latest.eod.whale_updates || latest.eod.timesheets || latest.eod.review || latest.eod.workflow))
+        || latest.notes || latest.mpllc_reply || latest.training) && (
+          <div style={panelStyle()}>
+            <SectionTitle>🗒️ Latest Day Notes · {latest.date}</SectionTitle>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <NotesGroup color={BLUE} title="🌅 BOD" items={[
+                ["Practice Protect", latest.bod.practice_protect],
+                ["Email Checked",    latest.bod.email_checked],
+                ["Staff Coverage",   latest.bod.staff_coverage],
+                ["Special Task",     latest.bod.special_task_plan],
+              ]} />
+              <NotesGroup color={GREEN} title="🌆 EOD" items={[
+                ["Whale Updates", latest.eod.whale_updates],
+                ["Timesheets",    latest.eod.timesheets],
+                ["Review",        latest.eod.review],
+                ["Workflow",      latest.eod.workflow],
+                ["Special Task",  latest.eod.special_task_actual],
+              ]} />
+            </div>
+            {(latest.notes || latest.mpllc_reply || latest.training) && (
+              <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                {latest.notes      && <NotesGroup title="Notes"       items={[["", latest.notes]]} />}
+                {latest.mpllc_reply && <NotesGroup title="MPLLC Reply" items={[["", latest.mpllc_reply]]} />}
+                {latest.training   && <NotesGroup title="Training"     items={[["", latest.training]]} />}
+              </div>
+            )}
+          </div>
+        )
       )}
 
       {/* Daily history */}
@@ -334,78 +328,185 @@ function KpiCard({ label, value, color }) {
   );
 }
 
-function SidePanel({ color, title, adminRows, blocks, footer }) {
-  const filteredAdmin = (adminRows || []).filter(([, v]) => v && String(v).trim() !== "");
-  const filteredBlocks = (blocks || []).filter(([, v]) => v && Object.keys(v).length > 0);
+// ── Heatmap ─────────────────────────────────────────────────────────
+// Sticky-left category column, dates across the top. Cell intensity scales
+// against the max abs value in the whole grid so a 100-file day still
+// distinguishes from a 3-file day.
+function Heatmap({ title, icon, colorRgb, dates, categories, data, isDiff = false }) {
+  // Max-abs scale across the whole grid.
+  let maxAbs = 0;
+  for (const cat of categories) {
+    const row = data[cat] || {};
+    for (const d of dates) {
+      const v = row[d];
+      if (typeof v === "number" && Math.abs(v) > maxAbs) maxAbs = Math.abs(v);
+    }
+  }
+  if (maxAbs === 0) maxAbs = 1;
+
+  const fmt = (v) => {
+    if (v === undefined || v === null) return "—";
+    if (isDiff && v > 0) return `+${stripTrailing(v.toFixed(1))}`;
+    return stripTrailing(v.toFixed(1));
+  };
+
+  const cellBg = (v) => {
+    if (v === undefined || v === null) return "rgba(255,255,255,0.02)";
+    if (isDiff) {
+      if (v === 0) return "rgba(255,255,255,0.04)";
+      const a = 0.18 + Math.min(Math.abs(v) / maxAbs, 1) * 0.55;
+      return v > 0
+        ? `rgba(16, 185, 129, ${a})`
+        : `rgba(239, 68, 68, ${a})`;
+    }
+    const a = 0.12 + (v / maxAbs) * 0.6;
+    return `rgba(${colorRgb}, ${a})`;
+  };
+
   return (
-    <div style={{
-      ...panelStyle(),
-      borderLeft: `4px solid ${color}`,
-    }}>
-      <h3 style={{
-        color, fontSize: 13, fontWeight: 800,
-        textTransform: "uppercase", letterSpacing: 0.6, margin: "0 0 12px 0",
-      }}>
-        {title}
-      </h3>
-      {filteredAdmin.length > 0 && (
-        <div style={{ marginBottom: 12, display: "flex", flexDirection: "column", gap: 4 }}>
-          {filteredAdmin.map(([k, v], i) => (
-            <div key={i} style={{
-              display: "flex", justifyContent: "space-between",
-              fontSize: 11, color: C.pri, fontWeight: 600,
-              padding: "4px 0",
-            }}>
-              <span style={{ color: C.sec }}>{k}</span>
-              <span style={{ fontWeight: 800 }}>{v}</span>
-            </div>
-          ))}
+    <div style={panelStyle()}>
+      <SectionTitle>{icon} {title}</SectionTitle>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{
+          borderCollapse: "separate",
+          borderSpacing: 2,
+          width: "100%",
+          minWidth: 720,
+        }}>
+          <thead>
+            <tr>
+              <th style={{
+                padding: "8px 10px",
+                textAlign: "left",
+                color: C.pri,
+                fontSize: 11,
+                fontWeight: 800,
+                textTransform: "uppercase",
+                letterSpacing: 0.6,
+                background: "rgba(255,255,255,0.04)",
+                position: "sticky",
+                left: 0,
+                zIndex: 1,
+                minWidth: 150,
+              }}>
+                Category
+              </th>
+              {dates.map((d) => (
+                <th key={d} style={{
+                  padding: "6px 6px",
+                  textAlign: "center",
+                  color: C.pri,
+                  fontSize: 10,
+                  fontWeight: 800,
+                  background: "rgba(255,255,255,0.04)",
+                  whiteSpace: "nowrap",
+                  fontFamily: "'DM Mono', monospace",
+                }}>
+                  {shortDate(d)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {categories.map((cat) => (
+              <tr key={cat}>
+                <td style={{
+                  padding: "8px 10px",
+                  color: C.pri,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  background: "rgba(255,255,255,0.04)",
+                  position: "sticky",
+                  left: 0,
+                  zIndex: 1,
+                  whiteSpace: "nowrap",
+                }}>
+                  {cat}
+                </td>
+                {dates.map((d) => {
+                  const v = data[cat]?.[d];
+                  return (
+                    <td key={d}
+                      title={v === undefined || v === null ? `${cat} · ${d}: no data` : `${cat} · ${d}: ${fmt(v)}`}
+                      style={{
+                        padding: "8px 4px",
+                        textAlign: "center",
+                        background: cellBg(v),
+                        color: v === undefined || v === null ? C.muted : C.pri,
+                        fontSize: 11,
+                        fontWeight: 800,
+                        fontFamily: "'DM Mono', monospace",
+                        borderRadius: 4,
+                        minWidth: 52,
+                      }}
+                    >
+                      {fmt(v)}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {isDiff ? (
+        <div style={{
+          display: "flex", justifyContent: "center", gap: 24,
+          marginTop: 12, fontSize: 11, color: C.sec, fontWeight: 700,
+          flexWrap: "wrap",
+        }}>
+          <LegendSwatch color="rgba(16, 185, 129, 0.7)">Actual &gt; Plan (positive)</LegendSwatch>
+          <LegendSwatch color="rgba(239, 68, 68, 0.7)">Actual &lt; Plan (negative)</LegendSwatch>
+          <LegendSwatch color="rgba(255,255,255,0.04)">On target / missing</LegendSwatch>
+        </div>
+      ) : (
+        <div style={{
+          display: "flex", justifyContent: "center", gap: 12,
+          marginTop: 12, fontSize: 11, color: C.muted, fontWeight: 700,
+        }}>
+          <span>0</span>
+          <div style={{
+            width: 160, height: 12, borderRadius: 4,
+            background: `linear-gradient(90deg, rgba(${colorRgb},0.12) 0%, rgba(${colorRgb},0.72) 100%)`,
+          }} />
+          <span>{stripTrailing(maxAbs.toFixed(1))}</span>
         </div>
       )}
-      {filteredBlocks.map(([title, data], i) => (
-        <StatusBlock key={i} title={title} data={data} />
-      ))}
-      {footer}
     </div>
   );
 }
 
-function StatusBlock({ title, data }) {
-  if (!data || Object.keys(data).length === 0) return null;
+function LegendSwatch({ color, children }) {
   return (
-    <div style={{ marginBottom: 12 }}>
+    <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <span style={{ width: 16, height: 12, background: color, borderRadius: 3 }} />
+      {children}
+    </span>
+  );
+}
+
+function NotesGroup({ color, title, items }) {
+  const visible = (items || []).filter(([, v]) => v && String(v).trim() !== "");
+  if (visible.length === 0) return null;
+  return (
+    <div style={{
+      padding: 12, background: "rgba(255,255,255,0.04)",
+      borderRadius: 8,
+      borderLeft: color ? `4px solid ${color}` : `1px solid ${C.border}`,
+    }}>
       <div style={{
-        fontSize: 11, color: C.sec, fontWeight: 800,
-        textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6,
+        fontSize: 11, color: color || C.sec, fontWeight: 800,
+        textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6,
       }}>
         {title}
       </div>
-      {Object.entries(data).map(([k, v], i) => (
-        <div key={i} style={{
-          display: "flex", justifyContent: "space-between",
-          padding: "4px 0", fontSize: 11, color: C.pri, fontWeight: 600,
-        }}>
-          <span style={{ color: C.sec }}>{k}</span>
-          <span style={{
-            fontWeight: 800,
-            fontFamily: typeof v === "number" ? "'DM Mono', monospace" : "inherit",
-          }}>
-            {typeof v === "number" ? formatNum(v) : v}
-          </span>
+      {visible.map(([k, v], i) => (
+        <div key={i} style={{ fontSize: 11, color: C.pri, fontWeight: 600, marginBottom: 4 }}>
+          {k && <span style={{ color: C.sec, fontWeight: 800, marginRight: 6 }}>{k}:</span>}
+          {v}
         </div>
       ))}
-    </div>
-  );
-}
-
-function FooterRow({ label, value }) {
-  return (
-    <div style={{
-      marginTop: 12, padding: 10,
-      background: "rgba(255,255,255,0.04)", borderRadius: 6,
-      fontSize: 11, color: C.pri, fontWeight: 600,
-    }}>
-      <strong style={{ color: C.sec, fontWeight: 800 }}>{label}:</strong> {value}
     </div>
   );
 }
@@ -479,17 +580,15 @@ function num(v) {
   return (Number(v) || 0).toFixed(1);
 }
 
-function formatNum(v) {
-  if (Number.isInteger(v)) return String(v);
-  return v.toFixed(1);
+function stripTrailing(s) {
+  // ".0" suffix is noise on integer file counts but keep it for hours
+  return /^-?\d+\.0$/.test(s) ? s.slice(0, -2) : s;
 }
 
-function shortLabel(s) {
-  if (!s) return s;
-  // Sheet labels can be verbose ("Total no. of files") — shorten for axis
-  // ticks without losing meaning.
-  return s
-    .replace(/Total no\. of /i, "Total ")
-    .replace(/^Number of /i, "")
-    .slice(0, 26);
+function shortDate(d) {
+  if (!d) return d;
+  // Sheet ships M/D/YYYY or MM/DD/YYYY — render MM/DD for the heatmap header
+  const m = /^(\d{1,2})[/-](\d{1,2})/.exec(String(d));
+  if (!m) return String(d).slice(0, 5);
+  return `${m[1].padStart(2, "0")}/${m[2].padStart(2, "0")}`;
 }
