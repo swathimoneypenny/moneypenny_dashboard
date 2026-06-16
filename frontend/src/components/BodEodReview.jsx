@@ -114,9 +114,16 @@ export default function BodEodReview({ teamId }) {
       return { committed: c, booked: b, variance: b - c };
     }
     if (period === "month") {
-      const e = filteredEntries[filteredEntries.length - 1];
-      const c = Number(e.cumulative_committed ?? e.committed_hours) || 0;
-      const b = Number(e.cumulative_booked    ?? e.booked_hours)    || 0;
+      // Committed = today's cumulative target (climbs even before EOD).
+      // Booked = most recent cumulative booked > 0 — today's row reads 0
+      // until EOD lands, but the user wants "what we've actually booked
+      // so far" which is yesterday's number until today EOD's posted.
+      const latest = filteredEntries[filteredEntries.length - 1];
+      const lastBooked = [...filteredEntries].reverse().find(
+        (x) => Number(x.cumulative_booked ?? x.booked_hours) > 0
+      ) || latest;
+      const c = Number(latest.cumulative_committed ?? latest.committed_hours) || 0;
+      const b = Number(lastBooked.cumulative_booked ?? lastBooked.booked_hours) || 0;
       return { committed: c, booked: b, variance: b - c };
     }
     // week / custom — sum of dailies (mathematically equal to last_cum −
