@@ -7491,6 +7491,65 @@ async def get_team_custom_range(
     return result
 
 
+# NOTE: Must register BEFORE the `/api/team/{team_id}/{period}` catch-all
+# below — FastAPI matches routes in registration order, and the catch-all
+# would otherwise swallow `bod-eod` as a "period" and return Invalid period.
+# Same trap caught the /admin-review endpoint earlier (see the docstring at
+# get_admin_review). Keep new team-scoped endpoints above this comment block.
+@app.get("/api/team/{team_id}/bod-eod")
+def get_bod_eod_review(team_id: str):
+    """Per-client BOD vs EOD comparison for a team.
+    Always 200s — surfaces config gaps via the `error` key so the UI can
+    render a friendly empty state instead of throwing on a 4xx."""
+    cfg = TEAM_LETTER_MAP.get(team_id)
+    if not cfg:
+        return {"team_id": team_id, "error": "unknown_team", "clients": [], "summary": {}}
+    sheet_id = cfg.get("sheetId")
+    clients_gid_map = BOD_EOD_TAB_GIDS.get(team_id) or {}
+    if not sheet_id:
+        return {
+            "team_id":      team_id,
+            "team_label":   cfg.get("label", team_id),
+            "error":        "no_sheet_id",
+            "error_detail": f"Team {team_id!r} has no Google Sheet configured in TEAM_LETTER_MAP.",
+            "clients":      [],
+            "summary":      {},
+        }
+    if not clients_gid_map:
+        return {
+            "team_id":      team_id,
+            "team_label":   cfg.get("label", team_id),
+            "sheet_id":     sheet_id,
+            "error":        "no_bod_eod_mapping",
+            "error_detail": (
+                f"No BOD/EOD client-tab gids registered for {team_id!r}. "
+                f"Add an entry to BOD_EOD_TAB_GIDS in backend/main.py."
+            ),
+            "clients":      [],
+            "summary":      {},
+        }
+    clients: list[dict] = []
+    for client_name, gid in clients_gid_map.items():
+        try:
+            csv_text = _fetch_bod_eod_csv(sheet_id, gid)
+            clients.append(_bod_eod_parse_rows(client_name, csv_text))
+        except Exception as e:
+            print(f"[bod-eod] parse {client_name} gid={gid} error: {e}")
+            clients.append({
+                "client_name": client_name,
+                "error":       str(e),
+                "entries":     [],
+                "summary":     {"total_committed": 0, "total_booked": 0, "total_variance": 0, "days_tracked": 0},
+            })
+    return {
+        "team_id":    team_id,
+        "team_label": cfg.get("label", team_id),
+        "sheet_id":   sheet_id,
+        "clients":    clients,
+        "summary":    _bod_eod_build_team_summary(clients),
+    }
+
+
 @app.get("/api/team/{team_id}/{period}")
 async def get_team_data(team_id: str, period: str):
     if period not in ("today", "weekly", "monthly"):
@@ -8692,60 +8751,6 @@ def _bod_eod_build_team_summary(clients: list[dict]) -> dict:
         "efficiency_pct":  round(efficiency, 1),
         "days_tracked":    days_tracked,
         "clients_count":   len(clients),
-    }
-
-
-@app.get("/api/team/{team_id}/bod-eod")
-def get_bod_eod_review(team_id: str):
-    """Per-client BOD vs EOD comparison for a team.
-    Always 200s — surfaces config gaps via the `error` key so the UI can
-    render a friendly empty state instead of throwing on a 4xx."""
-    cfg = TEAM_LETTER_MAP.get(team_id)
-    if not cfg:
-        return {"team_id": team_id, "error": "unknown_team", "clients": [], "summary": {}}
-    sheet_id = cfg.get("sheetId")
-    clients_gid_map = BOD_EOD_TAB_GIDS.get(team_id) or {}
-    if not sheet_id:
-        return {
-            "team_id":      team_id,
-            "team_label":   cfg.get("label", team_id),
-            "error":        "no_sheet_id",
-            "error_detail": f"Team {team_id!r} has no Google Sheet configured in TEAM_LETTER_MAP.",
-            "clients":      [],
-            "summary":      {},
-        }
-    if not clients_gid_map:
-        return {
-            "team_id":      team_id,
-            "team_label":   cfg.get("label", team_id),
-            "sheet_id":     sheet_id,
-            "error":        "no_bod_eod_mapping",
-            "error_detail": (
-                f"No BOD/EOD client-tab gids registered for {team_id!r}. "
-                f"Add an entry to BOD_EOD_TAB_GIDS in backend/main.py."
-            ),
-            "clients":      [],
-            "summary":      {},
-        }
-    clients: list[dict] = []
-    for client_name, gid in clients_gid_map.items():
-        try:
-            csv_text = _fetch_bod_eod_csv(sheet_id, gid)
-            clients.append(_bod_eod_parse_rows(client_name, csv_text))
-        except Exception as e:
-            print(f"[bod-eod] parse {client_name} gid={gid} error: {e}")
-            clients.append({
-                "client_name": client_name,
-                "error":       str(e),
-                "entries":     [],
-                "summary":     {"total_committed": 0, "total_booked": 0, "total_variance": 0, "days_tracked": 0},
-            })
-    return {
-        "team_id":    team_id,
-        "team_label": cfg.get("label", team_id),
-        "sheet_id":   sheet_id,
-        "clients":    clients,
-        "summary":    _bod_eod_build_team_summary(clients),
     }
 
 
