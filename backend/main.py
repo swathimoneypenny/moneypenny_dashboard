@@ -8866,13 +8866,17 @@ def _bod_eod_parse_rows(client_name: str, csv_text: str) -> dict:
                 "weekly_actual":        _bod_eod_parse_status_block(_bod_eod_cell(raw, 16)),
                 "special_task_actual":  _bod_eod_cell(raw, 17),
             }
-            variance = booked - committed
             efficiency = (booked / committed * 100.0) if committed > 0 else 0.0
+            # Columns B/C on the sheet are CUMULATIVE running totals
+            # (Day 1 = 8/X, Day 2 = 16/Y, Day 3 = 24/Z ...). We expose both
+            # the cumulative number (line chart growth) and the daily delta
+            # (Daily Variance bar chart, day modal "today's variance").
+            # Daily values get computed in a second pass below since each
+            # row needs the PREVIOUS row's cumulative.
             entries.append({
                 "date":            date_str,
-                "committed_hours": round(committed, 2),
-                "booked_hours":    round(booked, 2),
-                "variance_hours":  round(variance, 2),
+                "committed_hours": round(committed, 2),  # cumulative
+                "booked_hours":    round(booked, 2),     # cumulative
                 "efficiency_pct":  round(efficiency, 1),
                 "bod":             bod,
                 "eod":             eod,
@@ -8881,25 +8885,50 @@ def _bod_eod_parse_rows(client_name: str, csv_text: str) -> dict:
                 "training":        _bod_eod_cell(raw, 20),
                 "comparison":      _bod_eod_build_comparison(bod, eod),
             })
+
+    # ── Second pass: daily deltas ─────────────────────────────────────
+    # First row's prev is 0 so daily == cumulative — that's correct ("this
+    # is day 1's contribution"). max(0, ...) guards against rare cases
+    # where TLs typo a cumulative that drops below the prior row.
+    prev_c = 0.0
+    prev_b = 0.0
+    for e in entries:
+        c = float(e.get("committed_hours") or 0)
+        b = float(e.get("booked_hours") or 0)
+        daily_c = max(0.0, c - prev_c)
+        daily_b = max(0.0, b - prev_b)
+        e["daily_committed"]      = round(daily_c, 2)
+        e["daily_booked"]         = round(daily_b, 2)
+        e["cumulative_committed"] = round(c, 2)
+        e["cumulative_booked"]    = round(b, 2)
+        # variance_hours now means TODAY'S variance, not cumulative —
+        # matches the user-facing day modal mental model. The cumulative
+        # variance comes from cumulative_booked − cumulative_committed.
+        e["variance_hours"] = round(daily_b - daily_c, 2)
+        prev_c = c
+        prev_b = b
+
     # For the per-client summary, prefer the latest row that actually has
     # booked hours filled in — `today` is usually mid-day, the EOD column
     # still 0, and reporting "0 booked vs 88 committed" looks like a
-    # parser bug. We still show today's row in the daily history and the
-    # heatmaps.
+    # parser bug. Total_* values are the CUMULATIVE month-to-date numbers
+    # (latest cumulative — NOT a sum of cumulative rows).
     last = entries[-1] if entries else {}
     latest_complete = next(
-        (e for e in reversed(entries) if float(e.get("booked_hours", 0)) > 0),
+        (e for e in reversed(entries) if float(e.get("cumulative_booked", 0)) > 0),
         None,
     )
     summary_row = latest_complete or last
+    cum_c = float(summary_row.get("cumulative_committed", summary_row.get("committed_hours", 0)) or 0)
+    cum_b = float(summary_row.get("cumulative_booked",    summary_row.get("booked_hours",    0)) or 0)
     return {
         "client_name": client_name,
         "entries":     entries,
         "heatmap":     _bod_eod_build_heatmaps(entries),
         "summary": {
-            "total_committed": float(summary_row.get("committed_hours", 0)),
-            "total_booked":    float(summary_row.get("booked_hours", 0)),
-            "total_variance":  float(summary_row.get("variance_hours", 0)),
+            "total_committed": cum_c,                  # cumulative MTD
+            "total_booked":    cum_b,                  # cumulative MTD
+            "total_variance":  round(cum_b - cum_c, 2),# cumulative MTD diff
             "days_tracked":    len(entries),
         },
     }

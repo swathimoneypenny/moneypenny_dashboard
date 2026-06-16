@@ -97,27 +97,61 @@ export default function BodEodReview({ teamId }) {
     return within.length ? within : allEntries;
   }, [allEntries, period, customStart, customEnd]);
 
-  // Period stats. "Today" reads off the single latest entry; everything
-  // else sums across the window — both committed and booked are
-  // cumulative-by-day on the sheet, so summing is correct only across a
-  // single client's window, but matches how the user reads "monthly total
-  // committed" on the spreadsheet.
+  // Period stats. CRITICAL: committed_hours / booked_hours on each entry
+  // are CUMULATIVE running totals (sheet column B/C is "8, 16, 24, ..."
+  // not "8, 8, 8, ..."). Summing them was the bug — you'd get N*(N+1)*4
+  // for an 8h-per-day target. Correct math:
+  //   today  → that day's DAILY delta (latest.daily_*)
+  //   month  → latest row's CUMULATIVE value (= month-to-date)
+  //   week   → sum of daily deltas in the window
+  //   custom → sum of daily deltas in the window
   const periodStats = useMemo(() => {
+    if (!filteredEntries.length) return { committed: 0, booked: 0, variance: 0 };
     if (period === "today") {
-      const e = filteredEntries[filteredEntries.length - 1] || {};
-      return {
-        committed: Number(e.committed_hours) || 0,
-        booked:    Number(e.booked_hours)    || 0,
-        variance:  Number(e.variance_hours)  || 0,
-      };
+      const e = filteredEntries[filteredEntries.length - 1];
+      const c = Number(e.daily_committed) || 0;
+      const b = Number(e.daily_booked)    || 0;
+      return { committed: c, booked: b, variance: b - c };
     }
-    let committed = 0, booked = 0;
+    if (period === "month") {
+      const e = filteredEntries[filteredEntries.length - 1];
+      const c = Number(e.cumulative_committed ?? e.committed_hours) || 0;
+      const b = Number(e.cumulative_booked    ?? e.booked_hours)    || 0;
+      return { committed: c, booked: b, variance: b - c };
+    }
+    // week / custom — sum of dailies (mathematically equal to last_cum −
+    // first_cum + first_daily, but expressed simpler).
+    let c = 0, b = 0;
     for (const e of filteredEntries) {
-      committed += Number(e.committed_hours) || 0;
-      booked    += Number(e.booked_hours)    || 0;
+      c += Number(e.daily_committed) || 0;
+      b += Number(e.daily_booked)    || 0;
     }
-    return { committed, booked, variance: booked - committed };
+    return { committed: c, booked: b, variance: b - c };
   }, [filteredEntries, period]);
+
+  // File-status count row — driven by the latest day's EOD actuals
+  // (falls back to BOD plan if EOD isn't filled yet today). Same 6
+  // categories as the comparison bar chart so the dashboard tells one
+  // consistent story.
+  const fileCountStats = useMemo(() => {
+    if (!filteredEntries.length) return null;
+    const latest = filteredEntries[filteredEntries.length - 1];
+    const eod = latest?.eod?.monthly_actual || {};
+    const bod = latest?.bod?.monthly_plan   || {};
+    const pick = (k) => {
+      const v = eod[k] !== undefined ? eod[k] : bod[k];
+      return typeof v === "number" ? v : (v ? Number(v) || 0 : 0);
+    };
+    return {
+      total:       pick("Total Files"),
+      notStarted:  pick("Not Started"),
+      inProcess:   pick("In Process"),
+      review:      pick("Review"),
+      postedQuery: pick("Posted Query"),
+      completed:   pick("Completed"),
+      date:        latest?.date,
+    };
+  }, [filteredEntries]);
 
   const latestEntry = filteredEntries.length
     ? filteredEntries[filteredEntries.length - 1]
@@ -232,21 +266,53 @@ export default function BodEodReview({ teamId }) {
         </button>
       </div>
 
+      {/* File-status row — 6 cards driven by latest day's EOD actuals */}
+      {fileCountStats && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10 }}>
+          <FileStatusCard
+            label="Total Files"   value={fileCountStats.total}       icon="📁" color={C.pri}
+            onClick={() => openStageModal({ stage: "Total Files",   count: fileCountStats.total,       color: C.pri    }, latestEntry, setModal)}
+          />
+          <FileStatusCard
+            label="Not Started"   value={fileCountStats.notStarted}  icon="⏸️" color={RED}
+            onClick={() => openStageModal({ stage: "Not Started",   count: fileCountStats.notStarted,  color: RED      }, latestEntry, setModal)}
+          />
+          <FileStatusCard
+            label="In Process"    value={fileCountStats.inProcess}   icon="⚙️" color={YELLOW}
+            onClick={() => openStageModal({ stage: "In Process",    count: fileCountStats.inProcess,   color: YELLOW   }, latestEntry, setModal)}
+          />
+          <FileStatusCard
+            label="Review"        value={fileCountStats.review}      icon="👁️" color={BLUE}
+            onClick={() => openStageModal({ stage: "Review",        count: fileCountStats.review,      color: BLUE     }, latestEntry, setModal)}
+          />
+          <FileStatusCard
+            label="Posted Query"  value={fileCountStats.postedQuery} icon="❓" color={PURPLE}
+            onClick={() => openStageModal({ stage: "Posted Query",  count: fileCountStats.postedQuery, color: PURPLE   }, latestEntry, setModal)}
+          />
+          <FileStatusCard
+            label="Completed"     value={fileCountStats.completed}   icon="✅" color={GREEN}
+            onClick={() => openStageModal({ stage: "Completed",     count: fileCountStats.completed,   color: GREEN    }, latestEntry, setModal)}
+          />
+        </div>
+      )}
+
       {/* 3 KPI cards — Committed / Booked / Variance. Efficiency dropped
-          per spec (was noisy when 'today' wasn't yet EOD'd). */}
+          per spec (was noisy when 'today' wasn't yet EOD'd). Subtitle
+          reads "Month-to-date" / "Today" / etc. so the user knows the
+          number is a cumulative read, not a sum. */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
         <ClickableKpi
           label="Committed (Target)"
           value={`${fmt1(periodStats.committed)}h`}
           color={BLUE}
-          subtitle={periodLabel(period)}
+          subtitle={kpiSubtitle("committed", period)}
           onClick={() => setModal({ open: true, type: "kpi", data: { which: "committed", periodStats, filteredEntries, period } })}
         />
         <ClickableKpi
           label="Booked (Actual)"
           value={`${fmt1(periodStats.booked)}h`}
           color={GREEN}
-          subtitle={periodLabel(period)}
+          subtitle={kpiSubtitle("booked", period)}
           onClick={() => setModal({ open: true, type: "kpi", data: { which: "booked", periodStats, filteredEntries, period } })}
         />
         <ClickableKpi
@@ -287,18 +353,24 @@ export default function BodEodReview({ teamId }) {
               <Legend wrapperStyle={{ color: C.pri, fontWeight: 700 }} />
               <Line
                 type="monotone" dataKey="committed_hours" stroke={BLUE} strokeWidth={3}
-                name="Committed (Target)"
+                name="Committed (Cumulative)"
                 dot={{ r: 5, fill: BLUE, cursor: "pointer" }}
                 activeDot={{ r: 7, stroke: "#FFFFFF", strokeWidth: 2 }}
               />
               <Line
                 type="monotone" dataKey="booked_hours" stroke={GREEN} strokeWidth={3}
-                name="Booked (Actual)"
+                name="Booked (Cumulative)"
                 dot={{ r: 5, fill: GREEN, cursor: "pointer" }}
                 activeDot={{ r: 7, stroke: "#FFFFFF", strokeWidth: 2 }}
               />
             </LineChart>
           </ResponsiveContainer>
+          <div style={{
+            fontSize: 10, color: C.muted, fontStyle: "italic",
+            marginTop: 6, textAlign: "center", letterSpacing: 0.3,
+          }}>
+            Lines show running totals (each point = month-to-date through that day)
+          </div>
         </div>
       )}
 
@@ -365,20 +437,23 @@ export default function BodEodReview({ teamId }) {
         );
       })()}
 
-      {/* Daily Variance — one bar per day, green/red. */}
+      {/* Daily Variance — one bar per day, green/red. Uses DAILY delta
+          (today's booked − today's target), not cumulative — otherwise a
+          chronically-behind client would show the same growing red bar
+          every day and you couldn't tell which specific days went bad. */}
       {filteredEntries.length > 0 && (
         <div style={panelStyle()}>
           <ChartHeader
-            title="⚖️ Daily Variance (Booked − Committed)"
+            title="⚖️ Daily Variance (Today's Booked − Today's Target)"
             hint="Click any bar to see reasons for that day's variance"
           />
           <ResponsiveContainer width="100%" height={240}>
             <BarChart
-              data={filteredEntries.map((e) => ({
-                date:     e.date,
-                variance: Number(e.variance_hours) || 0,
-                _src:     e,
-              }))}
+              data={filteredEntries.map((e) => {
+                const dc = Number(e.daily_committed) || 0;
+                const db = Number(e.daily_booked)    || 0;
+                return { date: e.date, variance: db - dc, _src: e };
+              })}
               margin={{ top: 12, right: 16, left: 0, bottom: 4 }}
               onClick={(e) => {
                 const src = e?.activePayload?.[0]?.payload?._src;
@@ -399,14 +474,17 @@ export default function BodEodReview({ teamId }) {
                 style={{ cursor: "pointer" }}
                 onClick={(p) => { const src = p?.payload?._src || p?._src; if (src) openDayModal(src, setModal); }}
               >
-                {filteredEntries.map((e, i) => (
-                  <Cell
-                    key={i}
-                    fill={(Number(e.variance_hours) || 0) >= 0 ? GREEN : RED}
-                    style={{ cursor: "pointer" }}
-                    onClick={() => openDayModal(e, setModal)}
-                  />
-                ))}
+                {filteredEntries.map((e, i) => {
+                  const dv = (Number(e.daily_booked) || 0) - (Number(e.daily_committed) || 0);
+                  return (
+                    <Cell
+                      key={i}
+                      fill={dv >= 0 ? GREEN : RED}
+                      style={{ cursor: "pointer" }}
+                      onClick={() => openDayModal(e, setModal)}
+                    />
+                  );
+                })}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
@@ -541,6 +619,47 @@ function buildStageReasons(stage, count, total, pct, entry) {
 }
 
 // ── Sub-components ─────────────────────────────────────────────────
+
+function FileStatusCard({ label, value, icon, color, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        background:   C.card,
+        border:       `1px solid ${color}33`,
+        borderLeft:   `4px solid ${color}`,
+        borderRadius: 10,
+        padding:      14,
+        cursor:       "pointer",
+        textAlign:    "center",
+        fontFamily:   "inherit",
+        transition:   "transform 0.15s ease, background 0.15s ease",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = C.elevated;
+        e.currentTarget.style.transform  = "translateY(-2px)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = C.card;
+        e.currentTarget.style.transform  = "translateY(0)";
+      }}
+    >
+      <div style={{ fontSize: 22, marginBottom: 4 }}>{icon}</div>
+      <div style={{
+        fontSize: 26, fontWeight: 900, color,
+        fontFamily: "'DM Mono', monospace", lineHeight: 1,
+      }}>
+        {Number(value || 0)}
+      </div>
+      <div style={{
+        fontSize: 10, color: C.muted, fontWeight: 800,
+        textTransform: "uppercase", letterSpacing: 0.5, marginTop: 6,
+      }}>
+        {label}
+      </div>
+    </button>
+  );
+}
 
 function ClickableKpi({ label, value, color, subtitle, onClick }) {
   return (
@@ -741,12 +860,18 @@ function DetailModal({ modal, onClose }) {
             <StatBox label="Variance"  value={`${d.periodStats.variance >= 0 ? "+" : ""}${fmt1(d.periodStats.variance)}h`} color={d.periodStats.variance >= 0 ? GREEN : RED} />
           </div>
         )}
-        {modal.type === "day" && d.committed_hours !== undefined && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 16 }}>
-            <StatBox label="Committed" value={`${fmt1(d.committed_hours)}h`} color={BLUE} />
-            <StatBox label="Booked"    value={`${fmt1(d.booked_hours)}h`}    color={GREEN} />
-            <StatBox label="Variance"  value={`${(d.variance_hours || 0) >= 0 ? "+" : ""}${fmt1(d.variance_hours)}h`} color={(d.variance_hours || 0) >= 0 ? GREEN : RED} />
-          </div>
+        {modal.type === "day" && d.daily_committed !== undefined && (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 10 }}>
+              <StatBox label="Today Target" value={`${fmt1(d.daily_committed)}h`} color={BLUE} />
+              <StatBox label="Today Booked" value={`${fmt1(d.daily_booked)}h`}    color={GREEN} />
+              <StatBox label="Today Variance"  value={`${(d.variance_hours || 0) >= 0 ? "+" : ""}${fmt1(d.variance_hours)}h`} color={(d.variance_hours || 0) >= 0 ? GREEN : RED} />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10, marginBottom: 16 }}>
+              <StatBox label="Cumulative Target" value={`${fmt1(d.cumulative_committed ?? d.committed_hours)}h`} color={BLUE} />
+              <StatBox label="Cumulative Booked" value={`${fmt1(d.cumulative_booked ?? d.booked_hours)}h`}       color={GREEN} />
+            </div>
+          </>
         )}
         {modal.type === "category" && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 16 }}>
@@ -840,9 +965,13 @@ function SectionLabel({ children }) {
 }
 
 function DayRow({ entry, which }) {
-  const v = which === "committed" ? entry.committed_hours
-          : which === "booked"    ? entry.booked_hours
-          :                         entry.variance_hours;
+  // Daily breakdown rows show the per-day contribution (not the cumulative
+  // running-total) so the user sees how each day moved the needle.
+  const dailyC = Number(entry.daily_committed) || 0;
+  const dailyB = Number(entry.daily_booked)    || 0;
+  const v = which === "committed" ? dailyC
+          : which === "booked"    ? dailyB
+          :                         (dailyB - dailyC);
   const num = Number(v) || 0;
   const color = which === "variance" ? (num >= 0 ? GREEN : RED)
               : which === "booked"   ? GREEN
@@ -934,6 +1063,15 @@ function periodLabel(p) {
   if (p === "month")  return "This Month";
   if (p === "custom") return "Custom Range";
   return "";
+}
+
+function kpiSubtitle(which, p) {
+  // Make it explicit that the number is cumulative / window-summed, not
+  // a sum of cumulative rows (the bug we just fixed).
+  if (p === "month") return which === "committed" ? "Month-to-date target" : "Month-to-date actual";
+  if (p === "week")  return which === "committed" ? "Week-to-date target"  : "Week-to-date actual";
+  if (p === "today") return which === "committed" ? "Today's target"       : "Today's actual";
+  return which === "committed" ? "Custom range target" : "Custom range actual";
 }
 
 function parseEntryDate(s) {
