@@ -2038,10 +2038,10 @@ DELAYS_TAB_GIDS: dict[str, dict[str, str]] = {
     "team_e": {
         "acs":                  "1718260091",
     },
-    # team_f: TL supplied client name "Pereira Azevedo" but no GID — left
-    # empty until the GID is provided. _build_team_delays will simply skip
-    # this team's Delays section.
-    "team_f": {},
+    "team_f": {
+        "scotts laws":          "1565152388",
+        "pereira azevedo":      "2140023746",
+    },
     "team_g": {
         "manzelli":             "1255292486",
         "putman accounting":    "897073748",
@@ -2123,7 +2123,7 @@ WEEKLY_CHECKLIST_GIDS: dict[str, str | None] = {
     "team_c": "1312977007",
     "team_d": "885695460",
     "team_e": "730935679",
-    "team_f": None,
+    "team_f": "1089038000",
     "team_g": "1291078606",
     "team_h": "1391629922",
     "team_i": "704609157",
@@ -2166,7 +2166,111 @@ BOD_EOD_TAB_GIDS: dict[str, dict[str, str]] = {
         "Ollinbalance":       "677777582",
         "24 Hrs Bookkeeper":  "930660300",
     },
+    "team_b": {
+        "Nisivoccia":         "1774184677",
+        "KATY":               "1126093348",
+        "CBMS":               "1552758839",
+        "Backoffice":         "1617642333",
+    },
+    "team_c": {
+        "Financial Synergy":  "1048490178",
+        "Neve Group":         "1639972569",
+        "Radicle Science":    "857142819",
+        "RDG Tax":            "677171439",
+        "Sambrano Services":  "2041501320",
+        "Stay By Rafa":       "1792355847",
+    },
+    "team_d": {
+        "Financly":           "742512208",
+        "AIS":                "630505979",
+        "Smith Bookkeeping":  "1071432665",
+    },
+    "team_e": {
+        "ACS":                "955761467",
+    },
+    "team_f": {
+        "Scotts Laws":        "139250466",
+        "Pereira Azevedo":    "609837330",
+    },
+    "team_g": {
+        "Jeo Manzelli":       "2126272770",
+        # NOTE: User-supplied gid for Putman Accountancy duplicates Jeo
+        # Manzelli's. Likely a typo on intake — flagged for TL confirmation
+        # 2026-06-16. Keeping both entries so the dropdown shows correctly;
+        # the endpoint will surface identical data until a fresh gid lands.
+        "Putman Accountancy": "2126272770",
+        "EZ Ledger":          "535352390",
+        "The Proper Trust":   "892917002",
+        "Artesani Accounting": "1692283",
+        "Mintage Lab":        "415661635",
+        "Oh My ROI":          "901566119",
+    },
+    "team_h": {
+        "JB Advisory":        "1518865569",
+    },
+    "team_i": {
+        "Core4":              "1618364342",
+        "Redmond":            "1625384455",
+        "Soco":               "73614225",
+    },
+    "team_j": {
+        "Go Figure Accounting": "113518047",
+    },
+    "team_k": {
+        "Portnoy CPA":        "1829121366",
+        "Empower":            "64928295",
+        "Modern CPA":         "91793281",
+    },
+    "team_l": {
+        "LAH":                "126056103",
+        "TaxSense":           "1847933640",
+        "OfficeHeads":        "989562601",
+        "SDC Group":          "1062995821",
+        "Web Books":          "141444981",
+        "BakerBookkeeps":     "1724037432",
+    },
+    "team_m": {
+        "ABS":                "1190948043",
+        "Pokorny":            "1298034951",
+        "Kacey Fitz":         "906864259",
+        "Taxes With Jones":   "1745415506",
+        "Equity Champs":      "1837318471",
+        "DAA CPA":            "800946343",
+        "Happy Soul":         "1869348518",
+        "Shane Bulter":       "1865555336",
+        "Sibyline Record":    "614383760",
+        "Helvetica":          "529100105",
+    },
+    "team_n": {
+        "Tim Thompson":       "2066456112",
+        "Beacon Advisors":    "1900219561",
+        "FitProfit Solutions": "2059901996",
+    },
+    # team_t shares client names with team_l (LAH, OfficeHeads) and team_n
+    # (Tim Thompson) but the gids differ — separate tabs on a separate
+    # team sheet (confirmed via TEAM_LETTER_MAP["team_t"].sheetId).
+    "team_t": {
+        "Wiebe":              "132754161",
+        "Business Fitness":   "181336899",
+        "KCO":                "142585076",
+        "Jim Baltimore":      "987946767",
+        "Tim Thompson":       "1514337330",
+        "OfficeHeads":        "936264188",
+        "LAH":                "456196997",
+        "David Beck CPA":     "586798551",
+        "M CTax Advisors":    "1912356174",
+    },
 }
+
+# Surface mapping counts at module load so any deploy that mishandles the
+# dict (e.g. accidentally trims a team during a merge) is immediately
+# visible in pm2 logs without needing to hit the endpoint.
+print(
+    f"[config] BOD_EOD_TAB_GIDS loaded: {len(BOD_EOD_TAB_GIDS)} teams, "
+    f"{sum(len(v) for v in BOD_EOD_TAB_GIDS.values())} client tabs"
+)
+for _tid, _clients in BOD_EOD_TAB_GIDS.items():
+    print(f"[config]   {_tid}: {len(_clients)} client{'s' if len(_clients) != 1 else ''}")
 
 # Boolean-ish columns we run through compliance % math. Free-text columns
 # (updated_procedure, new_procedure, training_*, flag_tm_ops, whale_links,
