@@ -92,6 +92,10 @@ export default function App() {
           teamId={view.teamId}
           teamName={view.teamName}
           employeeName={view.employeeName}
+          onSwitchEmployee={(name) => {
+            setRichContext("");
+            setView({ page: "employee", teamId: view.teamId, employeeName: name, teamName: view.teamName, fromTeamId: view.fromTeamId });
+          }}
           onBack={() => {
             setRichContext("");
             // Return to the team dashboard we came from (if known), else home.

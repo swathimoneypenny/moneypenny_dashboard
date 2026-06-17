@@ -138,11 +138,11 @@ export default function PerformanceReasonModal({ open, onClose, org, periodLabel
         </div>
 
         <SectionBox title="📊 Performance Gap" color={analysis.statusColor}>
-          <DataRow label="Target (pro-rated)"  value={`${analysis.committed.toFixed(1)}h`} />
-          <DataRow label="Actual booked"       value={`${analysis.actual.toFixed(1)}h`} />
+          <DataRow label="Target (pro-rated)"  value={`${analysis.committed.toFixed(2)}h`} />
+          <DataRow label="Actual booked"       value={`${analysis.actual.toFixed(2)}h`} />
           <DataRow
             label="Gap"
-            value={`${analysis.gap >= 0 ? "+" : ""}${analysis.gap.toFixed(1)}h ${analysis.gap < 0 ? "behind" : "ahead"}`}
+            value={`${analysis.gap >= 0 ? "+" : ""}${analysis.gap.toFixed(2)}h ${analysis.gap < 0 ? "behind" : "ahead"}`}
             color={analysis.gap < 0 ? "#EF4444" : "#10B981"}
           />
           <DataRow
@@ -150,8 +150,8 @@ export default function PerformanceReasonModal({ open, onClose, org, periodLabel
             value={`${analysis.efficiency.toFixed(1)}% (Target: 80%+)`}
             color={analysis.statusColor}
           />
-          <DataRow label="Billable"     value={`${analysis.billable.toFixed(1)}h`}    color="#10B981" />
-          <DataRow label="Non-Billable" value={`${analysis.nonBillable.toFixed(1)}h`} color="#F2895A" />
+          <DataRow label="Billable"     value={`${analysis.billable.toFixed(2)}h`}    color="#10B981" />
+          <DataRow label="Non-Billable" value={`${analysis.nonBillable.toFixed(2)}h`} color="#F2895A" />
         </SectionBox>
 
         {isBelow && (
@@ -173,7 +173,7 @@ export default function PerformanceReasonModal({ open, onClose, org, periodLabel
                   <ReasonItem
                     key="avg"
                     num={items.length + 1}
-                    title={`Avg ${analysis.avgPerEmp.toFixed(1)}h per active employee (target ${analysis.perEmpTarget.toFixed(1)}h over ${analysis.days} working day${analysis.days === 1 ? "" : "s"})`}
+                    title={`Avg ${analysis.avgPerEmp.toFixed(2)}h per active employee (target ${analysis.perEmpTarget.toFixed(2)}h over ${analysis.days} working day${analysis.days === 1 ? "" : "s"})`}
                     detail="Active employees are under-booking time on this client"
                   />,
                 );
@@ -183,7 +183,7 @@ export default function PerformanceReasonModal({ open, onClose, org, periodLabel
                   <ReasonItem
                     key="nb"
                     num={items.length + 1}
-                    title={`Non-billable share: ${analysis.nonBillable.toFixed(1)}h (${(analysis.nonBillRatio * 100).toFixed(0)}% of booked time)`}
+                    title={`Non-billable share: ${analysis.nonBillable.toFixed(2)}h (${(analysis.nonBillRatio * 100).toFixed(0)}% of booked time)`}
                     detail="Some of this could be redirected to billable client work"
                   />,
                 );
@@ -194,7 +194,7 @@ export default function PerformanceReasonModal({ open, onClose, org, periodLabel
                     key="days"
                     num={items.length + 1}
                     title={`${analysis.lowActivityDays.length} day${analysis.lowActivityDays.length === 1 ? "" : "s"} with very low activity`}
-                    detail={analysis.lowActivityDays.map(([d, h]) => `${d}: ${h.toFixed(1)}h`).join("  ·  ")}
+                    detail={analysis.lowActivityDays.map(([d, h]) => `${d}: ${h.toFixed(2)}h`).join("  ·  ")}
                   />,
                 );
               }
@@ -239,7 +239,7 @@ export default function PerformanceReasonModal({ open, onClose, org, periodLabel
               <DataRow
                 key={i}
                 label={name}
-                value={`${hours.toFixed(1)}h`}
+                value={`${hours.toFixed(2)}h`}
                 color={hours >= analysis.perEmpTarget * 0.7 ? "#10B981" : "#F0B947"}
               />
             ))

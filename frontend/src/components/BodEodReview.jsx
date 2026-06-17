@@ -389,11 +389,11 @@ export default function BodEodReview({ teamId }) {
                   const num = Number(v) || 0;
                   if (n === "Difference (Cumulative)") {
                     return [
-                      `${num >= 0 ? "+" : ""}${num.toFixed(1)}h`,
+                      `${num >= 0 ? "+" : ""}${num.toFixed(2)}h`,
                       num >= 0 ? "🟢 Ahead" : "🔴 Behind",
                     ];
                   }
-                  return [`${num.toFixed(1)}h`, n];
+                  return [`${num.toFixed(2)}h`, n];
                 }}
               />
               {/* y=0 baseline for the variance line */}
@@ -502,8 +502,8 @@ function buildDayReasons(e) {
   const review    = Number(eod["Review"]) || 0;
   const notStarted = Number(eod["Not Started"]) || 0;
 
-  if (v < 0) reasons.push(`⚠ Behind plan by ${Math.abs(v).toFixed(1)}h`);
-  else if (v > 0) reasons.push(`✓ Ahead of plan by ${v.toFixed(1)}h`);
+  if (v < 0) reasons.push(`⚠ Behind plan by ${Math.abs(v).toFixed(2)}h`);
+  else if (v > 0) reasons.push(`✓ Ahead of plan by ${v.toFixed(2)}h`);
   else reasons.push(`✓ On target`);
 
   if (completed === 0 && v < 0) reasons.push("No files completed this day");
@@ -949,7 +949,7 @@ function DayRow({ entry, which }) {
     }}>
       <span style={{ fontSize: 12, fontWeight: 700, color: C.pri }}>{entry.date}</span>
       <span style={{ fontSize: 13, fontWeight: 800, color, fontFamily: "'DM Mono', monospace" }}>
-        {which === "variance" && num >= 0 ? "+" : ""}{num.toFixed(1)}h
+        {which === "variance" && num >= 0 ? "+" : ""}{num.toFixed(2)}h
       </span>
     </div>
   );
@@ -980,7 +980,7 @@ function BodEodSidePanel({ color, title, data }) {
             fontWeight: 800,
             fontFamily: typeof v === "number" ? "'DM Mono', monospace" : "inherit",
           }}>
-            {typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(1)) : v}
+            {typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(2)) : v}
           </span>
         </div>
       ))}
@@ -1400,7 +1400,7 @@ function buildCategoryObservations(catData, category, entry) {
 
 function formatCatValue(v) {
   if (typeof v === "number") {
-    return Number.isInteger(v) ? String(v) : v.toFixed(1);
+    return Number.isInteger(v) ? String(v) : v.toFixed(2);
   }
   return String(v);
 }
@@ -1437,7 +1437,7 @@ function dateInputStyle() {
 }
 
 function fmt1(v) {
-  return (Number(v) || 0).toFixed(1);
+  return (Number(v) || 0).toFixed(2);
 }
 
 function periodLabel(p) {

@@ -170,7 +170,7 @@ export default function SimpleBreakdownModal({
                       minWidth: 60, textAlign: "right",
                     }}
                   >
-                    {typeof it.value === "number" ? `${v.toFixed(1)}h` : it.value}
+                    {typeof it.value === "number" ? `${v.toFixed(2)}h` : it.value}
                   </span>
                 </div>
               </div>

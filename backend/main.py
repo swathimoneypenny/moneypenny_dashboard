@@ -3977,12 +3977,12 @@ def _pro_rate_committed_hours(
     if as_of_d < start_d:
         return 0.0
     if as_of_d >= end_d:
-        return round(float(full_committed), 1)
+        return round(float(full_committed), 2)
     total   = _working_days_between(start_d, end_d)
     elapsed = _working_days_between(start_d, as_of_d)
     if total <= 0:
         return 0.0
-    return round(float(full_committed) * (elapsed / total), 1)
+    return round(float(full_committed) * (elapsed / total), 2)
 
 
 # Aliases used by the debug endpoint
@@ -4405,9 +4405,9 @@ def build_client_report(rows: list, client_name: str, period_label: str) -> dict
     staff_list = [
         {
             "staff":       k,
-            "committed":   round(v["committed"],   1),
-            "billable":    round(v["billable"],    1),
-            "nonBillable": round(v["nonBillable"], 1),
+            "committed":   round(v["committed"],   2),
+            "billable":    round(v["billable"],    2),
+            "nonBillable": round(v["nonBillable"], 2),
             "notes":       v["notes"],
         }
         for k, v in staff.items()
@@ -4421,9 +4421,9 @@ def build_client_report(rows: list, client_name: str, period_label: str) -> dict
     return {
         "period": period_label,
         "summary": {
-            "totalCommitted":    round(total_committed, 1),
-            "totalBillable":     round(total_billable,  1),
-            "totalNonBillable":  round(total_non,       1),
+            "totalCommitted":    round(total_committed, 2),
+            "totalBillable":     round(total_billable,  2),
+            "totalNonBillable":  round(total_non,       2),
             "overallEfficiency": overall_eff,
         },
         "staff": staff_list,
@@ -4477,7 +4477,7 @@ async def active_clients():
             continue
         client_hours[c] = client_hours.get(c, 0) + r["hours"]
     clients = [
-        {"name": name, "totalHours": round(hours, 1)}
+        {"name": name, "totalHours": round(hours, 2)}
         for name, hours in sorted(client_hours.items(), key=lambda x: -x[1])
     ]
     result = {"clients": clients, "count": len(clients)}
@@ -4558,7 +4558,7 @@ async def _team_response(
             "clients":          [],
             "organizations":    [],
             "summary": {
-                "totalCommitted":    round(eod_committed, 1),
+                "totalCommitted":    round(eod_committed, 2),
                 "totalBillable":     0,
                 "totalNonBillable":  0,
                 "overallEfficiency": 0,
@@ -4727,9 +4727,9 @@ async def _team_response(
             org_member_count = implied_members
         else:
             org_member_count = staff_count
-        committed = round(org_member_count * org_per_preparer, 1) if org_member_count > 0 else 0
+        committed = round(org_member_count * org_per_preparer, 2) if org_member_count > 0 else 0
         util = round(actual / committed * 100, 1) if committed > 0 else 0
-        gap  = round(actual - committed, 1) if committed > 0 else 0.0
+        gap  = round(actual - committed, 2) if committed > 0 else 0.0
         if committed > 0:
             status = target_status_label(util)
         else:
@@ -4737,11 +4737,11 @@ async def _team_response(
         clients_data.append({
             "name":        org_name,
             "org":         org_name,
-            "committed":   round(committed, 1),
-            "actual":      round(actual, 1),
-            "billable":    round(h["billable"], 1),
-            "nonBillable": round(h["nonBillable"], 1),
-            "total":       round(actual, 1),
+            "committed":   round(committed, 2),
+            "actual":      round(actual, 2),
+            "billable":    round(h["billable"], 2),
+            "nonBillable": round(h["nonBillable"], 2),
+            "total":       round(actual, 2),
             "efficiency":  util,
             "utilPct":     util,
             "gap":         gap,
@@ -4784,10 +4784,10 @@ async def _team_response(
     # the "Internal / Other" row (when visible to admins) still adds up.
     total_b_all  = sum(c["billable"]    for c in clients_data)
     total_nb_all = sum(c["nonBillable"] for c in clients_data)
-    total_internal = round(total_internal_b + total_internal_nb, 1)
-    total_b  = round(total_b_all  - total_internal_b,  1)
-    total_nb = round(total_nb_all - total_internal_nb, 1)
-    total    = round(total_b + total_nb + total_internal, 1)
+    total_internal = round(total_internal_b + total_internal_nb, 2)
+    total_b  = round(total_b_all  - total_internal_b,  2)
+    total_nb = round(total_nb_all - total_internal_nb, 2)
+    total    = round(total_b + total_nb + total_internal, 2)
 
     # EOD values came from the parallel asyncio.gather above; just count delays.
     total_delays = sum(int(e.get("delays") or 0) for e in eod_rows)
@@ -4841,8 +4841,8 @@ async def _team_response(
     monthly_trend = [
         {
             "monthKey":  k,
-            "committed": round(v["committed"], 1),
-            "utilized":  round(v["utilized"], 1),
+            "committed": round(v["committed"], 2),
+            "utilized":  round(v["utilized"], 2),
         }
         for k, v in sorted(monthly_buckets.items())
     ]
@@ -4854,8 +4854,8 @@ async def _team_response(
     team_member_count = len(roster) if roster else max(_team_member_count(team_id), 1)
     per_preparer_target      = org_per_preparer        # pro-rated; same value already computed above
     per_preparer_target_full = org_per_preparer_full   # full period target, for context
-    team_target      = round(per_preparer_target      * team_member_count, 1)
-    team_target_full = round(per_preparer_target_full * team_member_count, 1)
+    team_target      = round(per_preparer_target      * team_member_count, 2)
+    team_target_full = round(per_preparer_target_full * team_member_count, 2)
     target_util_pct = round(total_b / team_target * 100, 1) if team_target > 0 else 0.0
     team_target_status = target_status_label(target_util_pct)
 
@@ -4892,7 +4892,7 @@ async def _team_response(
         "summary": {
             "totalCommitted":        team_target,           # pro-rated
             "totalCommittedFull":    team_target_full,      # full period target
-            "eodCommitted":          round(eod_committed, 1),
+            "eodCommitted":          round(eod_committed, 2),
             "totalBillable":         total_b,         # excludes Internal categories
             "totalNonBillable":      total_nb,        # excludes Internal categories
             "totalInternal":         total_internal,  # SNMP / BREAKS / Training / Admin combined
@@ -5605,7 +5605,7 @@ def get_employee_committed_hours(
     else:
         full = _full_committed_for_period(period)
     if not prorate or period == "today":
-        return round(full, 1)
+        return round(full, 2)
     return _pro_rate_committed_hours(full, period_start, period_end, as_of)
 
 
@@ -5624,7 +5624,7 @@ def get_team_target_hours(
         prorate=prorate, period_start=period_start, period_end=period_end, as_of=as_of,
     )
     members = max(1, _team_member_count(team_id))
-    return round(per_preparer * members, 1)
+    return round(per_preparer * members, 2)
 
 
 def target_status_label(util_pct: float) -> str:
@@ -5787,9 +5787,9 @@ def _build_employee_response(
     top_clients = [
         {
             "client":      name,
-            "hours":       round(v["hours"], 1),
-            "billable":    round(v["billable"], 1),
-            "nonBillable": round(v["nonBillable"], 1),
+            "hours":       round(v["hours"], 2),
+            "billable":    round(v["billable"], 2),
+            "nonBillable": round(v["nonBillable"], 2),
         }
         for name, v in sorted(by_client.items(), key=lambda kv: -kv[1]["hours"])
     ][:5]
@@ -5812,11 +5812,11 @@ def _build_employee_response(
             continue
         nb_buckets[cat] = nb_buckets.get(cat, 0.0) + h
     non_billable_breakdown = [
-        {"category": k, "hours": round(v, 1)}
+        {"category": k, "hours": round(v, 2)}
         for k, v in sorted(nb_buckets.items(), key=lambda kv: -kv[1])
     ]
     internal_breakdown = [
-        {"category": k, "hours": round(v, 1)}
+        {"category": k, "hours": round(v, 2)}
         for k, v in sorted(internal_buckets.items(), key=lambda kv: -kv[1])
     ]
 
@@ -5831,7 +5831,7 @@ def _build_employee_response(
             "client":      r.get("customer") or "",
             "project":     r.get("project") or "",
             "accountCode": r.get("accountCode") or "",
-            "hours":       round(float(r.get("hours") or 0), 1),
+            "hours":       round(float(r.get("hours") or 0), 2),
             "desc":        (r.get("desc") or "").strip(),
             "billable":    bool(r.get("billable")),
         }
@@ -5849,7 +5849,7 @@ def _build_employee_response(
             "client":      r.get("customer") or "",
             "project":     r.get("project") or "",
             "accountCode": r.get("accountCode") or "",
-            "hours":       round(float(r.get("hours") or 0), 1),
+            "hours":       round(float(r.get("hours") or 0), 2),
             "desc":        (r.get("desc") or "").strip(),
             "billable":    bool(r.get("billable")),
         }
@@ -5888,18 +5888,18 @@ def _build_employee_response(
             b = daily_buckets.get(key, {"hours": 0.0, "billable": 0.0, "nonBillable": 0.0})
             daily_out.append({
                 "date":        key,
-                "hours":       round(b["hours"], 1),
-                "billable":    round(b["billable"], 1),
-                "nonBillable": round(b["nonBillable"], 1),
+                "hours":       round(b["hours"], 2),
+                "billable":    round(b["billable"], 2),
+                "nonBillable": round(b["nonBillable"], 2),
             })
             cur += timedelta(days=1)
     except Exception:
         daily_out = [
             {
                 "date":        k,
-                "hours":       round(v["hours"], 1),
-                "billable":    round(v["billable"], 1),
-                "nonBillable": round(v["nonBillable"], 1),
+                "hours":       round(v["hours"], 2),
+                "billable":    round(v["billable"], 2),
+                "nonBillable": round(v["nonBillable"], 2),
             }
             for k, v in sorted(daily_buckets.items())
         ]
@@ -5907,9 +5907,18 @@ def _build_employee_response(
     first_date = daily_out[0]["date"]  if daily_out else "—"
     last_date  = daily_out[-1]["date"] if daily_out else "—"
     print(f"[employee] name={employee_name!r} team={team_id} strategy={strategy} "
-          f"matchedRows={len(emp_rows)} totalHours={round(total_h, 1)} "
+          f"matchedRows={len(emp_rows)} totalHours={round(total_h, 2)} "
           f"dailyHoursCount={len(daily_out)} firstDate={first_date} lastDate={last_date} "
-          f"undatedHours={round(undated_hours, 1)}")
+          f"undatedHours={round(undated_hours, 2)}")
+    # HOURS DEBUG — exact (2-dp) per-bucket + per-client breakdown so a reported
+    # dashboard-vs-timesheet mismatch (e.g. 73.4 vs 72.88) can be traced to the
+    # actual matched rows / date window rather than guessed at. period={period}.
+    print(f"[HOURS DEBUG] {employee_name!r} window={start}..{end} matched={len(emp_rows)} "
+          f"total={round(total_h, 2)} billable={round(billable_h, 2)} "
+          f"nonbill={round(nonbill_h, 2)} internal={round(internal_h, 2)}")
+    for tc in top_clients:
+        print(f"[HOURS DEBUG]   client={tc['client']!r} total={tc['hours']} "
+              f"billable={tc['billable']} nonbill={tc['nonBillable']}")
 
     # Last-activity fields — pulled from the row with the latest LASTCHANGEDATE
     last_row = None
@@ -5929,16 +5938,16 @@ def _build_employee_response(
         "team_id":               team_id,
         "team_name":             cfg.get("label", team_id),
         "period":                label,
-        "totalHours":            round(total_h, 1),
-        "billableHours":         round(billable_h, 1),
-        "nonBillableHours":      round(nonbill_h, 1),        # client non-billable only
-        "internalHours":         round(internal_h, 1),
+        "totalHours":            round(total_h, 2),
+        "billableHours":         round(billable_h, 2),
+        "nonBillableHours":      round(nonbill_h, 2),        # client non-billable only
+        "internalHours":         round(internal_h, 2),
         "nonBillableBreakdown":  non_billable_breakdown,
         "internalBreakdown":     internal_breakdown,
-        "billablePct":           bill_pct,
-        "committedHours":        round(committed, 1),         # pro-rated
-        "committedHoursFull":    round(committed_full, 1),    # full period target
-        "utilizationPct":        util_pct,
+        "billablePct":           bill_pct,                   # percentage — 1 dp
+        "committedHours":        round(committed, 2),         # pro-rated
+        "committedHoursFull":    round(committed_full, 2),    # full period target
+        "utilizationPct":        util_pct,                   # percentage — 1 dp
         "topClients":            top_clients,
         "recentWork":            recent_out,
         "allEntries":            all_entries_out,
@@ -5948,7 +5957,7 @@ def _build_employee_response(
         "lastLoggedClient":      (last_row.get("customer") if last_row else "") or "",
         "lastLoggedProject":     (last_row.get("project")  if last_row else "") or "",
         "lastLoggedDesc":        last_desc[:80],
-        "lastLoggedHours":       round(float(last_row.get("hours") or 0), 1) if last_row else 0,
+        "lastLoggedHours":       round(float(last_row.get("hours") or 0), 2) if last_row else 0,
         "activeNow":             _is_active_now(last_lc),
         # Period-window metadata — drives the "Day 7/22 working" subhead.
         "periodKey":             period,
@@ -6131,16 +6140,16 @@ def _build_leaderboard(
         active_now     = _is_active_now(last_changed)
         members.append({
             "name":             name,
-            "billable":         round(v["billable"], 1),
-            "committed":        round(committed, 1),
+            "billable":         round(v["billable"], 2),
+            "committed":        round(committed, 2),
             "utilPct":          util,
-            "totalHours":       round(v["total"], 1),
+            "totalHours":       round(v["total"], 2),
             "trend":            trend,
             "lastLoggedAt":     last_changed,
             "lastLoggedClient": (last_row.get("customer") or "").strip(),
             "lastLoggedProject": (last_row.get("project") or "").strip(),
             "lastLoggedDesc":   last_desc[:80],
-            "lastLoggedHours":  round(float(last_row.get("hours") or 0), 1) if last_row else 0,
+            "lastLoggedHours":  round(float(last_row.get("hours") or 0), 2) if last_row else 0,
             "activeNow":        active_now,
         })
 
@@ -6175,7 +6184,7 @@ def _build_leaderboard(
         members.append({
             "name":              display,
             "billable":          0.0,
-            "committed":         round(committed, 1),
+            "committed":         round(committed, 2),
             "utilPct":           0.0,
             "totalHours":        0.0,
             "trend":             "flat",
@@ -7894,16 +7903,16 @@ async def client_trend(client_name: str):
         trend.append({
             "month":       month_start.strftime("%b %Y"),
             "yearMonth":   month_start.strftime("%Y-%m"),
-            "hours":       round(billable_h, 1),     # kept for back-compat (billable only)
-            "billable":    round(billable_h, 1),
-            "nonBillable": round(non_h, 1),
-            "total":       round(billable_h + non_h, 1),
+            "hours":       round(billable_h, 2),     # kept for back-compat (billable only)
+            "billable":    round(billable_h, 2),
+            "nonBillable": round(non_h, 2),
+            "total":       round(billable_h + non_h, 2),
             "byEmployee": sorted(
-                [{"name": k, "hours": round(v, 1)} for k, v in by_emp.items() if v > 0],
+                [{"name": k, "hours": round(v, 2)} for k, v in by_emp.items() if v > 0],
                 key=lambda x: -x["hours"],
             ),
             "byProject": sorted(
-                [{"name": k, "hours": round(v, 1)} for k, v in by_proj.items() if v > 0],
+                [{"name": k, "hours": round(v, 2)} for k, v in by_proj.items() if v > 0],
                 key=lambda x: -x["hours"],
             ),
         })
@@ -7959,9 +7968,9 @@ def _build_projects_breakdown(rows: list[dict], client_name: str) -> list[dict]:
     for name, b in buckets.items():
         out.append({
             "projectName":          name,
-            "hours":                round(b["hours"], 1),
-            "billableHours":        round(b["billableHours"], 1),
-            "nonBillableHours":     round(b["nonBillableHours"], 1),
+            "hours":                round(b["hours"], 2),
+            "billableHours":        round(b["billableHours"], 2),
+            "nonBillableHours":     round(b["nonBillableHours"], 2),
             "entriesCount":         len(b["entries"]),
             "uniqueEmployeesCount": len(b["uniqueEmployees"]),
             "entries":              sorted(b["entries"], key=lambda e: e.get("date") or "", reverse=True),
@@ -8019,7 +8028,7 @@ async def _client_data(
     target_full = 0.0
     if est_hrs_monthly > 0:
         wd_full = _working_days_between(full_start, full_end)
-        target_full = round(est_hrs_monthly * (wd_full / 20.0), 1)
+        target_full = round(est_hrs_monthly * (wd_full / 20.0), 2)
     target_prorated = _pro_rate_committed_hours(target_full, full_start, full_end, today_iso)
     actual_billable = float(result.get("summary", {}).get("totalBillable") or 0)
     target_util_pct = round(actual_billable / target_prorated * 100, 1) if target_prorated > 0 else 0.0
@@ -8027,9 +8036,9 @@ async def _client_data(
     wd_total   = _working_days_between(full_start, full_end)
     wd_elapsed = _working_days_between(full_start, min(today_iso, full_end))
     result.setdefault("summary", {}).update({
-        "targetHours":         round(target_prorated, 1),
-        "targetHoursFull":     round(target_full, 1),
-        "estHrsMonthly":       round(est_hrs_monthly, 1),
+        "targetHours":         round(target_prorated, 2),
+        "targetHoursFull":     round(target_full, 2),
+        "estHrsMonthly":       round(est_hrs_monthly, 2),
         "targetUtilPct":       target_util_pct,
         "targetStatus":        target_status,
         "periodKey":           period,

@@ -248,7 +248,7 @@ function DarkTooltip({ active, payload, label }) {
       <div style={{ fontWeight: 600, marginBottom: 6, color: C.sec }}>{label}</div>
       {payload.map((p, i) => (
         <div key={i} style={{ color: p.color, marginBottom: 2 }}>
-          {p.name}: <strong>{typeof p.value === "number" ? p.value.toFixed(1) : p.value}</strong>
+          {p.name}: <strong>{typeof p.value === "number" ? p.value.toFixed(2) : p.value}</strong>
         </div>
       ))}
     </div>
@@ -428,11 +428,11 @@ function StaffTable({ staff, onRowClick }) {
                     <span style={{ fontWeight: 500 }}>{s.staff}</span>
                   </div>
                 </td>
-                <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace" }}>{(s.committed ?? 0).toFixed(1)}</td>
-                <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.teal }}>{(s.billable ?? 0).toFixed(1)}</td>
-                <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.orange }}>{(s.nonBillable ?? 0).toFixed(1)}</td>
+                <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace" }}>{(s.committed ?? 0).toFixed(2)}</td>
+                <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.teal }}>{(s.billable ?? 0).toFixed(2)}</td>
+                <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.orange }}>{(s.nonBillable ?? 0).toFixed(2)}</td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: gap >= 0 ? C.green : C.red }}>
-                  {gap >= 0 ? "+" : ""}{gap.toFixed(1)}
+                  {gap >= 0 ? "+" : ""}{gap.toFixed(2)}
                 </td>
                 <td style={{ ...td, textAlign: "center" }}>
                   <span
@@ -457,9 +457,9 @@ function StaffTable({ staff, onRowClick }) {
         <tfoot>
           <tr style={{ background: C.card, fontWeight: 700 }}>
             <td style={{ ...td, color: C.sec, borderTop: `2px solid ${C.border}` }}>TOTALS</td>
-            <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", borderTop: `2px solid ${C.border}` }}>{totals.committed.toFixed(1)}</td>
-            <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.teal, borderTop: `2px solid ${C.border}` }}>{totals.billable.toFixed(1)}</td>
-            <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.orange, borderTop: `2px solid ${C.border}` }}>{totals.nonBillable.toFixed(1)}</td>
+            <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", borderTop: `2px solid ${C.border}` }}>{totals.committed.toFixed(2)}</td>
+            <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.teal, borderTop: `2px solid ${C.border}` }}>{totals.billable.toFixed(2)}</td>
+            <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.orange, borderTop: `2px solid ${C.border}` }}>{totals.nonBillable.toFixed(2)}</td>
             <td style={{ ...td, borderTop: `2px solid ${C.border}` }} colSpan={2} />
           </tr>
         </tfoot>
@@ -550,9 +550,9 @@ function ProjectDetailModal({ project, clientName, onClose }) {
               📊 {project.projectName}
             </h2>
             <div style={{ fontSize: 12, color: "rgba(255,255,255,0.78)", marginTop: 6, fontFamily: "'DM Mono', monospace" }}>
-              <span style={{ color: "#FFFFFF", fontWeight: 600 }}>{(project.hours ?? 0).toFixed(1)}h total</span> ·{" "}
-              <span style={{ color: _PROJ_GREEN }}>{(project.billableHours ?? 0).toFixed(1)}h billable</span> ·{" "}
-              <span style={{ color: "#F2895A" }}>{(project.nonBillableHours ?? 0).toFixed(1)}h non-bill</span> ·{" "}
+              <span style={{ color: "#FFFFFF", fontWeight: 600 }}>{(project.hours ?? 0).toFixed(2)}h total</span> ·{" "}
+              <span style={{ color: _PROJ_GREEN }}>{(project.billableHours ?? 0).toFixed(2)}h billable</span> ·{" "}
+              <span style={{ color: "#F2895A" }}>{(project.nonBillableHours ?? 0).toFixed(2)}h non-bill</span> ·{" "}
               {entries.length} entries · {project.uniqueEmployeesCount ?? 0} employee{(project.uniqueEmployeesCount ?? 0) === 1 ? "" : "s"}
             </div>
           </div>
@@ -739,7 +739,7 @@ function ProjectsBreakdownChart({ projects, clientName, loading }) {
         )}
       </div>
       <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", fontStyle: "italic", marginBottom: 12 }}>
-        Click any bar to see every timesheet entry under that project (the modal always shows billable + non-billable rows). Color bands are vs. project average ({avgHours.toFixed(1)}h) in this view.
+        Click any bar to see every timesheet entry under that project (the modal always shows billable + non-billable rows). Color bands are vs. project average ({avgHours.toFixed(2)}h) in this view.
       </div>
 
       {/* Color-band legend */}
@@ -760,15 +760,15 @@ function ProjectsBreakdownChart({ projects, clientName, loading }) {
         >
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ width: 14, height: 14, background: _PROJ_RED, borderRadius: 3, flexShrink: 0 }} />
-            <span>Below average · &lt; {redT.toFixed(1)}h</span>
+            <span>Below average · &lt; {redT.toFixed(2)}h</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ width: 14, height: 14, background: _PROJ_YELLOW, borderRadius: 3, flexShrink: 0 }} />
-            <span>Average · {redT.toFixed(1)}h – {greenT.toFixed(1)}h</span>
+            <span>Average · {redT.toFixed(2)}h – {greenT.toFixed(2)}h</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ width: 14, height: 14, background: _PROJ_GREEN, borderRadius: 3, flexShrink: 0 }} />
-            <span>Above average · &gt; {greenT.toFixed(1)}h</span>
+            <span>Above average · &gt; {greenT.toFixed(2)}h</span>
           </div>
         </div>
       )}
@@ -828,7 +828,7 @@ function ProjectsBreakdownChart({ projects, clientName, loading }) {
               formatter={(value, _name, props) => {
                 const p = props.payload || {};
                 return [
-                  `${Number(value).toFixed(1)}h · ${(p.billableHours ?? 0).toFixed(1)}h bill / ${(p.nonBillableHours ?? 0).toFixed(1)}h non-bill · ${p.entriesCount ?? 0} entries`,
+                  `${Number(value).toFixed(2)}h · ${(p.billableHours ?? 0).toFixed(2)}h bill / ${(p.nonBillableHours ?? 0).toFixed(2)}h non-bill · ${p.entriesCount ?? 0} entries`,
                   viewMeta.title,
                 ];
               }}
@@ -856,7 +856,7 @@ function ProjectsBreakdownChart({ projects, clientName, loading }) {
               <LabelList
                 dataKey="displayValue"
                 position="top"
-                formatter={(v) => `${Number(v).toFixed(1)}h`}
+                formatter={(v) => `${Number(v).toFixed(2)}h`}
                 style={{ fill: "#FFFFFF", fontSize: 10, fontFamily: "'DM Mono', monospace" }}
               />
             </Bar>
@@ -876,7 +876,7 @@ function ProjectsBreakdownChart({ projects, clientName, loading }) {
             fontFamily: "'DM Mono', monospace",
           }}
         >
-          Showing {processed.length} project{processed.length === 1 ? "" : "s"} with {viewMeta.label.toLowerCase()} hours · {totalShown.toFixed(1)}h total
+          Showing {processed.length} project{processed.length === 1 ? "" : "s"} with {viewMeta.label.toLowerCase()} hours · {totalShown.toFixed(2)}h total
         </div>
       )}
       {/* Prominent TOTAL HOURS footer — sums the currently visible view (billable / non-billable / total). */}
@@ -912,7 +912,7 @@ function ProjectsBreakdownChart({ projects, clientName, loading }) {
               fontFamily: "'DM Mono', monospace",
             }}
           >
-            {totalShown.toFixed(1)}h
+            {totalShown.toFixed(2)}h
           </span>
         </div>
       )}
@@ -1047,8 +1047,8 @@ export default function ClientDashboard({ clientName, onBack, onContextUpdate, o
     });
     const utilRate = summary.overallEfficiency ?? 0;
     const targetCtx = summary.isProrated
-      ? `Target ${(summary.targetHours ?? 0).toFixed(1)}h (pro-rated · full month ${(summary.targetHoursFull ?? 0).toFixed(1)}h, day ${summary.workingDaysElapsed}/${summary.workingDaysTotal})`
-      : `Target ${(summary.targetHours ?? 0).toFixed(1)}h`;
+      ? `Target ${(summary.targetHours ?? 0).toFixed(2)}h (pro-rated · full month ${(summary.targetHoursFull ?? 0).toFixed(2)}h, day ${summary.workingDaysElapsed}/${summary.workingDaysTotal})`
+      : `Target ${(summary.targetHours ?? 0).toFixed(2)}h`;
     const ctx = `Client: ${clientName} — ${data.period ?? ""}
 Total: ${targetCtx} | Billable ${summary.totalBillable ?? 0}h | Non-Bill ${summary.totalNonBillable ?? 0}h | Util ${utilRate}%
 
@@ -1388,7 +1388,7 @@ ${Object.entries(staffObj).map(([name, v]) => {
               }}
               title={`Target pro-rated by working days elapsed (${summary.periodStart} → ${summary.periodEnd})`}
             >
-              Day {summary.workingDaysElapsed}/{summary.workingDaysTotal} · target {(summary.targetHours ?? 0).toFixed(1)}h / {(summary.targetHoursFull ?? 0).toFixed(1)}h full
+              Day {summary.workingDaysElapsed}/{summary.workingDaysTotal} · target {(summary.targetHours ?? 0).toFixed(2)}h / {(summary.targetHoursFull ?? 0).toFixed(2)}h full
             </div>
           )}
         </div>
@@ -1409,9 +1409,9 @@ ${Object.entries(staffObj).map(([name, v]) => {
               color={C.blue}
               sublabel={
                 summary.isProrated && summary.workingDaysTotal > 0
-                  ? `Day ${summary.workingDaysElapsed}/${summary.workingDaysTotal} · ${(summary.targetHoursFull ?? 0).toFixed(1)}h full`
+                  ? `Day ${summary.workingDaysElapsed}/${summary.workingDaysTotal} · ${(summary.targetHoursFull ?? 0).toFixed(2)}h full`
                   : (summary.targetHoursFull > 0 && summary.targetHoursFull !== summary.targetHours
-                      ? `${(summary.targetHoursFull ?? 0).toFixed(1)}h full`
+                      ? `${(summary.targetHoursFull ?? 0).toFixed(2)}h full`
                       : "pro-rated to today")
               }
               onClick={() => setKpiModal({ open: true, type: "total" })}
@@ -1712,35 +1712,35 @@ function _buildStaffModalProps(staff, { clientName, periodLabel, projects }) {
   const topProjects = Object.entries(byProject)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 3)
-    .map(([n, v]) => `${n} (${v.toFixed(1)}h)`)
+    .map(([n, v]) => `${n} (${v.toFixed(2)}h)`)
     .join(", ");
   const topCodes = Object.entries(byCode)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 3)
-    .map(([n, v]) => `${n} (${v.toFixed(1)}h)`)
+    .map(([n, v]) => `${n} (${v.toFixed(2)}h)`)
     .join(", ");
   const sortedDates = Object.entries(byDate).sort((a, b) => b[1] - a[1]);
   const mostActive  = sortedDates[0];
   const leastActive = sortedDates[sortedDates.length - 1];
 
   const items = [
-    { name: "💰 Billable hours",        value: `${billable.toFixed(1)}h`,    color: "#10B981" },
-    { name: "📋 Non-Billable hours",    value: `${nonBillable.toFixed(1)}h`, color: "#F2895A" },
+    { name: "💰 Billable hours",        value: `${billable.toFixed(2)}h`,    color: "#10B981" },
+    { name: "📋 Non-Billable hours",    value: `${nonBillable.toFixed(2)}h`, color: "#F2895A" },
     { name: "📊 Billable %",            value: `${billablePct.toFixed(1)}%`, color: "#10B981" },
     { name: "📅 Days active",           value: `${daysActive}`,              color: "#4A8FE7" },
-    { name: "⏱ Avg hours / active day", value: `${avgPerDay.toFixed(1)}h`,   color: "#4A8FE7" },
+    { name: "⏱ Avg hours / active day", value: `${avgPerDay.toFixed(2)}h`,   color: "#4A8FE7" },
   ];
   if (topProjects) items.push({ name: "🏆 Top projects",      value: topProjects, color: "#9B7EE8" });
   if (topCodes)    items.push({ name: "🔧 Top account codes", value: topCodes,    color: "#9B7EE8" });
-  if (mostActive)  items.push({ name: "🔥 Most active day",   value: `${mostActive[0]} (${mostActive[1].toFixed(1)}h)`, color: "#F0B947" });
+  if (mostActive)  items.push({ name: "🔥 Most active day",   value: `${mostActive[0]} (${mostActive[1].toFixed(2)}h)`, color: "#F0B947" });
   if (leastActive && leastActive[0] !== mostActive?.[0]) {
-    items.push({ name: "🌙 Least active day", value: `${leastActive[0]} (${leastActive[1].toFixed(1)}h)`, color: "#F0B947" });
+    items.push({ name: "🌙 Least active day", value: `${leastActive[0]} (${leastActive[1].toFixed(2)}h)`, color: "#F0B947" });
   }
 
   return {
     title:       `👤 ${staff.staff || staff.name || "Unknown"}`,
     subtitle:    `Hours summary on ${clientName} · ${periodLabel}`,
-    total:       `${total.toFixed(1)}h`,
+    total:       `${total.toFixed(2)}h`,
     accentColor: "#4A8FE7",
     items,
   };
@@ -1772,7 +1772,7 @@ function _buildMonthModalProps(point) {
   return {
     title:          `📅 ${point.month || ""}`,
     subtitle:       `Monthly hours summary`,
-    total:          `${total.toFixed(1)}h`,
+    total:          `${total.toFixed(2)}h`,
     accentColor:    "#9B7EE8",
     showPercentage: false,
     items,
@@ -1794,7 +1794,7 @@ function _buildClientKpiModalProps({ type, periodLabel, clientName, summary, sta
       return {
         title: "💰 Total Billable Breakdown",
         subtitle: `By project · ${clientName} · ${periodLabel}`,
-        total: `${(summary?.totalBillable ?? 0).toFixed(1)}h`,
+        total: `${(summary?.totalBillable ?? 0).toFixed(2)}h`,
         accentColor: C.teal,
         showPercentage: true,
         items,
@@ -1812,7 +1812,7 @@ function _buildClientKpiModalProps({ type, periodLabel, clientName, summary, sta
       return {
         title: "📋 Non-Billable Breakdown",
         subtitle: `By project · ${clientName} · ${periodLabel}`,
-        total: `${(summary?.totalNonBillable ?? 0).toFixed(1)}h`,
+        total: `${(summary?.totalNonBillable ?? 0).toFixed(2)}h`,
         accentColor: C.orange,
         showPercentage: true,
         items,
@@ -1830,7 +1830,7 @@ function _buildClientKpiModalProps({ type, periodLabel, clientName, summary, sta
       return {
         title: "👥 Staff Breakdown",
         subtitle: `${items.length} active · ${clientName} · ${periodLabel}`,
-        total: `${items.reduce((s, it) => s + it.value, 0).toFixed(1)}h`,
+        total: `${items.reduce((s, it) => s + it.value, 0).toFixed(2)}h`,
         accentColor: C.blue,
         showPercentage: true,
         items,
@@ -1851,7 +1851,7 @@ function _buildClientKpiModalProps({ type, periodLabel, clientName, summary, sta
       return {
         title: "📊 Total Hours Overview",
         subtitle: `${clientName} · ${periodLabel}`,
-        total: `${Number(totalHours || 0).toFixed(1)}h`,
+        total: `${Number(totalHours || 0).toFixed(2)}h`,
         accentColor: "#FFFFFF",
         showPercentage: true,
         items,

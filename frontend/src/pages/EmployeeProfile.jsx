@@ -72,7 +72,7 @@ function DarkTooltip({ active, payload, label }) {
       <div style={{ fontWeight: 600, marginBottom: 6, color: C.sec }}>{label}</div>
       {payload.map((p, i) => (
         <div key={i} style={{ color: p.color, marginBottom: 2 }}>
-          {p.name}: <strong>{typeof p.value === "number" ? p.value.toFixed(1) : p.value}</strong>
+          {p.name}: <strong>{typeof p.value === "number" ? p.value.toFixed(2) : p.value}</strong>
         </div>
       ))}
     </div>
@@ -243,10 +243,10 @@ function BreakdownModal({ open, type, data, onClose }) {
     byClient.set(client,  (byClient.get(client)  || 0) + h);
   }
   const projectList = [...byProject.entries()]
-    .map(([name, hours]) => ({ name, hours: Number(hours.toFixed(1)) }))
+    .map(([name, hours]) => ({ name, hours: Number(hours.toFixed(2)) }))
     .sort((a, b) => b.hours - a.hours);
   const clientList = [...byClient.entries()]
-    .map(([name, hours]) => ({ name, hours: Number(hours.toFixed(1)) }))
+    .map(([name, hours]) => ({ name, hours: Number(hours.toFixed(2)) }))
     .sort((a, b) => b.hours - a.hours);
 
   const sectionHeader = {
@@ -316,7 +316,7 @@ function BreakdownModal({ open, type, data, onClose }) {
                 fontFamily: "'DM Mono', monospace",
               }}
             >
-              {headerTotal.toFixed(1)}h total · {filtered.length} entr{filtered.length === 1 ? "y" : "ies"}
+              {headerTotal.toFixed(2)}h total · {filtered.length} entr{filtered.length === 1 ? "y" : "ies"}
             </div>
           </div>
           <button
@@ -454,7 +454,7 @@ function BreakdownModal({ open, type, data, onClose }) {
                         whiteSpace: "nowrap",
                       }}
                     >
-                      {Number(r.hours).toFixed(1)}h
+                      {Number(r.hours).toFixed(2)}h
                     </div>
                   </div>
                 ))}
@@ -505,9 +505,9 @@ function BillableVsNonBillableCard({ data, loading, onBarClick }) {
   }
 
   const chartData = [
-    { name: "Billable",     type: "billable",     hours: Number(billableHours.toFixed(1)), fill: _BILLABLE_GREEN },
-    { name: "Non-Billable", type: "non-billable", hours: Number(nonBillable.toFixed(1)),   fill: _NON_BILLABLE_ORANGE },
-    { name: "Internal",     type: "internal",     hours: Number(internalHours.toFixed(1)), fill: _INTERNAL_PURPLE },
+    { name: "Billable",     type: "billable",     hours: Number(billableHours.toFixed(2)), fill: _BILLABLE_GREEN },
+    { name: "Non-Billable", type: "non-billable", hours: Number(nonBillable.toFixed(2)),   fill: _NON_BILLABLE_ORANGE },
+    { name: "Internal",     type: "internal",     hours: Number(internalHours.toFixed(2)), fill: _INTERNAL_PURPLE },
   ];
 
   return (
@@ -530,7 +530,7 @@ function BillableVsNonBillableCard({ data, loading, onBarClick }) {
             fontFamily: "'DM Mono', monospace",
           }}
         >
-          {grandTotal.toFixed(1)}h total
+          {grandTotal.toFixed(2)}h total
         </div>
       </div>
 
@@ -567,7 +567,7 @@ function BillableVsNonBillableCard({ data, loading, onBarClick }) {
           <Tooltip
             cursor={{ fill: "rgba(255,255,255,0.04)" }}
             content={<DarkTooltip />}
-            formatter={(v, _name) => [`${Number(v).toFixed(1)}h`, ""]}
+            formatter={(v, _name) => [`${Number(v).toFixed(2)}h`, ""]}
           />
           <Bar
             dataKey="hours"
@@ -594,7 +594,7 @@ function BillableVsNonBillableCard({ data, loading, onBarClick }) {
             <LabelList
               dataKey="hours"
               position="top"
-              formatter={(v) => `${Number(v).toFixed(1)}h`}
+              formatter={(v) => `${Number(v).toFixed(2)}h`}
               style={{ fill: C.pri, fontSize: 12, fontWeight: 700, fontFamily: "'DM Mono', monospace" }}
             />
           </Bar>
@@ -671,7 +671,7 @@ function CategoryBarSection({ title, total, color, breakdown, onBarClick }) {
             fontFamily: "'DM Mono', monospace",
           }}
         >
-          {total.toFixed(1)}h
+          {total.toFixed(2)}h
         </span>
       </div>
       <ResponsiveContainer width="100%" height={Math.max(120, data.length * 36)}>
@@ -698,7 +698,7 @@ function CategoryBarSection({ title, total, color, breakdown, onBarClick }) {
           <Tooltip
             cursor={{ fill: "rgba(255,255,255,0.04)" }}
             content={<DarkTooltip />}
-            formatter={(v) => [`${Number(v).toFixed(1)}h`, title]}
+            formatter={(v) => [`${Number(v).toFixed(2)}h`, title]}
           />
           <Bar
             dataKey="hours"
@@ -715,7 +715,7 @@ function CategoryBarSection({ title, total, color, breakdown, onBarClick }) {
             <LabelList
               dataKey="hours"
               position="right"
-              formatter={(v) => `${Number(v).toFixed(1)}h`}
+              formatter={(v) => `${Number(v).toFixed(2)}h`}
               style={{ fill: C.sec, fontSize: 11, fontFamily: "'DM Mono', monospace" }}
             />
           </Bar>
@@ -800,7 +800,7 @@ function SimpleNonBillableCard({ data, loading, onCategoryClick }) {
             fontFamily: "'DM Mono', monospace",
           }}
         >
-          {nonBillable.toFixed(1)}h
+          {nonBillable.toFixed(2)}h
         </div>
       </div>
 
@@ -830,7 +830,7 @@ function BillableBreakdownChart({ data, loading, onBarClick }) {
       bucket[k] = (bucket[k] || 0) + (Number(e.hours) || 0);
     }
     return Object.entries(bucket)
-      .map(([client, hours]) => ({ client, hours: Number(hours.toFixed(1)) }))
+      .map(([client, hours]) => ({ client, hours: Number(hours.toFixed(2)) }))
       .filter((b) => b.hours > 0)
       .sort((a, b) => b.hours - a.hours);
   }, [data]);
@@ -883,7 +883,7 @@ function BillableBreakdownChart({ data, loading, onBarClick }) {
             fontFamily: "'DM Mono', monospace",
           }}
         >
-          Total: {totalBillable.toFixed(1)}h
+          Total: {totalBillable.toFixed(2)}h
         </div>
       </div>
       <div style={{ fontSize: 11, color: "rgba(255,255,255,0.55)", fontStyle: "italic", marginBottom: 12 }}>
@@ -928,7 +928,7 @@ function BillableBreakdownChart({ data, loading, onBarClick }) {
             }}
             labelStyle={{ color: "#FFFFFF", fontWeight: 800 }}
             itemStyle={{ color: "#FFFFFF" }}
-            formatter={(v) => [`${Number(v).toFixed(1)}h`, "Billable"]}
+            formatter={(v) => [`${Number(v).toFixed(2)}h`, "Billable"]}
           />
           <Bar
             dataKey="hours"
@@ -943,7 +943,7 @@ function BillableBreakdownChart({ data, loading, onBarClick }) {
             <LabelList
               dataKey="hours"
               position="right"
-              formatter={(v) => `${Number(v).toFixed(1)}h`}
+              formatter={(v) => `${Number(v).toFixed(2)}h`}
               style={{ fill: _BILLABLE_GREEN, fontSize: 11, fontWeight: 700, fontFamily: "'DM Mono', monospace" }}
             />
           </Bar>
@@ -978,7 +978,7 @@ function _buildBillableClientModalProps(clientName, data) {
   return {
     title:          `💰 ${clientName} · Billable`,
     subtitle:       `By project · ${data?.period || ""}`,
-    total:          `${total.toFixed(1)}h`,
+    total:          `${total.toFixed(2)}h`,
     accentColor:    _BILLABLE_GREEN,
     showPercentage: true,
     items,
@@ -1011,7 +1011,7 @@ function RecentWorkSection({ rows, loading, acctFilter, setAcctFilter, expandedR
       stats[code] = entry;
     }
     return Object.values(stats)
-      .map((s) => ({ ...s, hours: Number(s.hours.toFixed(1)) }))
+      .map((s) => ({ ...s, hours: Number(s.hours.toFixed(2)) }))
       .sort((a, b) => b.hours - a.hours);
   }, [list]);
   const filtered = useMemo(() => {
@@ -1055,11 +1055,11 @@ function RecentWorkSection({ rows, loading, acctFilter, setAcctFilter, expandedR
               }}
             >
               <option value="all" style={{ background: "#0F1F3A", color: "#FFFFFF" }}>
-                All ({list.length} entries · {totalHours.toFixed(1)}h)
+                All ({list.length} entries · {totalHours.toFixed(2)}h)
               </option>
               {acctOptions.map((opt) => (
                 <option key={opt.code} value={opt.code} style={{ background: "#0F1F3A", color: "#FFFFFF" }}>
-                  {opt.code} · {opt.hours.toFixed(1)}h
+                  {opt.code} · {opt.hours.toFixed(2)}h
                 </option>
               ))}
             </select>
@@ -1227,7 +1227,7 @@ function RecentWorkSection({ rows, loading, acctFilter, setAcctFilter, expandedR
                 fontFamily: "'DM Mono', monospace",
               }}
             >
-              {filteredTotal.toFixed(1)}h
+              {filteredTotal.toFixed(2)}h
             </span>
           </div>
         );
@@ -1236,8 +1236,20 @@ function RecentWorkSection({ rows, loading, acctFilter, setAcctFilter, expandedR
   );
 }
 
-export default function EmployeeProfile({ teamId, teamName, employeeName, onBack, onContextUpdate }) {
+export default function EmployeeProfile({ teamId, teamName, employeeName, onBack, onContextUpdate, onSwitchEmployee }) {
   const [period, setPeriod] = useState("monthly");
+  // Team roster for the "Switch User" dropdown — same source as the Team
+  // Members table (leaderboard), so every roster member is selectable even
+  // with zero hours. Fetched once per team (monthly window).
+  const [teamMembers, setTeamMembers] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    authFetch(`/api/team/${teamId}/leaderboard/monthly`)
+      .then((r) => r.json())
+      .then((d) => { if (!cancelled) setTeamMembers(Array.isArray(d?.members) ? d.members : []); })
+      .catch(() => { if (!cancelled) setTeamMembers([]); });
+    return () => { cancelled = true; };
+  }, [teamId]);
   const [customRange, setCustomRange]   = useState(_defaultCustomRange);
   const [pendingCustom, setPendingCustom] = useState(_defaultCustomRange);
   const [data, setData] = useState(null);
@@ -1344,6 +1356,48 @@ ${lines.join("\n")}`;
         >
           ← Back
         </button>
+
+        {/* Switch User — jump to another team member without going back to the
+            team view. Lists every roster member (zero-hour ones included),
+            with their monthly hours. No router here, so this re-renders the
+            profile via onSwitchEmployee → App setView. */}
+        {Array.isArray(teamMembers) && teamMembers.length > 0 && onSwitchEmployee && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.8 }}>
+              👤 Switch
+            </span>
+            <select
+              value={name}
+              onChange={(e) => { if (e.target.value && e.target.value !== name) onSwitchEmployee(e.target.value); }}
+              title="Switch team member"
+              style={{
+                background: C.card,
+                color: C.pri,
+                border: `1px solid ${C.border}`,
+                borderRadius: 8,
+                padding: "7px 12px",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: "pointer",
+                outline: "none",
+                maxWidth: 260,
+                fontFamily: "'DM Sans', sans-serif",
+              }}
+            >
+              {!teamMembers.some((m) => m.name === name) && (
+                <option value={name} style={{ background: C.card }}>{name}</option>
+              )}
+              {teamMembers.map((m) => (
+                <option key={m.name} value={m.name} style={{ background: C.card }}>
+                  {m.name}
+                  {(m.totalHours ?? 0) > 0
+                    ? ` · ${(m.totalHours ?? 0).toFixed(2)}h`
+                    : (m.hasActivity === false ? " · no activity" : "")}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1 }}>
           <div
@@ -1531,7 +1585,7 @@ ${lines.join("\n")}`;
               }}
               title={`Targets pro-rated by working days elapsed (${data.periodStart} → ${data.periodEnd})`}
             >
-              Day {data.workingDaysElapsed}/{data.workingDaysTotal} · target {(data.committedHours ?? 0).toFixed(1)}h / {(data.committedHoursFull ?? 0).toFixed(1)}h full
+              Day {data.workingDaysElapsed}/{data.workingDaysTotal} · target {(data.committedHours ?? 0).toFixed(2)}h / {(data.committedHoursFull ?? 0).toFixed(2)}h full
             </div>
           )}
         </div>
@@ -1677,7 +1731,7 @@ function _buildEmployeeKpiModalProps(type, data) {
       return {
         title:          "📊 Total Hours Overview",
         subtitle:       period,
-        total:          `${totalH.toFixed(1)}h`,
+        total:          `${totalH.toFixed(2)}h`,
         accentColor:    "#FFFFFF",
         showPercentage: true,
         items,
@@ -1698,7 +1752,7 @@ function _buildEmployeeKpiModalProps(type, data) {
       return {
         title:          "💰 Billable Breakdown",
         subtitle:       `By client · ${period}`,
-        total:          `${billH.toFixed(1)}h`,
+        total:          `${billH.toFixed(2)}h`,
         accentColor:    _BILLABLE_GREEN,
         showPercentage: true,
         items,
@@ -1719,7 +1773,7 @@ function _buildEmployeeKpiModalProps(type, data) {
       return {
         title:          "📋 Non-Billable Breakdown",
         subtitle:       `By client (excludes Internal) · ${period}`,
-        total:          `${nbH.toFixed(1)}h`,
+        total:          `${nbH.toFixed(2)}h`,
         accentColor:    _NON_BILLABLE_ORANGE,
         showPercentage: true,
         items,
@@ -1760,7 +1814,7 @@ function _buildEmployeeKpiModalProps(type, data) {
       return {
         title:          "🏢 Internal Hours Breakdown",
         subtitle:       `SNMP / Breaks / Admin / Training · ${period}`,
-        total:          `${intH.toFixed(1)}h`,
+        total:          `${intH.toFixed(2)}h`,
         accentColor:    _INTERNAL_PURPLE,
         showPercentage: true,
         items,

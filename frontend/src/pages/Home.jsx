@@ -401,7 +401,7 @@ function ClientCard({ client, onClick }) {
             fontFamily: "'DM Mono', monospace",
           }}
         >
-          {(client.totalHours ?? 0).toFixed(1)}h
+          {(client.totalHours ?? 0).toFixed(2)}h
         </span>
         <span style={{ fontSize: 11, color: C.muted }}>total hours</span>
       </div>

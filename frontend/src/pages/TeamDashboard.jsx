@@ -260,7 +260,7 @@ function DarkTooltip({ active, payload, label }) {
       <div style={{ fontWeight: 600, marginBottom: 6, color: C.sec }}>{label}</div>
       {payload.map((p, i) => (
         <div key={i} style={{ color: p.color, marginBottom: 2 }}>
-          {p.name}: <strong>{typeof p.value === "number" ? p.value.toFixed(1) : p.value}</strong>
+          {p.name}: <strong>{typeof p.value === "number" ? p.value.toFixed(2) : p.value}</strong>
         </div>
       ))}
     </div>
@@ -592,12 +592,12 @@ function PerfTable({ orgs, onRowClick }) {
                   </div>
                 </td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: committed > 0 ? (gap >= 0 ? C.green : C.red) : C.muted }}>
-                  {committed > 0 ? `${gap >= 0 ? "+" : ""}${gap.toFixed(1)}` : "—"}
+                  {committed > 0 ? `${gap >= 0 ? "+" : ""}${gap.toFixed(2)}` : "—"}
                 </td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: committed > 0 ? C.blue : C.muted }}>
-                  {committed > 0 ? committed.toFixed(1) : "—"}
+                  {committed > 0 ? committed.toFixed(2) : "—"}
                 </td>
-                <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.teal }}>{(o.billable ?? 0).toFixed(1)}</td>
+                <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.teal }}>{(o.billable ?? 0).toFixed(2)}</td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: delayColor(delays), fontWeight: 600 }}>{delays}</td>
                 <td style={{ ...td, textAlign: "center", fontSize: 11, color: C.sec, fontFamily: "'DM Mono', monospace" }}>
                   {o.timezone || "—"}
@@ -629,8 +629,8 @@ function PerfTable({ orgs, onRowClick }) {
           <tr style={{ background: C.card, fontWeight: 700 }}>
             <td style={{ ...td, color: C.sec, borderTop: `2px solid ${C.border}` }}>TOTALS</td>
             <td style={{ ...td, borderTop: `2px solid ${C.border}` }} />
-            <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.blue, borderTop: `2px solid ${C.border}` }}>{totals.committed.toFixed(1)}</td>
-            <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.teal, borderTop: `2px solid ${C.border}` }}>{totals.billable.toFixed(1)}</td>
+            <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.blue, borderTop: `2px solid ${C.border}` }}>{totals.committed.toFixed(2)}</td>
+            <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.teal, borderTop: `2px solid ${C.border}` }}>{totals.billable.toFixed(2)}</td>
             <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.orange, borderTop: `2px solid ${C.border}` }}>{totals.delays}</td>
             <td style={{ ...td, borderTop: `2px solid ${C.border}` }} colSpan={3} />
           </tr>
@@ -670,7 +670,7 @@ function PerfTable({ orgs, onRowClick }) {
             fontFamily: "'DM Mono', monospace",
           }}
         >
-          {totals.billable.toFixed(1)}h
+          {totals.billable.toFixed(2)}h
         </span>
       </div>
 
@@ -805,7 +805,7 @@ function BillableNonBillableByClient({ clients, periodLabel, loading, onBarClick
               }}
               labelStyle={{ color: "#FFFFFF", fontWeight: 800, marginBottom: 6 }}
               itemStyle={{ color: "#FFFFFF", fontWeight: 600 }}
-              formatter={(v) => [`${Number(v).toFixed(1)}h`, ""]}
+              formatter={(v) => [`${Number(v).toFixed(2)}h`, ""]}
             />
             <Legend
               wrapperStyle={{ color: "#FFFFFF", fontWeight: 700, fontSize: 12, paddingTop: 10 }}
@@ -823,7 +823,7 @@ function BillableNonBillableByClient({ clients, periodLabel, loading, onBarClick
               <LabelList
                 dataKey="Billable"
                 position="top"
-                formatter={(v) => (v > 0 ? `${Number(v).toFixed(1)}h` : "")}
+                formatter={(v) => (v > 0 ? `${Number(v).toFixed(2)}h` : "")}
                 style={{ fill: "#10B981", fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono', monospace" }}
               />
             </Bar>
@@ -839,7 +839,7 @@ function BillableNonBillableByClient({ clients, periodLabel, loading, onBarClick
               <LabelList
                 dataKey="Non-Billable"
                 position="top"
-                formatter={(v) => (v > 0 ? `${Number(v).toFixed(1)}h` : "")}
+                formatter={(v) => (v > 0 ? `${Number(v).toFixed(2)}h` : "")}
                 style={{ fill: "#F2895A", fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono', monospace" }}
               />
             </Bar>
@@ -883,7 +883,7 @@ function MembersList({ members, emptyText = "No staff detected." }) {
       }}
     >
       <span>{m.name}</span>
-      <span style={{ color: C.sec }}>{(m.hours ?? 0).toFixed(1)}h</span>
+      <span style={{ color: C.sec }}>{(m.hours ?? 0).toFixed(2)}h</span>
     </div>
   ));
 }
@@ -974,7 +974,7 @@ function DepartmentAccordion({ dept, teamId }) {
           {open ? "▾ " : "▸ "}{dept.department}
         </span>
         <span style={{ color: C.muted, fontSize: 11 }}>
-          {dept.member_count} member{dept.member_count === 1 ? "" : "s"} · {(dept.total_hours ?? 0).toFixed(1)}h
+          {dept.member_count} member{dept.member_count === 1 ? "" : "s"} · {(dept.total_hours ?? 0).toFixed(2)}h
         </span>
       </button>
       {open && (
@@ -1444,7 +1444,7 @@ ${clients.map((o) => (
       .sort((a, b) => (b.total ?? 0) - (a.total ?? 0))
       .map((o) => ({
         name:  o.name,
-        Hours: Number((o.total ?? 0).toFixed(1)),
+        Hours: Number((o.total ?? 0).toFixed(2)),
         _org:  o,
       })),
     [chartClients]
@@ -2136,7 +2136,7 @@ function _buildKpiModalProps({ type, periodLabel, clients, summary, allEntries, 
       return {
         title: "📊 Organizations",
         subtitle: `${items.length} active · ${periodLabel}`,
-        total: `${sum.toFixed(1)}h`,
+        total: `${sum.toFixed(2)}h`,
         accentColor: C.blue,
         showPercentage: true,
         items,
@@ -2151,7 +2151,7 @@ function _buildKpiModalProps({ type, periodLabel, clients, summary, allEntries, 
       return {
         title: "💰 Total Billable Breakdown",
         subtitle: `By organization · ${periodLabel}`,
-        total: `${(summary?.totalBillable ?? 0).toFixed(1)}h`,
+        total: `${(summary?.totalBillable ?? 0).toFixed(2)}h`,
         accentColor: C.teal,
         showPercentage: true,
         items,
@@ -2166,7 +2166,7 @@ function _buildKpiModalProps({ type, periodLabel, clients, summary, allEntries, 
       return {
         title: "📋 Non-Billable Breakdown",
         subtitle: `By organization (excludes Internal) · ${periodLabel}`,
-        total: `${(summary?.totalNonBillable ?? 0).toFixed(1)}h`,
+        total: `${(summary?.totalNonBillable ?? 0).toFixed(2)}h`,
         accentColor: C.orange,
         showPercentage: true,
         items,
@@ -2189,7 +2189,7 @@ function _buildKpiModalProps({ type, periodLabel, clients, summary, allEntries, 
       return {
         title: "🏢 Internal Hours Breakdown",
         subtitle: `SNMP / Breaks / Admin / Training · ${periodLabel}`,
-        total: `${(summary?.totalInternal ?? 0).toFixed(1)}h`,
+        total: `${(summary?.totalInternal ?? 0).toFixed(2)}h`,
         accentColor: C.purple,
         showPercentage: true,
         items,
@@ -2205,7 +2205,7 @@ function _buildKpiModalProps({ type, periodLabel, clients, summary, allEntries, 
       return {
         title: "📊 Total Hours Overview",
         subtitle: `All activity · ${periodLabel}`,
-        total: `${Number(totalHours || 0).toFixed(1)}h`,
+        total: `${Number(totalHours || 0).toFixed(2)}h`,
         accentColor: "#FFFFFF",
         showPercentage: true,
         items,
@@ -2282,7 +2282,7 @@ function UnderutilizedWidget({ members, onSelect }) {
             <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 1 }}>
               <span style={{ fontSize: 12, fontWeight: 600 }}>{m.name}</span>
               <span style={{ fontSize: 10, color: C.teal, fontFamily: "'DM Mono', monospace" }}>
-                {(m.billable ?? 0).toFixed(1)}h billable
+                {(m.billable ?? 0).toFixed(2)}h billable
                 {m.trend === "up"   && <span style={{ marginLeft: 6, color: C.green }}>▲</span>}
                 {m.trend === "down" && <span style={{ marginLeft: 6, color: C.red }}>▼</span>}
                 {m.trend === "flat" && <span style={{ marginLeft: 6, color: C.muted }}>–</span>}
@@ -2489,7 +2489,7 @@ function UserSelectorDropdown({ members, onSelect }) {
         {sorted.map((m) => (
           <option key={m.name} value={m.name}>
             {m.name}
-            {typeof m.billable === "number" ? ` (${m.billable.toFixed(1)}h billable)` : ""}
+            {typeof m.billable === "number" ? ` (${m.billable.toFixed(2)}h billable)` : ""}
           </option>
         ))}
       </select>
@@ -2634,13 +2634,13 @@ function TeamMembersTable({ members, onSelect }) {
                       </div>
                     </td>
                     <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace" }}>
-                      {(m.totalHours ?? 0).toFixed(1)}
+                      {(m.totalHours ?? 0).toFixed(2)}
                     </td>
                     <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.teal }}>
-                      {(m.billable ?? 0).toFixed(1)}
+                      {(m.billable ?? 0).toFixed(2)}
                     </td>
                     <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.blue }}>
-                      {(m.committed ?? 0) > 0 ? (m.committed ?? 0).toFixed(1) : "—"}
+                      {(m.committed ?? 0) > 0 ? (m.committed ?? 0).toFixed(2) : "—"}
                     </td>
                     <td
                       style={{ ...td, fontSize: 12 }}

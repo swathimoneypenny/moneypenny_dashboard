@@ -99,7 +99,7 @@ export default function BarDetailModal({
               📊 {title}
             </h2>
             <div style={{ fontSize: 12, color: "rgba(255,255,255,0.7)", marginTop: 6, fontFamily: "'DM Mono', monospace", fontWeight: 600 }}>
-              {subtitle ? `${subtitle} · ` : ""}{computedTotal.toFixed(1)}h total · {sorted.length} {sorted.length === 1 ? "entry" : "entries"}
+              {subtitle ? `${subtitle} · ` : ""}{computedTotal.toFixed(2)}h total · {sorted.length} {sorted.length === 1 ? "entry" : "entries"}
             </div>
           </div>
           <button
@@ -116,9 +116,9 @@ export default function BarDetailModal({
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
-          <StatBox label="Total Hours"   value={`${computedTotal.toFixed(1)}h`} color="#FFFFFF" />
-          <StatBox label="Billable"      value={`${billableTotal.toFixed(1)}h`} color="#10B981" />
-          <StatBox label="Non-Billable"  value={`${nonBillTotal.toFixed(1)}h`}  color="#F2895A" />
+          <StatBox label="Total Hours"   value={`${computedTotal.toFixed(2)}h`} color="#FFFFFF" />
+          <StatBox label="Billable"      value={`${billableTotal.toFixed(2)}h`} color="#10B981" />
+          <StatBox label="Non-Billable"  value={`${nonBillTotal.toFixed(2)}h`}  color="#F2895A" />
         </div>
 
         <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
@@ -258,7 +258,7 @@ function BreakdownBox({ title, items, accentColor }) {
             {it.name}
           </span>
           <span style={{ color: accentColor || "#FFFFFF", fontSize: 11, fontWeight: 700, fontFamily: "'DM Mono', monospace", whiteSpace: "nowrap" }}>
-            {it.hours.toFixed(1)}h
+            {it.hours.toFixed(2)}h
           </span>
         </div>
       ))}
