@@ -31,6 +31,7 @@ load_dotenv()
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    _log_team_rosters()
     # Schedule warmup but don't block startup
     asyncio.create_task(_run_warmup_background())
     yield
@@ -269,8 +270,12 @@ TEAM_ROSTERS: dict[str, list[str]] = {
     "team_l": ["nasreen", "krishna", "swathi", "sarika", "razia"],
     "team_m": ["pavithra", "bhuva", "Reshma Lakshmanaboopathi"],
     "team_n": ["vino", "shivani", "snega"],
+    # TL update 2026-06-17: removed Irfhana Fathima ("fathima"); added Swetha
+    # Subramaniyan + Shiyamala Saravanan. "shiyamala saravanan" replaces the
+    # prior "shiyamala devi" (same person, corrected surname). "swetha sub" is
+    # specific enough to win the longest-keyword tiebreak over Team D's "swetha s".
     "team_t": ["pragathi", "reshma hameeth", "prithvi b", "akshaya manojkumar",
-               "fathima", "naveena", "dharani p", "shiyamala devi"],
+               "naveena", "dharani p", "shiyamala saravanan", "swetha sub"],
 }
 
 # Startup warning — Team T preparers haven't been provided by management yet.
@@ -281,6 +286,32 @@ if len(TEAM_ROSTERS.get("team_t", [])) <= 1:
     print(f"[WARN] team_t roster has only {len(TEAM_ROSTERS['team_t'])} "
           f"member(s) configured ({TEAM_ROSTERS['team_t']}). Add Team T preparers "
           f"to TEAM_ROSTERS when available.")
+
+
+# Expected roster sizes per TL feedback — diagnostic only. A mismatch is logged
+# at startup so we can spot teams whose live timesheet/hierarchy count diverges
+# from what the TL confirmed. (UI member counts come from live data, not these
+# lists, so editing TEAM_ROSTERS alone won't force a count — see _team_member_count.)
+TEAM_EXPECTED_COUNTS: dict[str, int] = {
+    "team_k": 5,  # per TL Karthika — currently shows 9; needs correct names from user
+    "team_j": 4,  # per TL — currently shows 6; needs correct names from user
+}
+
+
+def _log_team_rosters() -> None:
+    """Print every team's configured roster + size on startup, flagging any team
+    whose configured size diverges from TEAM_EXPECTED_COUNTS (TL feedback)."""
+    print("=" * 60)
+    print("TEAM ROSTERS (configured keyword filters — verify with TLs)")
+    print("=" * 60)
+    for team_id in sorted(TEAM_ROSTERS.keys()):
+        roster = TEAM_ROSTERS[team_id]
+        expected = TEAM_EXPECTED_COUNTS.get(team_id)
+        flag = ""
+        if expected is not None and len(roster) != expected:
+            flag = f"  ⚠ expected {expected} per TL — REVIEW"
+        print(f"{team_id}: {len(roster)} entries - {roster}{flag}")
+    print("=" * 60)
 
 
 # Customer/project names that should always be treated as internal work,
@@ -4132,7 +4163,10 @@ def iter_rows(data) -> list[dict]:
 # ── Team membership / department mapping ─────────────────────────
 # Legacy hardcoded data — kept only for the chatbot context strings.
 TEAM_MEMBERS: dict[str, list[str]] = {
-    "team_m": ["pavithira", "bhuvaneswari", "reshma"],
+    # Pavithra Vinayagamoorthy is the TL — listed first. Roster matching for the
+    # UI/API uses TEAM_ROSTERS (where "pavithra" already matches her); this dict
+    # only feeds chatbot context strings.
+    "team_m": ["Pavithra Vinayagamoorthy", "Reshma Lakshmanaboopathi", "Bhuvaneswari Balaji"],
 }
 
 TEAM_DEPT_MAP: dict[str, str] = {
