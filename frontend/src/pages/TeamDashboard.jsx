@@ -2542,7 +2542,7 @@ function TeamMembersTable({ members, onSelect }) {
   const lowUtilSet = new Set();
   if (sorted.length > 0) {
     [...sorted]
-      .filter((m) => (m.utilPct ?? 0) < 75)
+      .filter((m) => m.hasActivity !== false && (m.utilPct ?? 0) < 75)
       .sort((a, b) => (a.utilPct ?? 0) - (b.utilPct ?? 0))
       .slice(0, 3)
       .forEach((m) => lowUtilSet.add(m.name));
@@ -2584,6 +2584,7 @@ function TeamMembersTable({ members, onSelect }) {
               {sorted.map((m, i) => {
                 const util = m.utilPct ?? 0;
                 const st = statusInfo(util);
+                const inactive = m.hasActivity === false;
                 const baseBg = i % 2 === 0 ? "transparent" : C.surface;
                 const isLow = lowUtilSet.has(m.name);
                 const lastDotColor = m.activeNow ? "#3DC58B" : C.muted;
@@ -2599,6 +2600,8 @@ function TeamMembersTable({ members, onSelect }) {
                       cursor: "pointer",
                       transition: "background 0.12s",
                       borderLeft: isLow ? `3px solid ${C.red}` : "3px solid transparent",
+                      opacity: inactive ? 0.55 : 1,
+                      fontStyle: inactive ? "italic" : "normal",
                     }}
                     onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(61,142,240,0.06)"; }}
                     onMouseLeave={(e) => { e.currentTarget.style.background = baseBg; }}
@@ -2658,20 +2661,36 @@ function TeamMembersTable({ members, onSelect }) {
                       )}
                     </td>
                     <td style={{ ...td, textAlign: "center" }}>
-                      <span
-                        style={{
-                          fontSize: 9,
-                          fontWeight: 700,
-                          color: st.color,
-                          background: st.bg,
-                          padding: "3px 8px",
-                          borderRadius: 20,
-                          borderLeft: `3px solid ${st.color}`,
-                          letterSpacing: 0.5,
-                        }}
-                      >
-                        {st.label}
-                      </span>
+                      {inactive ? (
+                        <span
+                          style={{
+                            fontSize: 9,
+                            fontWeight: 700,
+                            color: "rgba(255,255,255,0.5)",
+                            background: "rgba(255,255,255,0.05)",
+                            padding: "3px 8px",
+                            borderRadius: 20,
+                            letterSpacing: 0.5,
+                          }}
+                        >
+                          NO ACTIVITY
+                        </span>
+                      ) : (
+                        <span
+                          style={{
+                            fontSize: 9,
+                            fontWeight: 700,
+                            color: st.color,
+                            background: st.bg,
+                            padding: "3px 8px",
+                            borderRadius: 20,
+                            borderLeft: `3px solid ${st.color}`,
+                            letterSpacing: 0.5,
+                          }}
+                        >
+                          {st.label}
+                        </span>
+                      )}
                     </td>
                   </tr>
                 );

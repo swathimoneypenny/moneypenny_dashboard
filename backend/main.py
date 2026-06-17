@@ -31,6 +31,7 @@ load_dotenv()
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    _deduplicate_rosters()
     _log_team_rosters()
     # Schedule warmup but don't block startup
     asyncio.create_task(_run_warmup_background())
@@ -263,10 +264,14 @@ TEAM_ROSTERS: dict[str, list[str]] = {
     "team_g": ["hema", "indra", "amala", "nidisha", "pechi"],
     "team_h": ["deepali", "yashika", "madu"],
     "team_i": ["radhika", "aparna s", "jeevitha", "sakthi s"],
-    "team_j": ["logeswari", "nisha m", "dhana", "sindhu", "monikaa"],
-    # Note: Janipriya's timesheet FULLNAME is "Janipriya Saravanan" (one word),
-    # not "Jani Priya" — kept both spellings so a future rename still matches.
-    "team_k": ["karthika", "akshaya devi", "keerthana", "jani priya", "janipriya", "rohitha", "abinaya"],
+    # TL-confirmed roster = 4 (2026-06-17). Dropped "monikaa" to match the count
+    # the TL gave. If Monika is still on the team, re-add her and update the TL count.
+    "team_j": ["logeswari", "nisha m", "dhana", "sindhu"],
+    # TL-confirmed roster = 5 (2026-06-17). Dropped "abinaya" and the redundant
+    # "jani priya" spelling. NOTE: Janipriya's timesheet FULLNAME is one word
+    # ("Janipriya Saravanan"), so the working keyword is "janipriya" — the
+    # two-token "jani priya" never actually matched her and was the safe one to cut.
+    "team_k": ["karthika", "akshaya devi", "keerthana", "janipriya", "rohitha"],
     "team_l": ["nasreen", "krishna", "swathi", "sarika", "razia"],
     "team_m": ["pavithra", "bhuva", "Reshma Lakshmanaboopathi"],
     "team_n": ["vino", "shivani", "snega"],
@@ -288,21 +293,40 @@ if len(TEAM_ROSTERS.get("team_t", [])) <= 1:
           f"to TEAM_ROSTERS when available.")
 
 
-# Expected roster sizes per TL feedback — diagnostic only. A mismatch is logged
-# at startup so we can spot teams whose live timesheet/hierarchy count diverges
-# from what the TL confirmed. (UI member counts come from live data, not these
-# lists, so editing TEAM_ROSTERS alone won't force a count — see _team_member_count.)
+# Expected roster sizes per TL feedback — startup self-check. Since the roster
+# is now the authoritative member count (see _team_member_count / list_teams),
+# any mismatch here means TEAM_ROSTERS drifted from what the TL confirmed.
 TEAM_EXPECTED_COUNTS: dict[str, int] = {
-    "team_k": 5,  # per TL Karthika — currently shows 9; needs correct names from user
-    "team_j": 4,  # per TL — currently shows 6; needs correct names from user
+    "team_k": 5,  # TL Karthika — confirmed 5 (2026-06-17)
+    "team_j": 4,  # TL — confirmed 4 (2026-06-17)
 }
+
+
+def _deduplicate_rosters() -> None:
+    """Remove EXACT duplicate keywords (case-insensitive, trimmed) from each
+    roster, preserving order. Deliberately does NOT collapse spacing — e.g.
+    "jani priya" and "janipriya" are kept distinct because only one of them
+    actually token-matches a given FULLNAME, and silently merging them can drop
+    the only working spelling. Near-duplicate spellings are resolved per-team."""
+    for team_id, roster in TEAM_ROSTERS.items():
+        seen: set = set()
+        unique: list[str] = []
+        for kw in roster:
+            norm = (kw or "").strip().lower()
+            if norm and norm not in seen:
+                seen.add(norm)
+                unique.append(kw)
+        if len(unique) != len(roster):
+            dropped = [k for k in roster if k not in unique]
+            print(f"[dedup] team {team_id}: removed exact-duplicate keyword(s) {dropped}")
+        TEAM_ROSTERS[team_id] = unique
 
 
 def _log_team_rosters() -> None:
     """Print every team's configured roster + size on startup, flagging any team
     whose configured size diverges from TEAM_EXPECTED_COUNTS (TL feedback)."""
     print("=" * 60)
-    print("TEAM ROSTERS (configured keyword filters — verify with TLs)")
+    print("TEAM ROSTERS — authoritative member counts (verify with TLs)")
     print("=" * 60)
     for team_id in sorted(TEAM_ROSTERS.keys()):
         roster = TEAM_ROSTERS[team_id]
@@ -310,7 +334,9 @@ def _log_team_rosters() -> None:
         flag = ""
         if expected is not None and len(roster) != expected:
             flag = f"  ⚠ expected {expected} per TL — REVIEW"
-        print(f"{team_id}: {len(roster)} entries - {roster}{flag}")
+        elif expected is not None:
+            flag = f"  ✓ matches TL count ({expected})"
+        print(f"{team_id}: {len(roster)} members - {roster}{flag}")
     print("=" * 60)
 
 
@@ -4408,14 +4434,20 @@ def list_teams():
     teams = discover_teams()
     out = []
     for t in teams:
-        lead_count = 1 if t.get("leadUserId") else 0
-        exec_count = max(0, t.get("memberCount", 0) - lead_count)
+        # Roster is the single source of truth for member counts. The roster
+        # already includes the TL keyword (kokila, karthika, pavithra, …), so
+        # execCount = roster size minus the one lead. Fall back to the Zoho
+        # hierarchy count only for teams with no roster configured.
+        roster_count = len(TEAM_ROSTERS.get(t["id"], []))
+        member_count = roster_count if roster_count else t.get("memberCount", 0)
+        lead_count = 1 if (t.get("leadUserId") or roster_count) else 0
+        exec_count = max(0, member_count - lead_count)
         out.append({
             "id":           t["id"],
             "label":        t["label"],
             "leadName":     t.get("leadName"),
             "leadFullName": t.get("leadFullName"),
-            "memberCount":  t.get("memberCount", 0),
+            "memberCount":  member_count,
             "leadCount":    lead_count,
             "execCount":    exec_count,
             "hasSheet":     bool(t.get("sheetId")),
@@ -4810,10 +4842,11 @@ async def _team_response(
         for k, v in sorted(monthly_buckets.items())
     ]
 
-    # Period-aware team-level target. Members come from the matched staff for
-    # this period — if zero (e.g. nobody logged hours today), fall back to the
-    # configured roster/admin count so the target isn't 0.
-    team_member_count = max(len(staff_names_found), _team_member_count(team_id), 1)
+    # Period-aware team-level target. The roster is the AUTHORITATIVE member
+    # count (single source of truth) — not the max of logged-staff / Zoho
+    # hierarchy / roster, which inflated counts with duplicates and ex-members.
+    # Only when a team has no roster configured do we fall back to the hierarchy.
+    team_member_count = len(roster) if roster else max(_team_member_count(team_id), 1)
     per_preparer_target      = org_per_preparer        # pro-rated; same value already computed above
     per_preparer_target_full = org_per_preparer_full   # full period target, for context
     team_target      = round(per_preparer_target      * team_member_count, 1)
@@ -6106,12 +6139,58 @@ def _build_leaderboard(
             "activeNow":        active_now,
         })
 
-    members.sort(key=lambda m: -m["utilPct"])
+    # Tag everyone built from timesheet rows as active.
+    for m in members:
+        m["hasActivity"] = (m.get("totalHours") or 0) > 0 or (m.get("billable") or 0) > 0
+
+    # ── Surface roster members who logged ZERO hours this period ──────────
+    # The table above is built only from timesheet rows, so a roster member who
+    # didn't bill any time (e.g. a TL like Pavithra who manages but doesn't log)
+    # would silently vanish. The roster is the source of truth — show everyone,
+    # flagged with hasActivity=False so the UI can grey them out / badge "NO
+    # ACTIVITY". Display names are resolved from the live user list when possible,
+    # falling back to a prettified keyword.
+    try:
+        all_users = _get_users_cached() or []
+    except Exception:
+        all_users = []
+    seen_names = {(m["name"] or "").strip().lower() for m in members}
+    for kw in roster:
+        if any(_kw_matches_name(kw, m["name"]) for m in members):
+            continue  # already represented by a logged member
+        display = next(
+            (u.get("FULLNAME", "").strip() for u in all_users
+             if (u.get("FULLNAME") or "").strip() and _kw_matches_name(kw, u.get("FULLNAME", ""))),
+            "",
+        ) or kw.title()
+        key = display.strip().lower()
+        if not key or key in seen_names:
+            continue
+        seen_names.add(key)
+        members.append({
+            "name":              display,
+            "billable":          0.0,
+            "committed":         round(committed, 1),
+            "utilPct":           0.0,
+            "totalHours":        0.0,
+            "trend":             "flat",
+            "lastLoggedAt":      "",
+            "lastLoggedClient":  "",
+            "lastLoggedProject": "",
+            "lastLoggedDesc":    "",
+            "lastLoggedHours":   0,
+            "activeNow":         False,
+            "hasActivity":       False,
+        })
+
+    # Active members first (ranked by utilPct), inactive roster members at the end.
+    members.sort(key=lambda m: (not m["hasActivity"], -m["utilPct"]))
     for i, m in enumerate(members):
         m["rank"] = i + 1
 
-    print(f"[teamMembers] team={team_id} rosterCount={len(roster)} foundEmployees={len(members)} "
-          f"names={[m['name'] for m in members]}")
+    inactive = sum(1 for m in members if not m["hasActivity"])
+    print(f"[teamMembers] team={team_id} rosterCount={len(roster)} members={len(members)} "
+          f"({inactive} no-activity) names={[m['name'] for m in members]}")
 
     return {
         "team_id":  team_id,
