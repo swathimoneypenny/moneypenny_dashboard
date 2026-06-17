@@ -273,7 +273,11 @@ TEAM_ROSTERS: dict[str, list[str]] = {
     # two-token "jani priya" never actually matched her and was the safe one to cut.
     "team_k": ["karthika", "akshaya devi", "keerthana", "janipriya", "rohitha"],
     "team_l": ["nasreen", "krishna", "swathi", "sarika", "razia"],
-    "team_m": ["pavithra", "bhuva", "Reshma Lakshmanaboopathi"],
+    # TL is "Vinayaga Moorthy, Pavithira" (first name Pavithira). Matching by the
+    # distinctive surname "vinayaga moorthy" — works for both "Vinayaga Moorthy,
+    # Pavithira" and "Pavithira Vinayaga Moorthy" orderings. NB the old "pavithra"
+    # keyword never matched her (her name is "Pavithira", not "Pavithra").
+    "team_m": ["vinayaga moorthy", "bhuva", "Reshma Lakshmanaboopathi"],
     "team_n": ["vino", "shivani", "snega"],
     # TL update 2026-06-17: removed Irfhana Fathima ("fathima"); added Swetha
     # Subramaniyan + Shiyamala Saravanan. "shiyamala saravanan" replaces the
@@ -4189,10 +4193,10 @@ def iter_rows(data) -> list[dict]:
 # ── Team membership / department mapping ─────────────────────────
 # Legacy hardcoded data — kept only for the chatbot context strings.
 TEAM_MEMBERS: dict[str, list[str]] = {
-    # Pavithra Vinayagamoorthy is the TL — listed first. Roster matching for the
-    # UI/API uses TEAM_ROSTERS (where "pavithra" already matches her); this dict
-    # only feeds chatbot context strings.
-    "team_m": ["Pavithra Vinayagamoorthy", "Reshma Lakshmanaboopathi", "Bhuvaneswari Balaji"],
+    # "Vinayaga Moorthy, Pavithira" is the TL — listed first. Roster matching for
+    # the UI/API uses TEAM_ROSTERS (keyword "vinayaga moorthy"); this dict only
+    # feeds chatbot context strings.
+    "team_m": ["Vinayaga Moorthy, Pavithira", "Reshma Lakshmanaboopathi", "Bhuvaneswari Balaji"],
 }
 
 TEAM_DEPT_MAP: dict[str, str] = {
@@ -4434,14 +4438,15 @@ def list_teams():
     teams = discover_teams()
     out = []
     for t in teams:
-        # Roster is the single source of truth for member counts. The roster
-        # already includes the TL keyword (kokila, karthika, pavithra, …), so
-        # execCount = roster size minus the one lead. Fall back to the Zoho
+        # Roster is the single source of truth for member counts. The Team
+        # Members table renders one row per roster member (TL included), so the
+        # Home "Executives" count must equal that roster size — NOT roster minus
+        # the lead, or it would disagree with the table. Fall back to the Zoho
         # hierarchy count only for teams with no roster configured.
         roster_count = len(TEAM_ROSTERS.get(t["id"], []))
         member_count = roster_count if roster_count else t.get("memberCount", 0)
         lead_count = 1 if (t.get("leadUserId") or roster_count) else 0
-        exec_count = max(0, member_count - lead_count)
+        exec_count = member_count
         out.append({
             "id":           t["id"],
             "label":        t["label"],
@@ -6197,6 +6202,11 @@ def _build_leaderboard(
         "team_name": team_label,
         "period":   label,
         "members":  members,
+        # Single source of truth: the count IS the length of the rendered list,
+        # so the "N members" / "N executives" badge can never disagree with the
+        # number of rows in the Team Members table.
+        "memberCount":    len(members),
+        "executiveCount": len(members),
     }
 
 

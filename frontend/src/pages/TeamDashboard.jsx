@@ -1488,6 +1488,10 @@ ${clients.map((o) => (
   const displayLabel = data?.teamLabel ?? data?.team ?? teamName ?? teamId;
   const displayLead  = data?.lead ?? data?.leadName ?? "";
   const rosterCount  = data?.rosterCount ?? 0;
+  // Member count = the actual number of rows in the Team Members table (the
+  // leaderboard members list), so the header badge can never disagree with the
+  // table. Falls back to rosterCount until the leaderboard finishes loading.
+  const memberCount  = Array.isArray(leaderboard?.members) ? leaderboard.members.length : rosterCount;
   const matchedRows  = data?.matchedRows ?? 0;
   const totalRows    = data?.totalRows ?? 0;
   const fromCache    = !!data?.fromCache;
@@ -1554,7 +1558,7 @@ ${clients.map((o) => (
             </div>
             {displayLead && (
               <div style={{ fontSize: 13, color: C.sec, marginTop: 2 }}>
-                Lead: {displayLead}{rosterCount > 0 ? ` · ${rosterCount} ${rosterCount === 1 ? "member" : "members"}` : ""}
+                Lead: {displayLead}{memberCount > 0 ? ` · ${memberCount} ${memberCount === 1 ? "member" : "members"}` : ""}
               </div>
             )}
           </div>
@@ -1774,7 +1778,7 @@ ${clients.map((o) => (
             }}
           >
             <span>
-              ✓ Filtered by team roster: <strong>{rosterCount}</strong> member{rosterCount === 1 ? "" : "s"}{" — "}
+              ✓ Filtered by team roster: <strong>{memberCount}</strong> member{memberCount === 1 ? "" : "s"}{" — "}
               Lead <strong>{displayLead || "Not set"}</strong>{" — "}
               <strong>{matchedRows}</strong> of {totalRows} timesheet rows matched
             </span>
