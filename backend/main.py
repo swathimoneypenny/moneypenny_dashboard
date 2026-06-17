@@ -258,7 +258,11 @@ TEAM_ROSTERS: dict[str, list[str]] = {
     "team_a": ["kokila", "uma", "jayashree r", "jayashree b"],
     "team_b": ["buela", "ivanjalin", "varshini", "pavithra s"],
     "team_c": ["grace", "mahalakshmi", "jeevtha s", "keerthana"],
-    "team_d": ["chandra", "yamini", "sharmila", "krithiga", "dharani s", "sandhiya", "sirisha", "swetha s"],
+    # Removed "sharmila" (Sharmila Rajkumar — Director, not a bookkeeping team
+    # member) and "swetha s" (Swetha Kadari — Training Management; note "swetha s"
+    # matched her because the "s" token prefix-matches the "swetha" name token).
+    # 2026-06-17 per TL. Re-add with a specific keyword if a real Team D Swetha exists.
+    "team_d": ["chandra", "yamini", "krithiga", "dharani s", "sandhiya", "sirisha"],
     "team_e": ["shaalini", "kaviya", "preethi"],
     "team_f": ["inbamozhi", "sarika"],
     "team_g": ["hema", "indra", "amala", "nidisha", "pechi"],
@@ -303,6 +307,7 @@ if len(TEAM_ROSTERS.get("team_t", [])) <= 1:
 TEAM_EXPECTED_COUNTS: dict[str, int] = {
     "team_k": 5,  # TL Karthika — confirmed 5 (2026-06-17)
     "team_j": 4,  # TL — confirmed 4 (2026-06-17)
+    "team_h": 3,  # TL — confirmed 3 executives (2026-06-17)
 }
 
 
@@ -368,6 +373,47 @@ UNCATEGORIZED_CLIENTS = [
 ]
 
 
+# ── Per-client FIXED monthly committed-hours overrides ───────────
+# Some clients have a contracted monthly commitment that is INDEPENDENT of how
+# many preparers happen to log time on them (the default org committed =
+# members × per-preparer target). Keys are normalized (lowercase) client names
+# matching the TEAM_CLIENTS "name" field. Value = full-month committed hours;
+# the org committed is pro-rated from this by working days (see
+# _client_committed_override). Add clients here as their TLs confirm fixed numbers.
+CLIENT_MONTHLY_COMMITTED: dict[str, float] = {
+    "jb advisory": 176,   # 22 working days × 8h — fixed, not member-scaled (2026-06-17)
+}
+
+
+def _client_committed_override(
+    client_name: str, full_start: str, full_end: str, today_iso: str
+) -> float | None:
+    """Pro-rated committed hours for a client with a FIXED monthly commitment,
+    or None if the client has no override. Pro-rates the full-month number by a
+    per-working-day rate (monthly / working-days-in-month) × working days
+    elapsed in the selected period window. So the full month always lands on the
+    configured number regardless of team size, and shorter periods scale down."""
+    monthly = CLIENT_MONTHLY_COMMITTED.get((client_name or "").strip().lower())
+    if monthly is None:
+        return None
+    try:
+        td = datetime.strptime(today_iso[:10], "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return float(monthly)
+    month_start = td.replace(day=1)
+    nxt = (month_start.replace(year=month_start.year + 1, month=1)
+           if month_start.month == 12
+           else month_start.replace(month=month_start.month + 1))
+    month_end = nxt - timedelta(days=1)
+    month_wd = _working_days_between(
+        month_start.strftime("%Y-%m-%d"), month_end.strftime("%Y-%m-%d")
+    )
+    if month_wd <= 0:
+        return float(monthly)
+    elapsed_wd = _working_days_between(full_start, min(today_iso, full_end))
+    return round(monthly / month_wd * elapsed_wd, 2)
+
+
 # ── Authoritative team → client mapping ──────────────────────────
 # Per-team list of clients. Used as the SOURCE OF TRUTH for which orgs appear
 # under each team. tsMatch = case-insensitive substring keywords against
@@ -409,7 +455,7 @@ TEAM_CLIENTS: dict[str, list[dict]] = {
         {"name": "Manzelli Consulting",  "tsMatch": ["Manzelli Consulting"],                   "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
     ],
     "team_h": [
-        {"name": "JB Advisory",          "tsMatch": ["JB Advisory"],                           "estHrs": 320, "tz": "MST", "meeting": "Every Tuesday and Thursday 5:30pm IST"},
+        {"name": "JB Advisory",          "tsMatch": ["JB Advisory"],                           "estHrs": 176, "tz": "MST", "meeting": "Every Tuesday and Thursday 5:30pm IST"},
     ],
     "team_i": [
         {"name": "Core 4",               "tsMatch": ["Core 4"],                                "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
@@ -4727,7 +4773,13 @@ async def _team_response(
             org_member_count = implied_members
         else:
             org_member_count = staff_count
-        committed = round(org_member_count * org_per_preparer, 2) if org_member_count > 0 else 0
+        # Fixed-commitment clients (e.g. JB Advisory @ 176h/mo) override the
+        # default members × per-preparer formula with a pro-rated fixed number.
+        override = _client_committed_override(org_name, full_start, full_end, today_iso)
+        if override is not None:
+            committed = override
+        else:
+            committed = round(org_member_count * org_per_preparer, 2) if org_member_count > 0 else 0
         util = round(actual / committed * 100, 1) if committed > 0 else 0
         gap  = round(actual - committed, 2) if committed > 0 else 0.0
         if committed > 0:
@@ -6669,6 +6721,10 @@ def _fetch_delays_csv(sheet_id: str, gid: str) -> str:
         _delays_csv_cache[key] = {"at": now, "csv": ""}
         return ""
     _delays_csv_cache[key] = {"at": now, "csv": csv_text}
+    # Debug: surface the exact sheet URL + row count so a "delay popup empty"
+    # report can be traced to fetch vs. parse vs. mapping.
+    print(f"[delaysTab] fetched gid={gid} url={url} bytes={len(csv_text)} "
+          f"lines={csv_text.count(chr(10)) + 1 if csv_text else 0}")
     return csv_text
 
 
