@@ -287,13 +287,13 @@ export default function DelayDetailModal({ day, teamId, clientName, onClose }) {
     return () => ctrl.abort();
   }, [day, teamId, clientName, dayDate]);
 
-  // Only render visible non-empty sections — but always show at least one
-  // "✓ No delays for X" row if filter matched at least one client.
+  // Only render client sections that actually have delays. When none do, return
+  // [] so the single consolidated "No questions or delays" empty state renders
+  // instead of a wall of per-client "✓ No delays for X" rows.
   const sections = useMemo(() => {
     const all = fetchState.data?.clients || [];
     if (!all.length) return [];
-    const withDelays = all.filter((s) => (s.delays || []).length > 0);
-    return withDelays.length > 0 ? withDelays : all;
+    return all.filter((s) => (s.delays || []).length > 0);
   }, [fetchState.data]);
 
   const totals = fetchState.data?.totals || { total: 0, open: 0, in_progress: 0, completed: 0 };

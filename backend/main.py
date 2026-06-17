@@ -1087,6 +1087,9 @@ _EOD_DATE_FORMATS = (
     "%m/%d/%Y",
     "%m/%d/%Y %H:%M:%S",
     "%m/%d/%y",                   # 5/14/26 — Google Sheets default
+    "%m.%d.%y",                   # 05.20.25 — dotted (JB Advisory Delays tab)
+    "%m.%d.%Y",                   # 05.20.2025 — dotted, 4-digit year
+    "%m.%d.%y %H:%M:%S",
     "%m/%d/%y %H:%M:%S",          # 5/14/26 00:00:00
     "%m-%d-%Y",
     "%m-%d-%y",
@@ -2212,6 +2215,16 @@ _DELAYS_PLACEHOLDER_TOKENS = (
     "no question to post",
     "no question posted",
 )
+
+# Exact-match placeholders for the QUESTION cell — rows whose question is one of
+# these (or shorter than 3 chars) are not real delays and are skipped. Kept as
+# an EXACT set (not substring) so a real question merely containing "no" or "na"
+# isn't filtered. Catches the "No Questions" rows TLs leave to keep row numbering.
+_QUESTION_PLACEHOLDER_EXACT = {
+    "no questions", "no question", "no questions posted", "no question posted",
+    "no query", "no queries", "no query to post", "no query posted",
+    "nil", "n/a", "na", "none", "no", "-", "--", "—",
+}
 
 # CSV cache keyed by (sheet_id, gid) — 5 min TTL per spec.
 _delays_csv_cache: dict[tuple[str, str], dict] = {}
@@ -4717,9 +4730,27 @@ async def _team_response(
             else:
                 total_internal_nb += h
         else:
-            # Resolve against TEAM_CLIENTS; non-matches go to "Internal / Other".
+            # Resolve against TEAM_CLIENTS. A non-internal customer that matches
+            # no configured client gets its OWN org bucket (created on the fly)
+            # rather than being buried in "Internal / Other" — otherwise teams
+            # whose TEAM_CLIENTS config is incomplete (e.g. Team E/F) show "No
+            # organization data" despite real billable client work. Empty-customer
+            # rows still fall through to Internal / Other.
             resolved = _resolve_client_for_team(team_id, customer, desc)
-            bucket   = orgs[resolved] if resolved else orgs["Internal / Other"]
+            if resolved:
+                bucket = orgs[resolved]
+            elif customer:
+                if customer not in orgs:
+                    orgs[customer] = {
+                        "billable": 0.0, "nonBillable": 0.0, "staff": set(),
+                        "estHrs": 0, "tz": "", "meeting": "No scheduled meeting",
+                        "tsMatch": [], "matchedCustomers": set(), "rowsMatched": 0,
+                        "isConfig": False, "entries": [],
+                    }
+                bucket = orgs[customer]
+                resolved = customer
+            else:
+                bucket = orgs["Internal / Other"]
 
         matched_rows += 1
         staff_names_found.add(fullname)
@@ -4808,7 +4839,10 @@ async def _team_response(
             "timezone":    h["tz"],
             "meeting":     h["meeting"],
             "isPlaceholder": h["isConfig"] and committed == 0 and actual == 0,
-            "isInternalOther": not h["isConfig"],
+            # Only the catch-all bucket is "Internal / Other"; dynamically-surfaced
+            # unmapped client customers (isConfig=False but real clients) must NOT
+            # be hidden by the frontend's isInternalOther filter.
+            "isInternalOther": org_name == "Internal / Other",
             "entries":     h["entries"],  # per-org drill-down rows
         })
         if h["isConfig"]:
@@ -6833,6 +6867,10 @@ def _parse_delays_csv_fixed(csv_text: str, client_name: str, tab_gid: str) -> li
         # Skip the header row (case-insensitive match on "question posted" or
         # similar) — it has a question column but it's the label, not data.
         if question.lower() in ("question posted", "question", "questions posted", "query posted"):
+            continue
+        # Skip "No Questions"/"N/A"/too-short placeholder questions — TLs leave
+        # these to preserve row numbering; they're not real delays.
+        if question.lower() in _QUESTION_PLACEHOLDER_EXACT or len(question) < 3:
             continue
         date_idx = DELAYS_TAB_COLUMNS["date"]
         date_val = (row[date_idx] if date_idx < len(row) else "").strip()
