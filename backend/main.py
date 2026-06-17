@@ -373,45 +373,10 @@ UNCATEGORIZED_CLIENTS = [
 ]
 
 
-# ── Per-client FIXED monthly committed-hours overrides ───────────
-# Some clients have a contracted monthly commitment that is INDEPENDENT of how
-# many preparers happen to log time on them (the default org committed =
-# members × per-preparer target). Keys are normalized (lowercase) client names
-# matching the TEAM_CLIENTS "name" field. Value = full-month committed hours;
-# the org committed is pro-rated from this by working days (see
-# _client_committed_override). Add clients here as their TLs confirm fixed numbers.
-CLIENT_MONTHLY_COMMITTED: dict[str, float] = {
-    "jb advisory": 176,   # 22 working days × 8h — fixed, not member-scaled (2026-06-17)
-}
-
-
-def _client_committed_override(
-    client_name: str, full_start: str, full_end: str, today_iso: str
-) -> float | None:
-    """Pro-rated committed hours for a client with a FIXED monthly commitment,
-    or None if the client has no override. Pro-rates the full-month number by a
-    per-working-day rate (monthly / working-days-in-month) × working days
-    elapsed in the selected period window. So the full month always lands on the
-    configured number regardless of team size, and shorter periods scale down."""
-    monthly = CLIENT_MONTHLY_COMMITTED.get((client_name or "").strip().lower())
-    if monthly is None:
-        return None
-    try:
-        td = datetime.strptime(today_iso[:10], "%Y-%m-%d")
-    except (ValueError, TypeError):
-        return float(monthly)
-    month_start = td.replace(day=1)
-    nxt = (month_start.replace(year=month_start.year + 1, month=1)
-           if month_start.month == 12
-           else month_start.replace(month=month_start.month + 1))
-    month_end = nxt - timedelta(days=1)
-    month_wd = _working_days_between(
-        month_start.strftime("%Y-%m-%d"), month_end.strftime("%Y-%m-%d")
-    )
-    if month_wd <= 0:
-        return float(monthly)
-    elapsed_wd = _working_days_between(full_start, min(today_iso, full_end))
-    return round(monthly / month_wd * elapsed_wd, 2)
+# Committed hours now come from each client's BOD/EOD "Committed Hours" column
+# (cumulative running total) — see _eod_committed_for_org. The old hardcoded
+# CLIENT_MONTHLY_COMMITTED override was removed 2026-06-17 in favour of that
+# authoritative per-client source.
 
 
 # ── Authoritative team → client mapping ──────────────────────────
@@ -4804,13 +4769,20 @@ async def _team_response(
             org_member_count = implied_members
         else:
             org_member_count = staff_count
-        # Fixed-commitment clients (e.g. JB Advisory @ 176h/mo) override the
-        # default members × per-preparer formula with a pro-rated fixed number.
-        override = _client_committed_override(org_name, full_start, full_end, today_iso)
-        if override is not None:
-            committed = override
+        # Committed hours come from the client's BOD/EOD "Committed Hours" column
+        # (authoritative, cumulative) when a BOD/EOD tab is configured + parseable.
+        # Falls back to the members × per-preparer formula otherwise (logged so
+        # missing BOD/EOD tabs can be added). Internal/Other never has a tab.
+        eod_committed_val = _eod_committed_for_org(
+            team_id, org_name, full_start, min(today_iso, full_end)
+        )
+        if eod_committed_val is not None:
+            committed = eod_committed_val
         else:
             committed = round(org_member_count * org_per_preparer, 2) if org_member_count > 0 else 0
+            if h["isConfig"] and org_name != "Internal / Other":
+                print(f"[eodCommitted] team={team_id} org={org_name!r} no BOD/EOD committed "
+                      f"— fell back to member×per-preparer = {committed}")
         util = round(actual / committed * 100, 1) if committed > 0 else 0
         gap  = round(actual - committed, 2) if committed > 0 else 0.0
         if committed > 0:
@@ -9158,6 +9130,66 @@ def _bod_eod_parse_rows(client_name: str, csv_text: str) -> dict:
             "days_tracked":    len(entries),
         },
     }
+
+
+def _resolve_bod_eod_gid(team_id: str, org_name: str) -> str | None:
+    """Match an org/client name to a BOD_EOD_TAB_GIDS key for the team.
+    The org names (TEAM_CLIENTS / raw timesheet customers) don't always equal
+    the BOD/EOD tab key spelling (e.g. "Neve" vs "Neve Group", "Modern CPAs" vs
+    "Modern CPA"), so match on normalized name (lowercase, no spaces/apostrophes)
+    with exact-first then substring-either-direction."""
+    gmap = BOD_EOD_TAB_GIDS.get(team_id) or {}
+    target = _normalize_name(org_name)
+    if not gmap or not target:
+        return None
+    for k, gid in gmap.items():
+        if _normalize_name(k) == target:
+            return gid
+    for k, gid in gmap.items():
+        nk = _normalize_name(k)
+        if nk and (nk in target or target in nk):
+            return gid
+    return None
+
+
+def _eod_committed_for_org(team_id: str, org_name: str, win_start: str, win_end: str) -> float | None:
+    """Committed hours for an org from its BOD/EOD "Committed Hours" column —
+    the AUTHORITATIVE source. That column is a CUMULATIVE running total, so the
+    period committed is the cumulative delta across [win_start, win_end]:
+        cum(latest row ≤ win_end) − cum(latest row < win_start)
+    which yields, by choice of window:
+        month  → latest cumulative   (nothing logged before month start)
+        today  → today's daily increment
+        week   → week-to-date increment
+        custom → end cumulative − pre-start cumulative
+    Returns None when the org has no BOD/EOD tab or no parseable rows, so the
+    caller falls back to the member×per-preparer formula."""
+    cfg = TEAM_LETTER_MAP.get(team_id)
+    sheet_id = cfg.get("sheetId") if cfg else None
+    if not sheet_id:
+        return None
+    gid = _resolve_bod_eod_gid(team_id, org_name)
+    if not gid:
+        return None
+    try:
+        csv_text = _fetch_bod_eod_csv(sheet_id, gid)
+        parsed = _bod_eod_parse_rows(org_name, csv_text)
+    except Exception as e:
+        print(f"[eodCommitted] team={team_id} org={org_name!r} gid={gid} error: {e}")
+        return None
+    # Normalize each row's raw sheet date to ISO for window comparisons.
+    series: list[tuple[str, float]] = []
+    for e in parsed.get("entries") or []:
+        iso = _normalize_eod_date(e.get("date"))
+        if iso:
+            series.append((iso, float(e.get("cumulative_committed") or 0)))
+    if not series:
+        return None
+    series.sort(key=lambda x: x[0])
+    end_cap = min(win_end, series[-1][0])
+    cum_at_end = next((c for d, c in reversed(series) if d <= end_cap), 0.0)
+    cum_before_start = next((c for d, c in reversed(series) if d < win_start), 0.0)
+    return round(max(0.0, cum_at_end - cum_before_start), 2)
 
 
 # Canonical row ordering for the heatmap so BOD/EOD/Diff line up regardless
