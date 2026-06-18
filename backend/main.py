@@ -278,7 +278,9 @@ TEAM_ROSTERS: dict[str, list[str]] = {
     # ("Janipriya Saravanan"), so the working keyword is "janipriya" — the
     # two-token "jani priya" never actually matched her and was the safe one to cut.
     "team_k": ["karthika", "akshaya devi", "keerthana", "janipriya", "rohitha"],
-    "team_l": ["nasreen", "krishna", "swathi", "sarika", "razia"],
+    # "sarika" removed 2026-06-18 — Sarika Mani is a Team F member (Inbamozhi's
+    # team), not Team L. She remains in team_f's roster below.
+    "team_l": ["nasreen", "krishna", "swathi", "razia"],
     # TL is "Vinayaga Moorthy, Pavithira" (first name Pavithira). Matching by the
     # distinctive surname "vinayaga moorthy" — works for both "Vinayaga Moorthy,
     # Pavithira" and "Pavithira Vinayaga Moorthy" orderings. NB the old "pavithra"
@@ -426,9 +428,9 @@ TEAM_CLIENTS: dict[str, list[dict]] = {
         {"name": "JB Advisory",          "tsMatch": ["JB Advisory"],                           "estHrs": 176, "tz": "MST", "meeting": "Every Tuesday and Thursday 5:30pm IST"},
     ],
     "team_i": [
+        # Beacon Advisors (Team N) and Pokorny (Team M) removed 2026-06-18 — they
+        # don't belong to Team I and were showing as 0-hour clutter rows.
         {"name": "Core 4",               "tsMatch": ["Core 4"],                                "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
-        {"name": "Beacon Advisors",      "tsMatch": ["Beacon Advisors"],                       "estHrs": 80,  "tz": "EST", "meeting": "No scheduled meeting"},
-        {"name": "Pokorny",              "tsMatch": ["Pokorny"],                               "estHrs": 60,  "tz": "PST", "meeting": "No scheduled meeting"},
         {"name": "SoCo",                 "tsMatch": ["SoCo", "SoCo Business"],                 "estHrs": 160, "tz": "CST", "meeting": "No scheduled meeting"},
         {"name": "Redmond",              "tsMatch": ["Redmond"],                               "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
     ],
@@ -2195,7 +2197,7 @@ DELAYS_TAB_GIDS: dict[str, dict[str, str]] = {
         "helvitica":            "2057092751",
     },
     "team_n": {
-        "tim thomson":          "131850060",
+        "tim thompson":         "131850060",
         "fit profit solution":  "1658682498",
         "beacon advisor":       "971993840",
     },
@@ -4872,10 +4874,15 @@ async def _team_response(
         if c["isInternalOther"]:
             return (1, -c["actual"])
         return (0, -c["actual"])
-    clients_data = [
-        c for c in clients_data
-        if not c["isInternalOther"] or c["actual"] > 0
-    ]
+    # Hide clutter rows: the Internal/Other catch-all when empty, AND any
+    # configured client with no activity AND no committed target (a 0h/0committed
+    # placeholder adds nothing but a misleading status badge). A client reappears
+    # automatically once it has booked hours OR a committed target for the period.
+    def _keep_org(c) -> bool:
+        if c["isInternalOther"]:
+            return c["actual"] > 0
+        return (c["actual"] or 0) > 0 or (c["committed"] or 0) > 0
+    clients_data = [c for c in clients_data if _keep_org(c)]
     clients_data.sort(key=_sort_key)
 
     print(f"[DEBUG] team={team_id} roster={roster} staffFound={sorted(staff_names_found)[:10]}")
