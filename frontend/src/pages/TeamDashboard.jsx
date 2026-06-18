@@ -43,16 +43,19 @@ function _defaultCustomRange() {
   return { from: fmt(start), to: fmt(today) };
 }
 
-// TL-approved thresholds (verified 2026-05-25):
-//   <80%       → BELOW TARGET  (yellow)
-//   80–<100%   → ON TRACK      (green)
-//   100–<120%  → ABOVE TARGET  (orange)
-//   >=120%     → CRITICAL      (red)
+// Status thresholds (updated 2026-06-18): CRITICAL means BADLY BEHIND, not
+// over-performing. Exceeding target is positive (EXCEEDED), never red.
+//   <50%       → CRITICAL      (red — badly behind)
+//   50–<80%    → BELOW TARGET  (orange)
+//   80–100%    → ON TRACK      (green)
+//   100–120%   → ABOVE TARGET  (blue)
+//   >120%      → EXCEEDED      (purple — positive overage)
 function statusInfo(pct) {
-  if (pct < 80)   return { label: "BELOW TARGET", color: C.yellow, bg: C.statusYellow };
-  if (pct < 100)  return { label: "ON TRACK",     color: C.green,  bg: C.statusGreen };
-  if (pct < 120)  return { label: "ABOVE TARGET", color: C.orange, bg: C.statusOrange };
-  return { label: "CRITICAL", color: C.red, bg: C.statusRed };
+  if (pct < 50)   return { label: "CRITICAL",     color: C.red,    bg: C.statusRed };
+  if (pct < 80)   return { label: "BELOW TARGET", color: C.orange, bg: C.statusOrange };
+  if (pct <= 100) return { label: "ON TRACK",     color: C.green,  bg: C.statusGreen };
+  if (pct <= 120) return { label: "ABOVE TARGET", color: C.blue,   bg: C.statusBlue };
+  return { label: "EXCEEDED", color: C.purple, bg: C.statusPurple };
 }
 
 function delayColor(count) {
@@ -676,10 +679,11 @@ function PerfTable({ orgs, onRowClick }) {
 
       <div style={{ display: "flex", gap: 16, marginTop: 14, flexWrap: "wrap" }}>
         {[
-          { color: C.yellow, label: "< 80% — Below Target" },
+          { color: C.red,    label: "< 50% — Critical" },
+          { color: C.orange, label: "50–80% — Below Target" },
           { color: C.green,  label: "80–100% — On Track" },
-          { color: C.orange, label: "100–120% — Above Target" },
-          { color: C.red,    label: "≥ 120% — Critical" },
+          { color: C.blue,   label: "100–120% — Above Target" },
+          { color: C.purple, label: "> 120% — Exceeded" },
         ].map(({ color, label }) => (
           <div key={label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: C.muted }}>
             <div style={{ width: 10, height: 10, borderRadius: 2, background: color }} />

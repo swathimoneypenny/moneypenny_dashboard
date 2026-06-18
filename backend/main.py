@@ -5730,19 +5730,23 @@ def get_team_target_hours(
 
 
 def target_status_label(util_pct: float) -> str:
-    """TL-approved status thresholds (verified 2026-05-25):
-      <80%      → BELOW TARGET
+    """Status thresholds (updated 2026-06-18): CRITICAL now means BADLY BEHIND,
+    not over-performing. Exceeding target is positive (EXCEEDED), never red.
+      <50%      → CRITICAL      (badly behind — urgent)
+      50-80%    → BELOW TARGET
       80-100%   → ON TRACK
       100-120%  → ABOVE TARGET
-      >=120%    → CRITICAL
+      >120%     → EXCEEDED      (significantly over — info, not bad)
     """
+    if util_pct < 50:
+        return "CRITICAL"
     if util_pct < 80:
         return "BELOW TARGET"
-    if util_pct < 100:
+    if util_pct <= 100:
         return "ON TRACK"
-    if util_pct < 120:
+    if util_pct <= 120:
         return "ABOVE TARGET"
-    return "CRITICAL"
+    return "EXCEEDED"
 
 
 def _employee_match(row_name: str, query: str) -> bool:
@@ -9790,7 +9794,7 @@ overdue items, oldest items, or anything similar):
 - If user asks "show all delays": list every OPEN row (status != completed)
   with date, age, status, and query text.
 
-Status thresholds: BELOW TARGET <75% | ON TARGET 75-95% | OVER TARGET 95-120% | CRITICAL >120%"""
+Status thresholds: CRITICAL <50% | BELOW TARGET 50-80% | ON TRACK 80-100% | ABOVE TARGET 100-120% | EXCEEDED >120%"""
 
     response = groq_client.chat.completions.create(
         model="llama-3.1-8b-instant",

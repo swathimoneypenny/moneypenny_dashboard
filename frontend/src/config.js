@@ -92,4 +92,6 @@ export const C = {
   statusRed:    "rgba(239,68,68,0.14)",
   statusOrange: "rgba(242,137,90,0.14)",
   statusYellow: "rgba(240,185,71,0.16)",
+  statusBlue:   "rgba(74,143,231,0.15)",
+  statusPurple: "rgba(155,126,232,0.16)",
 };

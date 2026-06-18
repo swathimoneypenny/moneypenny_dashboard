@@ -28,13 +28,17 @@ export default function PerformanceReasonModal({ open, onClose, org, periodLabel
     const gap         = billable - committed;
     const efficiency  = committed > 0 ? (billable / committed * 100) : 0;
 
+    // Status thresholds (updated 2026-06-18): CRITICAL means BADLY BEHIND, not
+    // over-performing. Exceeding target is positive (EXCEEDED), never red.
+    //   <50% CRITICAL · 50–80% BELOW · 80–100% ON TRACK · 100–120% ABOVE · >120% EXCEEDED
     let status      = "ON TRACK";
-    let statusColor = "#F0B947";
+    let statusColor = "#10B981";
     if (committed <= 0)            { status = "NO TARGET";    statusColor = "#6B7A95"; }
-    else if (efficiency < 80)      { status = "BELOW TARGET"; statusColor = "#F0B947"; }
-    else if (efficiency < 100)     { status = "ON TRACK";     statusColor = "#10B981"; }
-    else if (efficiency < 120)     { status = "ABOVE TARGET"; statusColor = "#F2895A"; }
-    else                           { status = "CRITICAL";     statusColor = "#EF4444"; }
+    else if (efficiency < 50)      { status = "CRITICAL";     statusColor = "#EF4444"; }
+    else if (efficiency < 80)      { status = "BELOW TARGET"; statusColor = "#F2895A"; }
+    else if (efficiency <= 100)    { status = "ON TRACK";     statusColor = "#10B981"; }
+    else if (efficiency <= 120)    { status = "ABOVE TARGET"; statusColor = "#4A8FE7"; }
+    else                           { status = "EXCEEDED";     statusColor = "#9B7EE8"; }
 
     // Bucket entries by employee + by date.
     const entries = Array.isArray(org.entries) ? org.entries : [];
@@ -85,9 +89,20 @@ export default function PerformanceReasonModal({ open, onClose, org, periodLabel
 
   if (!open || !analysis) return null;
 
-  const isBelow  = analysis.status === "BELOW TARGET" || analysis.status === "NO TARGET";
-  const isAbove  = analysis.status === "ABOVE TARGET" || analysis.status === "CRITICAL";
+  const isBelow  = analysis.status === "BELOW TARGET" || analysis.status === "NO TARGET" || analysis.status === "CRITICAL";
+  const isAbove  = analysis.status === "ABOVE TARGET" || analysis.status === "EXCEEDED";
   const showRecs = isBelow;
+
+  // Status-adaptive summary line shown under the Performance Gap section.
+  const STATUS_NOTE = {
+    "EXCEEDED":     "Booked hours are significantly above target. This is great performance — verify if scope expansion needs re-quoting.",
+    "ABOVE TARGET": "Above target performance. Keep up the good work.",
+    "ON TRACK":     "Meeting target. Healthy utilization.",
+    "BELOW TARGET": "Below target. Review allocation and identify bottlenecks.",
+    "CRITICAL":     "Significantly behind target. Immediate attention required.",
+    "NO TARGET":    "No committed target configured for this client this period.",
+  };
+  const statusNote = STATUS_NOTE[analysis.status] || "";
 
   return (
     <div
@@ -155,6 +170,11 @@ export default function PerformanceReasonModal({ open, onClose, org, periodLabel
             value={`${analysis.efficiency.toFixed(1)}% (Target: 80%+)`}
             color={analysis.statusColor}
           />
+          {statusNote && (
+            <div style={{ marginTop: 10, color: analysis.statusColor, fontSize: 12, fontWeight: 700 }}>
+              {statusNote}
+            </div>
+          )}
         </SectionBox>
 
         <SectionBox title="📊 Hours Breakdown (Info Only)" color="#6B7A95">
@@ -231,9 +251,11 @@ export default function PerformanceReasonModal({ open, onClose, org, periodLabel
         )}
 
         {isAbove && (
-          <SectionBox title="⚠️ Notes" color="#F2895A">
+          <SectionBox title={analysis.status === "EXCEEDED" ? "🎉 Notes" : "✅ Notes"} color={analysis.statusColor}>
             <div style={{ color: "rgba(255,255,255,0.85)", fontSize: 12, fontWeight: 600 }}>
-              Booked hours are above the pro-rated target. Check whether the team is over-allocated to this client or whether scope has expanded — large positive gaps can also point to unscoped work that should be re-quoted.
+              {analysis.status === "EXCEEDED"
+                ? "Billable hours are significantly above the pro-rated target — great performance. Large positive gaps can also point to unscoped work that should be re-quoted, so verify whether scope has expanded."
+                : "Above-target performance against the pro-rated target — keep it up. If the team feels over-allocated to this client, confirm the scope still matches the committed hours."}
             </div>
           </SectionBox>
         )}

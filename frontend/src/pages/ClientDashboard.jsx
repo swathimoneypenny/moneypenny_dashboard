@@ -36,11 +36,14 @@ function _defaultCustomRange() {
   return { from: fmt(start), to: fmt(today) };
 }
 
+// Status thresholds (updated 2026-06-18): CRITICAL means BADLY BEHIND, not
+// over-performing. Exceeding target is positive (EXCEEDED), never red.
 function statusInfo(pct) {
-  if (pct < 75)  return { label: "BELOW TARGET", color: C.red,    bg: C.statusRed };
-  if (pct < 95)  return { label: "ON TARGET",    color: C.green,  bg: C.statusGreen };
-  if (pct <= 120) return { label: "OVER TARGET", color: C.green,  bg: C.statusGreen };
-  return { label: "CRITICAL", color: C.orange, bg: C.statusOrange };
+  if (pct < 50)   return { label: "CRITICAL",     color: C.red,    bg: C.statusRed };
+  if (pct < 80)   return { label: "BELOW TARGET", color: C.orange, bg: C.statusOrange };
+  if (pct <= 100) return { label: "ON TRACK",     color: C.green,  bg: C.statusGreen };
+  if (pct <= 120) return { label: "ABOVE TARGET", color: C.blue,   bg: C.statusBlue };
+  return { label: "EXCEEDED", color: C.purple, bg: C.statusPurple };
 }
 
 function delayColor(count) {
@@ -467,10 +470,11 @@ function StaffTable({ staff, onRowClick }) {
 
       <div style={{ display: "flex", gap: 16, marginTop: 14, flexWrap: "wrap" }}>
         {[
-          { color: C.red,    label: "< 75% — Below Target" },
-          { color: C.teal,   label: "75–95% — On Target" },
-          { color: C.green,  label: "95–120% — Over Target" },
-          { color: C.orange, label: "> 120% — Critical" },
+          { color: C.red,    label: "< 50% — Critical" },
+          { color: C.orange, label: "50–80% — Below Target" },
+          { color: C.green,  label: "80–100% — On Track" },
+          { color: C.blue,   label: "100–120% — Above Target" },
+          { color: C.purple, label: "> 120% — Exceeded" },
         ].map(({ color, label }) => (
           <div key={label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: C.muted }}>
             <div style={{ width: 10, height: 10, borderRadius: 2, background: color }} />
