@@ -4465,15 +4465,14 @@ def list_teams():
     teams = discover_teams()
     out = []
     for t in teams:
-        # Roster is the single source of truth for member counts. The Team
-        # Members table renders one row per roster member (TL included), so the
-        # Home "Executives" count must equal that roster size — NOT roster minus
-        # the lead, or it would disagree with the table. Fall back to the Zoho
-        # hierarchy count only for teams with no roster configured.
+        # Roster is the single source of truth for member counts (TL included,
+        # always the first keyword). "Executives" = preparers only = members − TL,
+        # so a team card reads "1 Team Lead • N Executives" where N = members − 1.
+        # Fall back to the Zoho hierarchy count for teams with no roster.
         roster_count = len(TEAM_ROSTERS.get(t["id"], []))
         member_count = roster_count if roster_count else t.get("memberCount", 0)
         lead_count = 1 if (t.get("leadUserId") or roster_count) else 0
-        exec_count = member_count
+        exec_count = max(member_count - lead_count, 0)
         out.append({
             "id":           t["id"],
             "label":        t["label"],
@@ -4482,6 +4481,8 @@ def list_teams():
             "memberCount":  member_count,
             "leadCount":    lead_count,
             "execCount":    exec_count,
+            "executiveCount": exec_count,
+            "tlCount":      lead_count,
             "hasSheet":     bool(t.get("sheetId")),
             "missingLead":  t.get("missingLead", False),
         })

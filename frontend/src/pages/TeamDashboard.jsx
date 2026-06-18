@@ -1977,10 +1977,10 @@ ${clients.map((o) => (
                   </div>
                 )}
                 <AgingLegend />
-                <ResponsiveContainer width="100%" height={210}>
+                <ResponsiveContainer width="100%" height={232}>
                   <BarChart
                     data={agingChart}
-                    margin={{ top: 4, right: 8, left: -18, bottom: 36 }}
+                    margin={{ top: 4, right: 8, left: 10, bottom: 52 }}
                     onClick={handleBarChartClick}
                     maxBarSize={40}
                     style={{ cursor: "pointer" }}
@@ -1994,9 +1994,16 @@ ${clients.map((o) => (
                       interval={0}
                       angle={-45}
                       textAnchor="end"
-                      height={50}
+                      height={64}
+                      label={{ value: "Day of Month", position: "insideBottom", offset: 2, fill: C.sec, fontSize: 11, fontWeight: 700 }}
                     />
-                    <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} />
+                    <YAxis
+                      tick={{ fill: C.muted, fontSize: 10 }}
+                      axisLine={false}
+                      tickLine={false}
+                      allowDecimals={false}
+                      label={{ value: "Number of Delays", angle: -90, position: "insideLeft", fill: C.sec, fontSize: 11, fontWeight: 700, style: { textAnchor: "middle" } }}
+                    />
                     <Tooltip content={<AgingTooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
                     <Bar dataKey="Completed" stackId="a" fill="#3DC58B" onClick={handleBarSegmentClick} cursor="pointer" />
                     <Bar dataKey="Fresh"     stackId="a" fill="#F0B947" onClick={handleBarSegmentClick} cursor="pointer" />
@@ -2005,7 +2012,7 @@ ${clients.map((o) => (
                   </BarChart>
                 </ResponsiveContainer>
                 <div style={{ fontSize: 10, color: C.muted, marginTop: 6, textAlign: "center", letterSpacing: 0.3 }}>
-                  Hover for summary · Click any bar for full details
+                  X-axis: day of month · Y-axis: number of delays · hover for summary · click a bar for details
                 </div>
               </>
             )}

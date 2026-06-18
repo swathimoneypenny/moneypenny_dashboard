@@ -15,6 +15,18 @@ function statusMeta(status) {
   return STATUS_PALETTE[status] || STATUS_PALETTE.open;
 }
 
+// Effective status from backend signals. The backend's normalized d.status is
+// authoritative for "completed", but TLs often leave the Status cell BLANK while
+// a thread is mid-flight — so a blank-status row that already has a client/MP
+// reply should read as In Progress (yellow), not Open (red). close_date always
+// wins → completed (green). Drives both the card colour and the status filter.
+function resolveDelayStatus(d) {
+  const s = (d.status || "").toLowerCase();
+  if (s === "completed" || (d.close_date && String(d.close_date).trim())) return "completed";
+  if (s === "in_progress" || d.client_reply || d.mp_reply) return "in_progress";
+  return "open";
+}
+
 function ageColor(age, status) {
   if (status === "completed") return "#10B981";
   if (age >= 8) return "#EF4444";
@@ -68,7 +80,7 @@ function ExpandableText({ text, color }) {
 }
 
 function DelayCard({ d }) {
-  const meta = statusMeta(d.status);
+  const meta = statusMeta(resolveDelayStatus(d));
   const age = d.days_aging ?? 0;
   const ac  = ageColor(age, d.status);
   return (
@@ -256,7 +268,12 @@ export default function DelayDetailModal({ day, teamId, clientName, onClose }) {
   }, [day]);
 
   const [fetchState, setFetchState] = useState({ loading: false, data: null, error: null });
+  const [selectedClient, setSelectedClient] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
   const dayDate = day?.fullDate || day?.date || "";
+
+  // Reset filters whenever a new day / source is opened.
+  useEffect(() => { setSelectedClient("all"); setStatusFilter("all"); }, [day, teamId, clientName]);
 
   useEffect(() => {
     // Need a day + a source key (team or client) + a date to fetch.
@@ -287,16 +304,43 @@ export default function DelayDetailModal({ day, teamId, clientName, onClose }) {
     return () => ctrl.abort();
   }, [day, teamId, clientName, dayDate]);
 
-  // Only render client sections that actually have delays. When none do, return
-  // [] so the single consolidated "No questions or delays" empty state renders
-  // instead of a wall of per-client "✓ No delays for X" rows.
-  const sections = useMemo(() => {
-    const all = fetchState.data?.clients || [];
-    if (!all.length) return [];
-    return all.filter((s) => (s.delays || []).length > 0);
-  }, [fetchState.data]);
+  // Client sections that actually have delays (drives the client dropdown).
+  const baseSections = useMemo(
+    () => (fetchState.data?.clients || []).filter((s) => (s.delays || []).length > 0),
+    [fetchState.data],
+  );
+  const clientOptions = useMemo(
+    () => baseSections.map((s) => ({ name: s.client_name, count: (s.delays || []).length })),
+    [baseSections],
+  );
+  // Status-tab counts, scoped to the selected client, using the RESOLVED status
+  // (so the tabs/header agree with the card colours).
+  const statusCounts = useMemo(() => {
+    const c = { all: 0, open: 0, in_progress: 0, completed: 0 };
+    for (const s of baseSections) {
+      if (selectedClient !== "all" && s.client_name !== selectedClient) continue;
+      for (const d of s.delays || []) {
+        c.all += 1;
+        c[resolveDelayStatus(d)] += 1;
+      }
+    }
+    return c;
+  }, [baseSections, selectedClient]);
+  // Final sections after client + status filters; empty sections dropped so the
+  // consolidated empty state shows when a filter matches nothing.
+  const sections = useMemo(() => (
+    baseSections
+      .filter((s) => selectedClient === "all" || s.client_name === selectedClient)
+      .map((s) => ({
+        ...s,
+        delays: (s.delays || []).filter(
+          (d) => statusFilter === "all" || resolveDelayStatus(d) === statusFilter,
+        ),
+      }))
+      .filter((s) => s.delays.length > 0)
+  ), [baseSections, selectedClient, statusFilter]);
 
-  const totals = fetchState.data?.totals || { total: 0, open: 0, in_progress: 0, completed: 0 };
+  const totals = statusCounts;
   const tabErrors = fetchState.data?.tab_errors || [];
 
   if (!day) return null;
@@ -351,10 +395,10 @@ export default function DelayDetailModal({ day, teamId, clientName, onClose }) {
             </div>
             <div style={{ fontSize: 13, color: C.sec, marginBottom: 4 }}>
               {totals.open} open · {totals.in_progress} in progress · {totals.completed} completed
-              {totals.total > 0 && <> · {totals.total} total</>}
+              {totals.all > 0 && <> · {totals.all} total</>}
             </div>
             <div style={{ fontSize: 12, color: C.muted, fontFamily: "'DM Mono', monospace" }}>
-              {formatHeaderDate(dayDate)}
+              {formatHeaderDate(dayDate)} · {selectedClient === "all" ? "All Clients" : selectedClient}
             </div>
           </div>
           <button
@@ -448,6 +492,52 @@ export default function DelayDetailModal({ day, teamId, clientName, onClose }) {
           </div>
         )}
 
+        {/* Filter bar — client dropdown + status tabs */}
+        {!fetchState.loading && !fetchState.error && baseSections.length > 0 && (
+          <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+            <select
+              value={selectedClient}
+              onChange={(e) => setSelectedClient(e.target.value)}
+              style={{
+                background: C.card, color: C.pri, border: `1px solid ${C.border}`,
+                borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 600,
+                cursor: "pointer", outline: "none", fontFamily: "'DM Sans', sans-serif", maxWidth: 260,
+              }}
+            >
+              <option value="all">All Clients ({clientOptions.reduce((s, c) => s + c.count, 0)})</option>
+              {clientOptions.map((c) => (
+                <option key={c.name} value={c.name}>{c.name} ({c.count})</option>
+              ))}
+            </select>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {[
+                ["all", "All", null, statusCounts.all],
+                ["open", "🔴 Open", "#EF4444", statusCounts.open],
+                ["in_progress", "🟡 In Progress", "#F59E0B", statusCounts.in_progress],
+                ["completed", "🟢 Completed", "#10B981", statusCounts.completed],
+              ].map(([key, label, color, count]) => {
+                const active = statusFilter === key;
+                return (
+                  <button
+                    key={key}
+                    onClick={() => setStatusFilter(key)}
+                    style={{
+                      background: active ? (color ? `${color}22` : "rgba(255,255,255,0.10)") : "transparent",
+                      color: active ? (color || C.pri) : C.sec,
+                      border: `1px solid ${active ? (color || C.border) : C.border}`,
+                      borderRadius: 8, padding: "6px 12px", fontSize: 12,
+                      fontWeight: active ? 700 : 600, cursor: "pointer",
+                      fontFamily: "'DM Sans', sans-serif", whiteSpace: "nowrap",
+                    }}
+                  >
+                    {label} ({count})
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Client sections */}
         {!fetchState.loading && !fetchState.error && sections.map((section) => (
           <ClientSection
@@ -457,7 +547,7 @@ export default function DelayDetailModal({ day, teamId, clientName, onClose }) {
           />
         ))}
 
-        {/* No data at all */}
+        {/* Empty state — distinguish "filtered out" from "no data at all" */}
         {!fetchState.loading && !fetchState.error && sections.length === 0 && (
           <div
             style={{
@@ -471,11 +561,22 @@ export default function DelayDetailModal({ day, teamId, clientName, onClose }) {
               lineHeight: 1.5,
             }}
           >
-            <strong style={{ color: "#F0B947" }}>No questions or delays tracked for this date.</strong>
-            <div style={{ marginTop: 6, color: C.muted, fontSize: 11 }}>
-              All configured Delays tabs returned zero rows for {formatHeaderDate(dayDate)}.
-              If you expected entries, verify the Date column in the team's Delays tab.
-            </div>
+            {baseSections.length > 0 ? (
+              <>
+                <strong style={{ color: "#F0B947" }}>No delays match the current filter.</strong>
+                <div style={{ marginTop: 6, color: C.muted, fontSize: 11 }}>
+                  Try “All” status{selectedClient !== "all" ? " or All Clients" : ""}.
+                </div>
+              </>
+            ) : (
+              <>
+                <strong style={{ color: "#F0B947" }}>No questions or delays tracked for this date.</strong>
+                <div style={{ marginTop: 6, color: C.muted, fontSize: 11 }}>
+                  All configured Delays tabs returned zero rows for {formatHeaderDate(dayDate)}.
+                  If you expected entries, verify the Date column in the team's Delays tab.
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>
