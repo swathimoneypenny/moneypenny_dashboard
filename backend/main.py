@@ -258,11 +258,13 @@ TEAM_ROSTERS: dict[str, list[str]] = {
     "team_a": ["kokila", "uma", "jayashree r", "jayashree b"],
     "team_b": ["buela", "ivanjalin", "varshini", "pavithra s"],
     "team_c": ["grace", "mahalakshmi", "jeevtha s", "keerthana"],
-    # Removed "sharmila" (Sharmila Rajkumar — Director, not a bookkeeping team
-    # member) and "swetha s" (Swetha Kadari — Training Management; note "swetha s"
-    # matched her because the "s" token prefix-matches the "swetha" name token).
-    # 2026-06-17 per TL. Re-add with a specific keyword if a real Team D Swetha exists.
-    "team_d": ["chandra", "yamini", "krithiga", "dharani s", "sandhiya", "sirisha"],
+    # Removed "sharmila" (Sharmila Rajkumar — Director) and "swetha s" (Swetha
+    # Kadari — Training Mgmt) 2026-06-17. Added Gunasekaran Sharmila + Sagada
+    # Swetha (DIFFERENT people) as MULTI-WORD keywords — both tokens must
+    # prefix-match, so "gunasekaran sharmila" matches her but NOT "Sharmila
+    # Rajkumar", and "sagada swetha" matches her but NOT "Swetha Kadari".
+    "team_d": ["chandra", "yamini", "krithiga", "dharani s", "sandhiya", "sirisha",
+               "gunasekaran sharmila", "sagada swetha"],
     "team_e": ["shaalini", "kaviya", "preethi"],
     "team_f": ["inbamozhi", "sarika"],
     "team_g": ["hema", "indra", "amala", "nidisha", "pechi"],
@@ -308,6 +310,7 @@ TEAM_EXPECTED_COUNTS: dict[str, int] = {
     "team_k": 5,  # TL Karthika — confirmed 5 (2026-06-17)
     "team_j": 4,  # TL — confirmed 4 (2026-06-17)
     "team_h": 3,  # TL — confirmed 3 executives (2026-06-17)
+    "team_d": 8,  # 6 + Gunasekaran Sharmila + Sagada Swetha (2026-06-17)
 }
 
 
