@@ -461,8 +461,9 @@ TEAM_CLIENTS: dict[str, list[dict]] = {
         {"name": "Sybilline Records",    "tsMatch": ["Sybilline", "Sybylline"],                "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
     ],
     "team_n": [
-        {"name": "BKP Repair",           "tsMatch": ["BKP Repair", "Bookkeeping Repair", "Bookkeeping Repair LLC"], "estHrs": 240, "tz": "PST", "meeting": "Bi-weekly Friday 10am IST"},
+        # BKP Repair / Bookkeeping Repair LLC removed — inactive client (see INACTIVE_CLIENTS).
         {"name": "Tim Thompson",         "tsMatch": ["Tim Thompson"],                          "estHrs": 40,  "tz": "CST", "meeting": "No scheduled meeting"},
+        {"name": "Beacon Advisors",      "tsMatch": ["Beacon Advisor", "Beacon"],              "estHrs": 0,   "tz": "CST", "meeting": "No scheduled meeting"},
         {"name": "FitProfit Solutions",  "tsMatch": ["FitProfit"],                             "estHrs": 0,   "tz": "CST", "meeting": "No scheduled meeting"},
     ],
     "team_t": [
@@ -492,6 +493,29 @@ def is_internal_code(customer: str) -> bool:
         if not code_norm:
             continue
         if code_norm in cust_norm:
+            return True
+    return False
+
+
+# Clients that have churned but may still have legacy timesheet rows. These are
+# dropped from org grouping entirely (not even surfaced as a dynamic bucket) so
+# they never reappear in "Performance by Organization" after being de-configured.
+INACTIVE_CLIENTS = {
+    "bkp repair",
+    "bookkeeping repair",
+    "bookkeeping repair llc",
+}
+
+
+def is_inactive_client(customer: str) -> bool:
+    """True iff `customer` (normalized) matches a churned/inactive client. Such
+    rows are skipped in org grouping so the client never shows on a dashboard."""
+    cust_norm = _normalize_for_match(customer)
+    if not cust_norm:
+        return False
+    for name in INACTIVE_CLIENTS:
+        nm = _normalize_for_match(name)
+        if nm and nm in cust_norm:
             return True
     return False
 
@@ -2336,8 +2360,8 @@ BOD_EOD_TAB_GIDS: dict[str, dict[str, str]] = {
     },
     "team_n": {
         "Tim Thompson":       "2066456112",
-        "Beacon Advisors":    "1900219561",
-        "FitProfit Solutions": "2059901996",
+        "Beacon Advisors":    "2059901996",   # corrected — was swapped with FitProfit
+        "FitProfit Solutions": "1900219561",   # corrected — was swapped with Beacon
     },
     # team_t shares client names with team_l (LAH, OfficeHeads) and team_n
     # (Tim Thompson) but the gids differ — separate tabs on a separate
@@ -4690,6 +4714,12 @@ async def _team_response(
         billable = bool(row.get("billable"))
         customer = (row.get("customer") or "").strip()
         desc     = (row.get("desc") or "").strip()
+
+        # Drop churned/inactive clients (e.g. BKP Repair) entirely — they're
+        # de-configured from TEAM_CLIENTS, so without this skip any legacy row
+        # would resurface as a dynamic org bucket.
+        if is_inactive_client(customer):
+            continue
 
         # INTERNAL_CODES short-circuit: SNMP / breaks / admin / training rows
         # never get matched against TEAM_CLIENTS — they bucket directly into
