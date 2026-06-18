@@ -549,13 +549,18 @@ def find_team_for_client(client_name: str) -> str | None:
 
 def _resolve_client_for_team(team_id: str, customer: str, desc: str = "") -> str | None:
     """Return the canonical client name from TEAM_CLIENTS[team_id] that matches
-    `customer` (or `desc` as fallback). Same forward-beats-reverse precedence
-    as find_team_for_client."""
+    the CUSTOMER field only. Same forward-beats-reverse precedence as
+    find_team_for_client.
+
+    The CUSTOMER/CLIENT field is the single source of truth for client
+    identification — the NOTES/`desc` field is free-text and is NEVER used for
+    matching (a row whose customer is "ABS" but whose notes mention "TAKOFJONES"
+    must bucket under ABS, not TAKOFJONES). `desc` is kept as a parameter for
+    call-site compatibility but is intentionally ignored."""
     cfg = TEAM_CLIENTS.get(team_id) or []
     if not cfg:
         return None
     cust_norm = _normalize_for_match(customer)
-    desc_norm = _normalize_for_match(desc)
 
     forward: tuple[int, str] | None = None
     reverse: tuple[int, str] | None = None
@@ -564,12 +569,12 @@ def _resolve_client_for_team(team_id: str, customer: str, desc: str = "") -> str
             kw_norm = _normalize_for_match(kw)
             if not kw_norm:
                 continue
-            fwd = (cust_norm and kw_norm in cust_norm) or (desc_norm and kw_norm in desc_norm)
+            fwd = bool(cust_norm and kw_norm in cust_norm)
             if fwd:
                 if forward is None or len(kw_norm) > forward[0]:
                     forward = (len(kw_norm), client["name"])
                 continue
-            if _reverse_match(cust_norm, kw_norm) or _reverse_match(desc_norm, kw_norm):
+            if _reverse_match(cust_norm, kw_norm):
                 if reverse is None or len(kw_norm) > reverse[0]:
                     reverse = (len(kw_norm), client["name"])
     if forward:
@@ -4787,8 +4792,13 @@ async def _team_response(
             if h["isConfig"] and org_name != "Internal / Other":
                 print(f"[eodCommitted] team={team_id} org={org_name!r} no BOD/EOD committed "
                       f"— fell back to member×per-preparer = {committed}")
-        util = round(actual / committed * 100, 1) if committed > 0 else 0
-        gap  = round(actual - committed, 2) if committed > 0 else 0.0
+        # Performance (efficiency / gap / status) is measured against BILLABLE
+        # hours only — non-billable time does not count toward a client's
+        # committed target. `actual`/`total` still carry billable+non-billable
+        # for the stacked bar + "total booked" reference displays.
+        billable_h = round(h["billable"], 2)
+        util = round(billable_h / committed * 100, 1) if committed > 0 else 0
+        gap  = round(billable_h - committed, 2) if committed > 0 else 0.0
         if committed > 0:
             status = target_status_label(util)
         else:

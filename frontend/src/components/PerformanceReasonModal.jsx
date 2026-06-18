@@ -17,11 +17,16 @@ export default function PerformanceReasonModal({ open, onClose, org, periodLabel
     if (!org) return null;
 
     const committed   = Number(org.committed)   || 0;
-    const actual      = Number(org.actual ?? org.total) || 0;
     const billable    = Number(org.billable)    || 0;
     const nonBillable = Number(org.nonBillable) || 0;
-    const gap         = actual - committed;
-    const efficiency  = committed > 0 ? (actual / committed * 100) : 0;
+    // Performance is measured against BILLABLE hours only — non-billable time
+    // does not count toward the committed target (it's shown separately as
+    // info). `totalBooked` (billable + non-billable) is kept only for the
+    // reference row in the Hours Breakdown.
+    const totalBooked = billable + nonBillable;
+    const actual      = billable;
+    const gap         = billable - committed;
+    const efficiency  = committed > 0 ? (billable / committed * 100) : 0;
 
     let status      = "ON TRACK";
     let statusColor = "#F0B947";
@@ -65,11 +70,11 @@ export default function PerformanceReasonModal({ open, onClose, org, periodLabel
       .sort((a, b) => a[0].localeCompare(b[0]))
       .slice(0, 5);
 
-    const nonBillRatio = actual > 0 ? nonBillable / actual : 0;
+    const nonBillRatio = totalBooked > 0 ? nonBillable / totalBooked : 0;
 
     return {
       status, statusColor,
-      committed, actual, gap, efficiency,
+      committed, actual, totalBooked, gap, efficiency,
       billable, nonBillable, nonBillRatio,
       employeeList: activeEmployees,
       inactiveCount, expectedEmps,
@@ -139,7 +144,7 @@ export default function PerformanceReasonModal({ open, onClose, org, periodLabel
 
         <SectionBox title="📊 Performance Gap" color={analysis.statusColor}>
           <DataRow label="Target (pro-rated)"  value={`${analysis.committed.toFixed(2)}h`} />
-          <DataRow label="Actual booked"       value={`${analysis.actual.toFixed(2)}h`} />
+          <DataRow label="Actual Billable"     value={`${analysis.billable.toFixed(2)}h`} color="#10B981" highlight />
           <DataRow
             label="Gap"
             value={`${analysis.gap >= 0 ? "+" : ""}${analysis.gap.toFixed(2)}h ${analysis.gap < 0 ? "behind" : "ahead"}`}
@@ -150,8 +155,12 @@ export default function PerformanceReasonModal({ open, onClose, org, periodLabel
             value={`${analysis.efficiency.toFixed(1)}% (Target: 80%+)`}
             color={analysis.statusColor}
           />
-          <DataRow label="Billable"     value={`${analysis.billable.toFixed(2)}h`}    color="#10B981" />
-          <DataRow label="Non-Billable" value={`${analysis.nonBillable.toFixed(2)}h`} color="#F2895A" />
+        </SectionBox>
+
+        <SectionBox title="📊 Hours Breakdown (Info Only)" color="#6B7A95">
+          <DataRow label="Billable (counts toward target)" value={`${analysis.billable.toFixed(2)}h`}    color="#10B981" />
+          <DataRow label="Non-Billable (not counted)"      value={`${analysis.nonBillable.toFixed(2)}h`} color="#F2895A" />
+          <DataRow label="Total Booked (reference)"        value={`${analysis.totalBooked.toFixed(2)}h`} />
         </SectionBox>
 
         {isBelow && (
@@ -278,18 +287,20 @@ function SectionBox({ title, color, children }) {
   );
 }
 
-function DataRow({ label, value, color }) {
+function DataRow({ label, value, color, highlight }) {
   return (
     <div
       style={{
-        display: "flex", justifyContent: "space-between", padding: "6px 0",
+        display: "flex", justifyContent: "space-between", padding: highlight ? "8px 10px" : "6px 0",
         borderBottom: "1px solid rgba(255,255,255,0.04)", gap: 10,
+        background: highlight ? "rgba(16,185,129,0.10)" : "transparent",
+        borderRadius: highlight ? 6 : 0,
       }}
     >
-      <span style={{ color: "rgba(255,255,255,0.85)", fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={label}>
+      <span style={{ color: highlight ? "#FFFFFF" : "rgba(255,255,255,0.85)", fontSize: 13, fontWeight: highlight ? 800 : 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={label}>
         {label}
       </span>
-      <span style={{ color: color || "#FFFFFF", fontSize: 13, fontWeight: 700, fontFamily: "'DM Mono', monospace", whiteSpace: "nowrap" }}>
+      <span style={{ color: color || "#FFFFFF", fontSize: highlight ? 14 : 13, fontWeight: 800, fontFamily: "'DM Mono', monospace", whiteSpace: "nowrap" }}>
         {value}
       </span>
     </div>
