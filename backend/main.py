@@ -277,7 +277,7 @@ TEAM_ROSTERS: dict[str, list[str]] = {
     # "jani priya" spelling. NOTE: Janipriya's timesheet FULLNAME is one word
     # ("Janipriya Saravanan"), so the working keyword is "janipriya" — the
     # two-token "jani priya" never actually matched her and was the safe one to cut.
-    "team_k": ["karthika", "akshaya devi", "keerthana", "janipriya", "rohitha"],
+    "team_k": ["karthika", "akshaya devi", "keerthana", "janipriya", "rohitha", "abinaya sureshbabu"],
     # "sarika" removed 2026-06-18 — Sarika Mani is a Team F member (Inbamozhi's
     # team), not Team L. She remains in team_f's roster below.
     "team_l": ["nasreen", "krishna", "swathi", "razia"],
@@ -310,11 +310,26 @@ if len(TEAM_ROSTERS.get("team_t", [])) <= 1:
 # is now the authoritative member count (see _team_member_count / list_teams),
 # any mismatch here means TEAM_ROSTERS drifted from what the TL confirmed.
 TEAM_EXPECTED_COUNTS: dict[str, int] = {
-    "team_k": 5,  # TL Karthika — confirmed 5 (2026-06-17)
+    "team_k": 6,  # TL Karthika 5 + Abinaya Sureshbabu added 2026-06-19
     "team_j": 4,  # TL — confirmed 4 (2026-06-17)
     "team_h": 3,  # TL — confirmed 3 executives (2026-06-17)
     "team_d": 8,  # 6 + Gunasekaran Sharmila + Sagada Swetha (2026-06-17)
 }
+
+# Recurring team-meeting schedule — drives the /meeting-status endpoint + the
+# dashboard meeting banner. `day` is a weekday name; `time` is a display string
+# (IST). Add teams as TLs confirm their cadence.
+TEAM_MEETINGS: dict[str, dict] = {
+    "team_g": {"day": "Friday", "time": "08:30 IST", "description": "Team G Weekly Meeting"},
+}
+
+_WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+def _ist_now() -> datetime:
+    """Current wall-clock in IST (UTC+5:30) as a naive datetime — used for the
+    meeting-day calculation so 'today' matches the team's local day."""
+    return datetime.utcnow() + timedelta(hours=5, minutes=30)
 
 
 def _deduplicate_rosters() -> None:
@@ -423,7 +438,11 @@ TEAM_CLIENTS: dict[str, list[dict]] = {
         {"name": "Ez Ledger",            "tsMatch": ["Ez Ledger", "EZ Ledger"],                "estHrs": 320, "tz": "EST", "meeting": "Every Friday 5:15pm IST"},
         {"name": "Proper Trust",         "tsMatch": ["Proper Trust", "Mintage", "Artesani"],   "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
         {"name": "Putman Accountancy",   "tsMatch": ["Putman"],                                "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
-        {"name": "Manzelli Consulting",  "tsMatch": ["Manzelli Consulting"],                   "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
+        # Keyword broadened to "Manzelli" 2026-06-19 — the old "Manzelli Consulting"
+        # keyword is LONGER than the timesheet customer (e.g. "Jeo Manzelli"/"Manzelli"),
+        # so those rows failed the forward match and the org under-counted hours
+        # (reported 43.49h vs 47h actual). "Manzelli" forward-matches every variant.
+        {"name": "Manzelli Consulting",  "tsMatch": ["Manzelli"],                              "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
     ],
     "team_h": [
         {"name": "JB Advisory",          "tsMatch": ["JB Advisory"],                           "estHrs": 176, "tz": "MST", "meeting": "Every Tuesday and Thursday 5:30pm IST"},
@@ -7858,6 +7877,44 @@ async def get_team_custom_range(
 # would otherwise swallow `bod-eod` as a "period" and return Invalid period.
 # Same trap caught the /admin-review endpoint earlier (see the docstring at
 # get_admin_review). Keep new team-scoped endpoints above this comment block.
+@app.get("/api/team/{team_id}/meeting-status")
+def get_meeting_status(team_id: str):
+    """Dynamic recurring-meeting reminder for a team, computed against the
+    current IST weekday. Returns has_meeting=False when no cadence is configured."""
+    meeting = TEAM_MEETINGS.get(team_id)
+    if not meeting:
+        return {"has_meeting": False}
+    today = _ist_now()
+    today_idx = today.weekday()  # Monday=0
+    try:
+        meeting_idx = _WEEKDAYS.index(meeting["day"])
+    except ValueError:
+        return {"has_meeting": False}
+    days_until = (meeting_idx - today_idx) % 7
+    desc = meeting["description"]
+    tm = meeting["time"]
+    if days_until == 0:
+        message = f"📅 Today is meeting day! {desc} at {tm}"
+        urgency = "today"
+    elif days_until == 1:
+        message = f"⏰ Tomorrow ({meeting['day']}) — {desc} at {tm}"
+        urgency = "tomorrow"
+    elif days_until <= 3:
+        message = f"📆 {meeting['day']} ({days_until} days away) — {desc} at {tm}"
+        urgency = "soon"
+    else:
+        message = f"Next meeting: {meeting['day']} at {tm}"
+        urgency = "normal"
+    return {
+        "has_meeting": True,
+        "message":     message,
+        "urgency":     urgency,
+        "day":         meeting["day"],
+        "time":        tm,
+        "days_until":  days_until,
+    }
+
+
 @app.get("/api/team/{team_id}/bod-eod")
 def get_bod_eod_review(team_id: str):
     """Per-client BOD vs EOD comparison for a team.

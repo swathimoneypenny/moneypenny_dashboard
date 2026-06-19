@@ -388,7 +388,7 @@ export default function BodEodReview({ teamId }) {
                   (Number(e.booked_hours)    || 0) -
                   (Number(e.committed_hours) || 0),
               }))}
-              margin={{ top: 12, right: 20, left: 0, bottom: 4 }}
+              margin={{ top: 12, right: 20, left: 10, bottom: 24 }}
               onClick={(e) => {
                 const p = e?.activePayload?.[0]?.payload;
                 if (p) openDayModal(p, setModal);
@@ -396,8 +396,10 @@ export default function BodEodReview({ teamId }) {
               style={{ cursor: "pointer" }}
             >
               <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="date" tick={{ fill: C.sec, fontSize: 10, fontWeight: 700 }} />
-              <YAxis tick={{ fill: C.muted, fontSize: 10, fontWeight: 700 }} tickFormatter={(v) => `${v}h`} />
+              <XAxis dataKey="date" tick={{ fill: C.sec, fontSize: 10, fontWeight: 700 }} height={40}
+                label={{ value: "Date", position: "insideBottom", offset: -2, fill: C.muted, fontSize: 11, fontWeight: 700 }} />
+              <YAxis tick={{ fill: C.muted, fontSize: 10, fontWeight: 700 }} tickFormatter={(v) => `${v}h`}
+                label={{ value: "Hours", angle: -90, position: "insideLeft", fill: C.muted, fontSize: 11, fontWeight: 700 }} />
               <Tooltip
                 cursor={{ stroke: ORANGE, strokeWidth: 1, strokeDasharray: "3 3" }}
                 contentStyle={tooltipStyle()}
@@ -800,10 +802,12 @@ function TeamTVisual({ grid, visibleDates, showRawSheet, setShowRawSheet }) {
         <div style={panelStyle()}>
           <ChartHeader title="📊 Task Breakdown by Day" hint="Daily / TB / Tax Return / Proforma / Billing / Reports / K1 Recap" />
           <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={days} margin={{ top: 12, right: 16, left: 0, bottom: 40 }}>
+            <BarChart data={days} margin={{ top: 12, right: 16, left: 10, bottom: 56 }}>
               <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="date" tick={{ fill: C.sec, fontSize: 10, fontWeight: 700 }} angle={-30} textAnchor="end" height={50} interval={0} />
-              <YAxis tick={{ fill: C.muted, fontSize: 10, fontWeight: 700 }} />
+              <XAxis dataKey="date" tick={{ fill: C.sec, fontSize: 10, fontWeight: 700 }} angle={-30} textAnchor="end" height={64} interval={0}
+                label={{ value: "Date", position: "insideBottom", offset: -2, fill: C.muted, fontSize: 11, fontWeight: 700 }} />
+              <YAxis tick={{ fill: C.muted, fontSize: 10, fontWeight: 700 }}
+                label={{ value: "Number of Tasks", angle: -90, position: "insideLeft", fill: C.muted, fontSize: 11, fontWeight: 700 }} />
               <Tooltip cursor={{ fill: "rgba(255,255,255,0.04)" }} contentStyle={tooltipStyle()} />
               <Legend wrapperStyle={{ color: C.pri, fontWeight: 700, fontSize: 11 }} />
               {TT_TASK_SERIES.map((s) => (

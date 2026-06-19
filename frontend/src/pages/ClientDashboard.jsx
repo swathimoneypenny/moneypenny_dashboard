@@ -808,8 +808,9 @@ function ProjectsBreakdownChart({ projects, clientName, loading }) {
               tickLine={false}
               angle={-45}
               textAnchor="end"
-              height={90}
+              height={106}
               interval={0}
+              label={{ value: "Project", position: "insideBottom", offset: 2, fill: "rgba(255,255,255,0.6)", fontSize: 11, fontWeight: 700 }}
             />
             <YAxis
               tick={{ fill: "#FFFFFF", fontSize: 10 }}
@@ -1496,8 +1497,10 @@ ${Object.entries(staffObj).map(([name, v]) => {
                   style={{ cursor: "pointer" }}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                  <XAxis dataKey="month" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
+                  <XAxis dataKey="month" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} height={40}
+                    label={{ value: "Month", position: "insideBottom", offset: 0, fill: C.sec, fontSize: 11, fontWeight: 700 }} />
+                  <YAxis tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false}
+                    label={{ value: "Hours", angle: -90, position: "insideLeft", fill: C.sec, fontSize: 11, fontWeight: 700, style: { textAnchor: "middle" } }} />
                   <Tooltip content={<DarkTooltip />} />
                   <Line
                     type="monotone"
@@ -1584,9 +1587,11 @@ ${Object.entries(staffObj).map(([name, v]) => {
                       interval={0}
                       angle={-45}
                       textAnchor="end"
-                      height={50}
+                      height={64}
+                      label={{ value: "Day of Month", position: "insideBottom", offset: 2, fill: C.sec, fontSize: 11, fontWeight: 700 }}
                     />
-                    <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} />
+                    <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false}
+                      label={{ value: "Number of Delays", angle: -90, position: "insideLeft", fill: C.sec, fontSize: 11, fontWeight: 700, style: { textAnchor: "middle" } }} />
                     <Tooltip content={<AgingTooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
                     <Bar dataKey="Completed" stackId="a" fill="#3DC58B" onClick={handleBarSegmentClick} cursor="pointer" />
                     <Bar dataKey="Fresh"     stackId="a" fill="#F0B947" onClick={handleBarSegmentClick} cursor="pointer" />

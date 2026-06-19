@@ -563,6 +563,7 @@ function BillableVsNonBillableCard({ data, loading, onBarClick }) {
             axisLine={false}
             tickLine={false}
             tickFormatter={(v) => `${v}h`}
+            label={{ value: "Hours", angle: -90, position: "insideLeft", fill: C.sec, fontSize: 11, fontWeight: 700, style: { textAnchor: "middle" } }}
           />
           <Tooltip
             cursor={{ fill: "rgba(255,255,255,0.04)" }}
@@ -906,6 +907,8 @@ function BillableBreakdownChart({ data, loading, onBarClick }) {
             tick={{ fill: "#FFFFFF", fontSize: 10, fontWeight: 600 }}
             axisLine={false}
             tickLine={false}
+            height={42}
+            label={{ value: "Hours", position: "insideBottom", offset: 0, fill: "rgba(255,255,255,0.6)", fontSize: 11, fontWeight: 700 }}
           />
           <YAxis
             type="category"
@@ -914,6 +917,7 @@ function BillableBreakdownChart({ data, loading, onBarClick }) {
             axisLine={false}
             tickLine={false}
             width={150}
+            label={{ value: "Client", angle: -90, position: "insideLeft", fill: "rgba(255,255,255,0.6)", fontSize: 11, fontWeight: 700, style: { textAnchor: "middle" } }}
           />
           <Tooltip
             cursor={{ fill: "rgba(255,255,255,0.08)" }}

@@ -787,8 +787,9 @@ function BillableNonBillableByClient({ clients, periodLabel, loading, onBarClick
               tickLine={false}
               angle={-45}
               textAnchor="end"
-              height={80}
+              height={96}
               interval={0}
+              label={{ value: "Client", position: "insideBottom", offset: 2, fill: "rgba(255,255,255,0.6)", fontSize: 11, fontWeight: 700 }}
             />
             <YAxis
               tick={{ fill: "#FFFFFF", fontSize: 11, fontWeight: 600 }}
@@ -1212,7 +1213,18 @@ export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdat
   // HOW to fix). Stays separate from `orgModal` (Hours-by-Org chart bar
   // click → entries table) — different surfaces, different drill-downs.
   const [perfModal, setPerfModal] = useState({ open: false, org: null });
+  // Recurring-meeting reminder banner (dynamic, computed server-side vs IST day).
+  const [meetingInfo, setMeetingInfo] = useState(null);
   const abortRef = useRef(null);
+
+  useEffect(() => {
+    let alive = true;
+    authFetch(`/api/team/${teamId}/meeting-status`)
+      .then((r) => r.json())
+      .then((j) => { if (alive) setMeetingInfo(j); })
+      .catch(() => { if (alive) setMeetingInfo(null); });
+    return () => { alive = false; };
+  }, [teamId]);
 
   const fetchData = useCallback((silent = false) => {
     // The Weekly Review and BOD/EOD tabs have their own data sources —
@@ -1504,6 +1516,22 @@ ${clients.map((o) => (
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg }}>
+      {meetingInfo?.has_meeting && (() => {
+        const u = meetingInfo.urgency;
+        const tone = u === "today"    ? { bg: "rgba(239,68,68,0.14)",  bd: "#EF4444" }
+                   : u === "tomorrow" ? { bg: "rgba(240,185,71,0.16)", bd: "#F0B947" }
+                   : u === "soon"     ? { bg: "rgba(74,143,231,0.15)",  bd: "#4A8FE7" }
+                   :                    { bg: "rgba(255,255,255,0.06)", bd: C.border };
+        return (
+          <div style={{
+            background: tone.bg, borderBottom: `2px solid ${tone.bd}`,
+            color: C.pri, padding: "10px 32px", fontWeight: 700, fontSize: 13,
+            display: "flex", alignItems: "center", gap: 8,
+          }}>
+            {meetingInfo.message}
+          </div>
+        );
+      })()}
       <div
         style={{
           background: "linear-gradient(180deg,#0e2040 0%,#0b1929 100%)",
@@ -1932,8 +1960,10 @@ ${clients.map((o) => (
                   style={{ cursor: "pointer" }}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} horizontal={false} />
-                  <XAxis type="number" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <YAxis dataKey="name" type="category" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} width={120} />
+                  <XAxis type="number" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} height={42}
+                    label={{ value: "Hours", position: "insideBottom", offset: 0, fill: C.sec, fontSize: 11, fontWeight: 700 }} />
+                  <YAxis dataKey="name" type="category" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} width={130}
+                    label={{ value: "Organization", angle: -90, position: "insideLeft", fill: C.sec, fontSize: 11, fontWeight: 700, style: { textAnchor: "middle" } }} />
                   <Tooltip content={<DarkTooltip />} />
                   <Bar
                     dataKey="Hours"

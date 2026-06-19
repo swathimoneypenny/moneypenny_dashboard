@@ -155,6 +155,12 @@ function DelayCard({ d }) {
         </span>
       </div>
 
+      {d.file_name && (
+        <div style={{ fontSize: 12, color: C.sec, marginBottom: 6, fontWeight: 700 }}>
+          📄 {d.file_name}
+        </div>
+      )}
+
       <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, fontFamily: "'DM Mono', monospace" }}>
         Posted: {d.date_posted || "—"}
         {d.close_date && <> · Closed: {d.close_date}</>}
@@ -270,10 +276,11 @@ export default function DelayDetailModal({ day, teamId, clientName, onClose }) {
   const [fetchState, setFetchState] = useState({ loading: false, data: null, error: null });
   const [selectedClient, setSelectedClient] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [fileFilter, setFileFilter] = useState("all");
   const dayDate = day?.fullDate || day?.date || "";
 
   // Reset filters whenever a new day / source is opened.
-  useEffect(() => { setSelectedClient("all"); setStatusFilter("all"); }, [day, teamId, clientName]);
+  useEffect(() => { setSelectedClient("all"); setStatusFilter("all"); setFileFilter("all"); }, [day, teamId, clientName]);
 
   useEffect(() => {
     // Need a day + a source key (team or client) + a date to fetch.
@@ -304,28 +311,51 @@ export default function DelayDetailModal({ day, teamId, clientName, onClose }) {
     return () => ctrl.abort();
   }, [day, teamId, clientName, dayDate]);
 
+  // Reset the file filter when the client changes (a file from one client
+  // won't exist under another → would otherwise hide everything).
+  useEffect(() => { setFileFilter("all"); }, [selectedClient]);
+
   // Client sections that actually have delays (drives the client dropdown).
   const baseSections = useMemo(
     () => (fetchState.data?.clients || []).filter((s) => (s.delays || []).length > 0),
     [fetchState.data],
   );
+  // Client dropdown: any client with date-scoped OR open-all-dates delays, so
+  // it stays usable on a day with no newly-posted questions.
   const clientOptions = useMemo(
-    () => baseSections.map((s) => ({ name: s.client_name, count: (s.delays || []).length })),
-    [baseSections],
+    () => (fetchState.data?.clients || [])
+      .map((s) => ({ name: s.client_name, count: (s.delays || []).length + (s.open_all_dates || []).length }))
+      .filter((c) => c.count > 0),
+    [fetchState.data],
   );
-  // Status-tab counts, scoped to the selected client, using the RESOLVED status
-  // (so the tabs/header agree with the card colours).
+  // Unique file/task names across this day's delays + the open-all-dates set,
+  // scoped to the selected client — drives the Files dropdown.
+  const fileOptions = useMemo(() => {
+    const set = new Set();
+    for (const s of (fetchState.data?.clients || [])) {
+      if (selectedClient !== "all" && s.client_name !== selectedClient) continue;
+      for (const d of [...(s.delays || []), ...(s.open_all_dates || [])]) {
+        const f = (d.file_name || "").trim();
+        if (f) set.add(f);
+      }
+    }
+    return Array.from(set).sort();
+  }, [fetchState.data, selectedClient]);
+  const matchesFile = (d) => fileFilter === "all" || (d.file_name || "").trim() === fileFilter;
+  // Status-tab counts, scoped to the selected client + file, using the RESOLVED
+  // status (so the tabs/header agree with the card colours).
   const statusCounts = useMemo(() => {
     const c = { all: 0, open: 0, in_progress: 0, completed: 0 };
     for (const s of baseSections) {
       if (selectedClient !== "all" && s.client_name !== selectedClient) continue;
       for (const d of s.delays || []) {
+        if (fileFilter !== "all" && (d.file_name || "").trim() !== fileFilter) continue;
         c.all += 1;
         c[resolveDelayStatus(d)] += 1;
       }
     }
     return c;
-  }, [baseSections, selectedClient]);
+  }, [baseSections, selectedClient, fileFilter]);
   // Final sections after client + status filters; empty sections dropped so the
   // consolidated empty state shows when a filter matches nothing.
   const sections = useMemo(() => (
@@ -334,11 +364,11 @@ export default function DelayDetailModal({ day, teamId, clientName, onClose }) {
       .map((s) => ({
         ...s,
         delays: (s.delays || []).filter(
-          (d) => statusFilter === "all" || resolveDelayStatus(d) === statusFilter,
+          (d) => (statusFilter === "all" || resolveDelayStatus(d) === statusFilter) && matchesFile(d),
         ),
       }))
       .filter((s) => s.delays.length > 0)
-  ), [baseSections, selectedClient, statusFilter]);
+  ), [baseSections, selectedClient, statusFilter, fileFilter]);
 
   // Additive "open questions — all dates" sections: open/in_progress delays
   // from every date (not just the clicked day), so unanswered questions surface
@@ -351,11 +381,11 @@ export default function DelayDetailModal({ day, teamId, clientName, onClose }) {
       .map((s) => ({
         ...s,
         delays: (s.open_all_dates || []).filter(
-          (d) => statusFilter === "all" || resolveDelayStatus(d) === statusFilter,
+          (d) => (statusFilter === "all" || resolveDelayStatus(d) === statusFilter) && matchesFile(d),
         ),
       }))
       .filter((s) => s.delays.length > 0)
-  ), [fetchState.data, selectedClient, statusFilter]);
+  ), [fetchState.data, selectedClient, statusFilter, fileFilter]);
   const openTotal = useMemo(
     () => openSections.reduce((n, s) => n + s.delays.length, 0),
     [openSections],
@@ -513,23 +543,44 @@ export default function DelayDetailModal({ day, teamId, clientName, onClose }) {
           </div>
         )}
 
-        {/* Filter bar — client dropdown + status tabs */}
-        {!fetchState.loading && !fetchState.error && baseSections.length > 0 && (
+        {/* Filter bar — client dropdown + files dropdown + status tabs */}
+        {!fetchState.loading && !fetchState.error && (baseSections.length > 0 || openSections.length > 0) && (
           <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
-            <select
-              value={selectedClient}
-              onChange={(e) => setSelectedClient(e.target.value)}
-              style={{
-                background: C.card, color: C.pri, border: `1px solid ${C.border}`,
-                borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 600,
-                cursor: "pointer", outline: "none", fontFamily: "'DM Sans', sans-serif", maxWidth: 260,
-              }}
-            >
-              <option value="all">All Clients ({clientOptions.reduce((s, c) => s + c.count, 0)})</option>
-              {clientOptions.map((c) => (
-                <option key={c.name} value={c.name}>{c.name} ({c.count})</option>
-              ))}
-            </select>
+            {/* Client dropdown only meaningful in team view (multiple clients). */}
+            {clientOptions.length > 1 && (
+              <select
+                value={selectedClient}
+                onChange={(e) => setSelectedClient(e.target.value)}
+                style={{
+                  background: C.card, color: C.pri, border: `1px solid ${C.border}`,
+                  borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 600,
+                  cursor: "pointer", outline: "none", fontFamily: "'DM Sans', sans-serif", maxWidth: 260,
+                }}
+              >
+                <option value="all">All Clients ({clientOptions.reduce((s, c) => s + c.count, 0)})</option>
+                {clientOptions.map((c) => (
+                  <option key={c.name} value={c.name}>{c.name} ({c.count})</option>
+                ))}
+              </select>
+            )}
+            {/* Files / task-name dropdown. */}
+            {fileOptions.length > 0 && (
+              <select
+                value={fileFilter}
+                onChange={(e) => setFileFilter(e.target.value)}
+                title="Filter by file / task name"
+                style={{
+                  background: C.card, color: C.pri, border: `1px solid ${C.border}`,
+                  borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 600,
+                  cursor: "pointer", outline: "none", fontFamily: "'DM Sans', sans-serif", maxWidth: 280,
+                }}
+              >
+                <option value="all">📄 All Files ({fileOptions.length})</option>
+                {fileOptions.map((f) => (
+                  <option key={f} value={f}>{f}</option>
+                ))}
+              </select>
+            )}
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               {[
                 ["all", "All", null, statusCounts.all],
