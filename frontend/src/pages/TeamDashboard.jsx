@@ -827,9 +827,20 @@ function BillableNonBillableByClient({ clients, periodLabel, loading, onBarClick
             >
               <LabelList
                 dataKey="Billable"
-                position="top"
-                formatter={(v) => (v > 0 ? `${Number(v).toFixed(2)}h` : "")}
-                style={{ fill: "#10B981", fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono', monospace" }}
+                content={(p) => {
+                  const v = Number(p.value) || 0;
+                  if (v <= 0) return null;
+                  const client = chartData[p.index]?._client;
+                  return (
+                    <text
+                      x={p.x + p.width / 2} y={p.y - 4} textAnchor="middle"
+                      style={{ cursor: "pointer", fill: "#10B981", fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono', monospace" }}
+                      onClick={(e) => { e.stopPropagation(); if (client && onBarClick) onBarClick(client, "Billable"); }}
+                    >
+                      {v.toFixed(2)}h
+                    </text>
+                  );
+                }}
               />
             </Bar>
             <Bar
@@ -843,9 +854,20 @@ function BillableNonBillableByClient({ clients, periodLabel, loading, onBarClick
             >
               <LabelList
                 dataKey="Non-Billable"
-                position="top"
-                formatter={(v) => (v > 0 ? `${Number(v).toFixed(2)}h` : "")}
-                style={{ fill: "#F2895A", fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono', monospace" }}
+                content={(p) => {
+                  const v = Number(p.value) || 0;
+                  if (v <= 0) return null;
+                  const client = chartData[p.index]?._client;
+                  return (
+                    <text
+                      x={p.x + p.width / 2} y={p.y - 4} textAnchor="middle"
+                      style={{ cursor: "pointer", fill: "#F2895A", fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono', monospace" }}
+                      onClick={(e) => { e.stopPropagation(); if (client && onBarClick) onBarClick(client, "Non-Billable"); }}
+                    >
+                      {v.toFixed(2)}h
+                    </text>
+                  );
+                }}
               />
             </Bar>
           </BarChart>
@@ -2364,30 +2386,10 @@ function CurrentlyActiveWidget({ members, onSelect }) {
     [members],
   );
   const total = members.length;
-  const businessHours = _isBusinessHoursIST();
 
-  if (active.length === 0) {
-    const msg = businessHours
-      ? "⚠ No active members during business hours."
-      : "No active members. Outside business hours.";
-    const color = businessHours ? C.orange : C.muted;
-    return (
-      <div
-        style={{
-          background: businessHours ? `${C.orange}10` : "rgba(255,255,255,0.06)",
-          border: `1px solid ${businessHours ? `${C.orange}30` : C.border}`,
-          borderLeft: `3px solid ${color}`,
-          borderRadius: 8,
-          padding: "10px 16px",
-          fontSize: 12,
-          color,
-          fontWeight: 500,
-        }}
-      >
-        {msg}
-      </div>
-    );
-  }
+  // No "active now" members → render nothing (the warning banner was removed
+  // per request; an empty presence strip is cleaner than a scary message).
+  if (active.length === 0) return null;
 
   return (
     <div

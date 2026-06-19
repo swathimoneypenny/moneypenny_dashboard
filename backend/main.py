@@ -255,7 +255,7 @@ for _tid in list(TEAM_LETTER_MAP.keys()):
 # (case-insensitive substring match against the timesheet FULLNAME).
 # If a team's roster is empty, all timesheet rows pass through ("include all").
 TEAM_ROSTERS: dict[str, list[str]] = {
-    "team_a": ["kokila", "uma", "jayashree r", "jayashree b"],
+    "team_a": ["kokila", "uma", "jayashree r", "jayashree b", "irfhana"],
     "team_b": ["buela", "ivanjalin", "varshini", "pavithra s"],
     "team_c": ["grace", "mahalakshmi", "jeevtha s", "keerthana"],
     # Removed "sharmila" (Sharmila Rajkumar — Director) and "swetha s" (Swetha
@@ -538,6 +538,29 @@ def is_inactive_client(customer: str) -> bool:
     for name in INACTIVE_CLIENTS:
         nm = _normalize_for_match(name)
         if nm and nm in cust_norm:
+            return True
+    return False
+
+
+# Per-team client suppression: a customer that belongs to ANOTHER team but
+# occasionally gets logged by this team's preparers (mis-tag) would otherwise
+# surface as a stray org bucket on the wrong team. Hidden ONLY for the listed
+# team — the client still shows on its real team(s). Exact normalized match so
+# a short token like "lah" can't accidentally hide other customers.
+TEAM_HIDDEN_CLIENTS: dict[str, set[str]] = {
+    "team_a": {"Stay by Rafa"},   # Stay by Rafa belongs to Team C
+    "team_d": {"LAH"},            # LAH belongs to Team L / Team T
+}
+
+
+def is_hidden_client_for_team(team_id: str, customer: str) -> bool:
+    """True iff `customer` should be suppressed for THIS team (configured in
+    TEAM_HIDDEN_CLIENTS). Exact normalized-name match."""
+    cust_norm = _normalize_for_match(customer)
+    if not cust_norm:
+        return False
+    for name in TEAM_HIDDEN_CLIENTS.get(team_id, set()):
+        if _normalize_for_match(name) == cust_norm:
             return True
     return False
 
@@ -4741,6 +4764,11 @@ async def _team_response(
         # de-configured from TEAM_CLIENTS, so without this skip any legacy row
         # would resurface as a dynamic org bucket.
         if is_inactive_client(customer):
+            continue
+
+        # Drop clients that belong to another team but were logged here (so they
+        # don't surface as a stray bucket on the wrong team's dashboard).
+        if is_hidden_client_for_team(team_id, customer):
             continue
 
         # INTERNAL_CODES short-circuit: SNMP / breaks / admin / training rows

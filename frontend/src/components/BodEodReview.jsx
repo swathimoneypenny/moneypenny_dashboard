@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, Legend, Cell, ReferenceLine,
+  Tooltip, ResponsiveContainer, Legend, Cell, ReferenceLine, LabelList,
 } from "recharts";
 import { authFetch, C } from "../config";
 
@@ -691,6 +691,20 @@ function teamTStatusColor(status) {
   return "rgba(255,255,255,0.12)"; // not yet filled
 }
 
+function teamTStatusEmoji(status) {
+  const s = (status || "").toLowerCase();
+  if (s.includes("complete"))                          return "✅";
+  if (s.includes("progress") || s.includes("process")) return "🔄";
+  if (s.includes("delay"))                             return "⚠️";
+  if (s.includes("await") || s.includes("hold"))       return "⏳";
+  return "⬜";
+}
+const _TT_DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function teamTDayName(dateStr) {
+  const d = parseEntryDate(dateStr);
+  return d ? _TT_DOW[d.getDay()] : "";
+}
+
 const TT_TASK_SERIES = [
   { key: "daily_task", name: "Daily",    fill: "#4A8FE7" },
   { key: "tb",         name: "TB",       fill: "#10B981" },
@@ -766,30 +780,36 @@ function TeamTVisual({ grid, visibleDates, showRawSheet, setShowRawSheet }) {
           subtitle="days marked EOD Completed" onClick={() => {}} />
       </div>
 
-      {/* Status heatmap */}
+      {/* Daily status CARDS — emoji + colour + task count + returns + hours */}
       <div style={panelStyle()}>
-        <ChartHeader title="🗓 Daily EOD Status" hint="🟢 Completed · 🟡 In Progress · 🔴 Awaiting · 🟠 Delay · ▫ not filled" />
+        <ChartHeader title="🗓 Daily EOD Status" hint="✅ Completed · 🔄 In Progress · ⏳ Awaiting · ⚠️ Delay · ⬜ not filled" />
         {heatmapDays.length === 0 ? (
           <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12 }}>No days in this window.</div>
         ) : (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(142px, 1fr))", gap: 12 }}>
             {heatmapDays.map((d, i) => {
               const color = teamTStatusColor(d.eodStatus);
               return (
-                <div key={i}
-                  title={`${d.date} · EOD: ${d.eodStatus || "not filled"} · ${d.total_tasks} tasks · ${d.booked.toFixed(1)}h booked`}
-                  style={{
-                    minWidth: 64, padding: "8px 6px", borderRadius: 8,
-                    background: `${color}22`, border: `1px solid ${color}`,
-                    textAlign: "center", cursor: "default",
-                  }}>
-                  <div style={{ fontSize: 11, fontWeight: 800, color: C.pri }}>
-                    {d.date.split("/").slice(0, 2).join("/")}
+                <div key={i} style={{
+                  background: `${color}1A`, border: `2px solid ${color}`,
+                  borderRadius: 10, padding: 14, textAlign: "center",
+                }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: C.pri }}>{d.date}</div>
+                  <div style={{ fontSize: 10, color: C.muted, fontWeight: 700 }}>{teamTDayName(d.date)}</div>
+                  <div style={{ fontSize: 30, margin: "8px 0 2px", lineHeight: 1 }}>{teamTStatusEmoji(d.eodStatus)}</div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                    {d.eodStatus || "Not Filled"}
                   </div>
-                  <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginTop: 2 }}>
-                    {d.total_tasks} tasks
+                  <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
+                    <div style={{ fontSize: 22, fontWeight: 900, color: C.pri, fontFamily: "'DM Mono', monospace", lineHeight: 1 }}>
+                      {d.total_tasks}
+                    </div>
+                    <div style={{ fontSize: 10, color: C.muted, fontWeight: 700 }}>tasks</div>
                   </div>
-                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: color, margin: "5px auto 0" }} />
+                  {d.returns > 0 && (
+                    <div style={{ marginTop: 6, fontSize: 11, color: "#F0B947", fontWeight: 700 }}>📋 {d.returns} returns</div>
+                  )}
+                  <div style={{ marginTop: 6, fontSize: 11, color: BLUE, fontWeight: 700 }}>⏱ {d.booked.toFixed(1)}h</div>
                 </div>
               );
             })}
@@ -797,21 +817,24 @@ function TeamTVisual({ grid, visibleDates, showRawSheet, setShowRawSheet }) {
         )}
       </div>
 
-      {/* Task breakdown stacked bar */}
+      {/* Task breakdown stacked bar — segment numbers shown via LabelList */}
       {days.some((d) => TT_TASK_SERIES.some((s) => d[s.key] > 0)) && (
         <div style={panelStyle()}>
-          <ChartHeader title="📊 Task Breakdown by Day" hint="Daily / TB / Tax Return / Proforma / Billing / Reports / K1 Recap" />
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={days} margin={{ top: 12, right: 16, left: 10, bottom: 56 }}>
+          <ChartHeader title="📊 Task Breakdown by Day" hint="X: Date · Y: Number of Tasks · Daily / TB / Tax Return / Proforma / Billing / Reports / K1 Recap" />
+          <ResponsiveContainer width="100%" height={400}>
+            <BarChart data={days} margin={{ top: 20, right: 30, left: 30, bottom: 64 }}>
               <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="date" tick={{ fill: C.sec, fontSize: 10, fontWeight: 700 }} angle={-30} textAnchor="end" height={64} interval={0}
+              <XAxis dataKey="date" tick={{ fill: C.sec, fontSize: 10, fontWeight: 700 }} angle={-45} textAnchor="end" height={72} interval={0}
                 label={{ value: "Date", position: "insideBottom", offset: -2, fill: C.muted, fontSize: 11, fontWeight: 700 }} />
-              <YAxis tick={{ fill: C.muted, fontSize: 10, fontWeight: 700 }}
-                label={{ value: "Number of Tasks", angle: -90, position: "insideLeft", fill: C.muted, fontSize: 11, fontWeight: 700 }} />
+              <YAxis tick={{ fill: C.muted, fontSize: 10, fontWeight: 700 }} allowDecimals={false}
+                label={{ value: "Number of Tasks", angle: -90, position: "insideLeft", fill: C.muted, fontSize: 11, fontWeight: 700, style: { textAnchor: "middle" } }} />
               <Tooltip cursor={{ fill: "rgba(255,255,255,0.04)" }} contentStyle={tooltipStyle()} />
-              <Legend wrapperStyle={{ color: C.pri, fontWeight: 700, fontSize: 11 }} />
+              <Legend verticalAlign="top" wrapperStyle={{ color: C.pri, fontWeight: 700, fontSize: 11, paddingBottom: 8 }} />
               {TT_TASK_SERIES.map((s) => (
-                <Bar key={s.key} dataKey={s.key} stackId="t" fill={s.fill} name={s.name} />
+                <Bar key={s.key} dataKey={s.key} stackId="t" fill={s.fill} name={s.name}>
+                  <LabelList dataKey={s.key} position="center" fill="#FFFFFF" fontSize={10}
+                    formatter={(v) => (v > 0 ? v : "")} />
+                </Bar>
               ))}
             </BarChart>
           </ResponsiveContainer>
