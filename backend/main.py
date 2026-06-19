@@ -10020,5 +10020,12 @@ Status thresholds: CRITICAL <50% | BELOW TARGET 50-80% | ON TRACK 80-100% | ABOV
 
 
 if __name__ == "__main__":
+    import os
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    # reload=True runs uvicorn's StatReload file-watcher, which is a DEV-only
+    # feature: on this 1 GB prod box it adds a watcher process AND, every time it
+    # fires, restarts the worker — wiping all in-memory caches (team/rows/BOD-EOD)
+    # and forcing a fresh 60s timesheet re-parse (the cold-load storm seen in
+    # [PERF] logs). Default to OFF in prod; opt back in with DEV_RELOAD=1 locally.
+    _reload = os.environ.get("DEV_RELOAD", "0") == "1"
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=_reload)
