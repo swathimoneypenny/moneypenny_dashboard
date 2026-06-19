@@ -324,7 +324,7 @@ TEAM_EXPECTED_COUNTS: dict[str, int] = {
 # dashboard meeting banner. `day` is a weekday name; `time` is a display string
 # (IST). Add teams as TLs confirm their cadence.
 TEAM_MEETINGS: dict[str, dict] = {
-    "team_g": {"day": "Friday", "time": "8:30 AM IST", "description": "EZ Ledger Weekly Meeting", "client": "EZ Ledger"},
+    "team_g": {"day": "Friday", "time": "8:30 AM EST", "description": "EZ Ledger Weekly Meeting", "client": "EZ Ledger"},
 }
 
 _WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -444,7 +444,7 @@ TEAM_CLIENTS: dict[str, list[dict]] = {
         {"name": "Pereira Azevedo",       "tsMatch": ["Pereira Azevedo", "Pereira", "Azevedo"], "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
     ],
     "team_g": [
-        {"name": "Ez Ledger",            "tsMatch": ["Ez Ledger", "EZ Ledger"],                "estHrs": 320, "tz": "IST", "meeting": "Every Friday 8:30 AM IST"},
+        {"name": "Ez Ledger",            "tsMatch": ["Ez Ledger", "EZ Ledger"],                "estHrs": 320, "tz": "EST", "meeting": "Every Friday 8:30 AM EST (7:00 PM IST)"},
         {"name": "Proper Trust",         "tsMatch": ["Proper Trust", "Mintage", "Artesani"],   "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
         {"name": "Putman Accountancy",   "tsMatch": ["Putman"],                                "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
         # Keyword broadened to "Manzelli" 2026-06-19 — the old "Manzelli Consulting"
@@ -4507,9 +4507,13 @@ def build_team_report(rows: list, period_label: str, eod_rows: list) -> dict:
 
 def build_client_report(rows: list, client_name: str, period_label: str) -> dict:
     cn = client_name.lower()
+    # Match on the CUSTOMER field ONLY (never the free-text desc) and drop
+    # internal/S&N rows. Matching desc pulled in hours logged to "S&N" whose
+    # description merely mentioned the client (e.g. Reshma's Core 4 work booked
+    # to S&N showed up as Core 4 non-billable). Customer is the source of truth.
     client_rows = [
         r for r in rows
-        if cn in r["customer"].lower() or cn in r["desc"].lower()
+        if cn in r["customer"].lower() and not is_internal_customer(r["customer"])
     ]
 
     staff: dict = {}
@@ -5751,6 +5755,36 @@ def _is_internal_category(customer_name) -> bool:
     if not customer_name:
         return False
     return str(customer_name).strip().lower() in _INTERNAL_CATEGORY_NAMES
+
+
+# Internal / non-client customer keywords used ONLY by the per-client view to
+# keep S&N (MoneyPenny's own entity) and other internal time off a real
+# client's dashboard. Substring match on a normalized name. Deliberately
+# SEPARATE from INTERNAL_CODES so the TEAM view's bucketing is unchanged — the
+# TL still sees internal hours in team totals.
+_CLIENT_VIEW_INTERNAL_KEYWORDS = (
+    "s&n", "s & n", "s@n", "sn enterprises", "sn internal", "s&n internal",
+    "snmp", "internal", "training", "admin", "overhead", "breaks for teams",
+    "choose customer", "allocation", "cleanup",
+)
+
+
+def is_internal_customer(customer_name) -> bool:
+    """True iff the customer is an internal / non-client category, for the
+    client-view filter only. Normalizes punctuation+spacing, then substring-
+    matches the keyword list (so 'S&N Enterprises', 'S & N', 'SNMP Internal'
+    all hit)."""
+    if not customer_name:
+        return False
+    n = str(customer_name).lower().strip()
+    # keep '&' and '@' (part of "s&n"/"s@n"); flatten other punctuation/space
+    n = n.replace(".", " ").replace(",", " ").replace("-", " ").replace("/", " ")
+    n = " ".join(n.split())
+    n_compact = n.replace(" ", "")
+    for kw in _CLIENT_VIEW_INTERNAL_KEYWORDS:
+        if kw in n or kw.replace(" ", "") in n_compact:
+            return True
+    return False
 
 
 def get_employee_committed_hours(
@@ -8211,7 +8245,10 @@ def _build_projects_breakdown(rows: list[dict], client_name: str) -> list[dict]:
     cn = (client_name or "").lower()
     buckets: dict[str, dict] = {}
     for r in rows:
-        if cn not in (r.get("customer") or "").lower() and cn not in (r.get("desc") or "").lower():
+        # Customer-field match only + exclude internal/S&N — mirrors
+        # build_client_report so the projects totals reconcile with the summary.
+        customer = r.get("customer") or ""
+        if cn not in customer.lower() or is_internal_customer(customer):
             continue
         try:
             h = float(r.get("hours") or 0)
