@@ -39,6 +39,7 @@ export default function BodEodReview({ teamId }) {
   const [customEnd, setCustomEnd]           = useState("");
   const [modal, setModal]                   = useState({ open: false, type: null, data: null });
   const [activeCategory, setActiveCategory] = useState("monthly"); // monthly | daily | weekly | special
+  const [showRawSheet, setShowRawSheet]     = useState(false);     // Team T: raw daily sheet collapsed by default
 
   async function load() {
     setLoading(true);
@@ -444,10 +445,16 @@ export default function BodEodReview({ teamId }) {
         </div>
       )}
 
-      {/* Team T: verbatim daily sheet (all columns), rendered dynamically
-          from the sheet headers since its layout differs from the template. */}
+      {/* Team T: parsed visual dashboard (KPIs + status heatmap + task
+          breakdown), computed client-side from the raw_grid since the sheet
+          layout diverges from the template. Raw sheet kept behind a toggle. */}
       {isTeamT && client?.raw_grid?.headers?.length > 0 && (
-        <RawSheetTable grid={client.raw_grid} visibleDates={visibleDates} />
+        <TeamTVisual
+          grid={client.raw_grid}
+          visibleDates={visibleDates}
+          showRawSheet={showRawSheet}
+          setShowRawSheet={setShowRawSheet}
+        />
       )}
 
       {/* Category breakdown — 4-tab switcher (Monthly / Daily / Weekly /
@@ -633,6 +640,195 @@ function FileStatusCard({ label, value, icon, color, onClick }) {
         {label}
       </div>
     </button>
+  );
+}
+
+// ── Team T parsed dashboard ────────────────────────────────────────
+// Team T's BOD/EOD sheet packs the day's task plan as free text in the
+// "BOD Status" column ("Total task - 18, Daily task - 6, TB - 5, TR - 5,
+// Proforma - 2, Billing - 1, Reports - 3, K1 Recap - 1, Query asked - 2,
+// In process - 4"), a clean status enum in "EOD Status" (Completed / In
+// Progress / Awaiting Response / Delay with Client), and a numeric
+// "No of returns completed". We parse those client-side off the raw_grid.
+
+function _ttColIndex(headers, ...needles) {
+  const norm = headers.map((h) => (h || "").toLowerCase());
+  for (const n of needles) {
+    const i = norm.findIndex((h) => h.includes(n));
+    if (i >= 0) return i;
+  }
+  return -1;
+}
+
+function _ttInt(text, re) {
+  const m = re.exec(String(text || ""));
+  return m ? parseInt(m[1], 10) || 0 : 0;
+}
+
+function parseTeamTTaskText(text) {
+  return {
+    total_tasks: _ttInt(text, /total task\s*[-:]\s*(\d+)/i),
+    daily_task:  _ttInt(text, /daily task\s*[-:]\s*(\d+)/i),
+    tb:          _ttInt(text, /\bTB\s*[-:]\s*(\d+)/i),
+    tr:          _ttInt(text, /\bTR\s*[-:]\s*(\d+)/i),
+    proforma:    _ttInt(text, /proforma\s*[-:]\s*(\d+)/i),
+    billing:     _ttInt(text, /billing\s*[-:]\s*(\d+)/i),
+    reports:     _ttInt(text, /reports?\s*[-:]\s*(\d+)/i),
+    k1_recap:    _ttInt(text, /k1\s*recap\s*[-:]\s*(\d+)/i),
+    queries:     _ttInt(text, /quer(?:y|ies)\s*asked\s*[-:]\s*(\d+)/i),
+    in_process:  _ttInt(text, /in process\s*[-:]\s*(\d+)/i),
+  };
+}
+
+function teamTStatusColor(status) {
+  const s = (status || "").toLowerCase();
+  if (s.includes("complete"))                       return GREEN;
+  if (s.includes("progress") || s.includes("process")) return YELLOW;
+  if (s.includes("delay"))                          return ORANGE;
+  if (s.includes("await") || s.includes("hold"))    return RED;
+  return "rgba(255,255,255,0.12)"; // not yet filled
+}
+
+const TT_TASK_SERIES = [
+  { key: "daily_task", name: "Daily",    fill: "#4A8FE7" },
+  { key: "tb",         name: "TB",       fill: "#10B981" },
+  { key: "tr",         name: "Tax Ret",  fill: "#F0B947" },
+  { key: "proforma",   name: "Proforma", fill: "#9B7EE8" },
+  { key: "billing",    name: "Billing",  fill: "#EC6F9C" },
+  { key: "reports",    name: "Reports",  fill: "#6366F1" },
+  { key: "k1_recap",   name: "K1 Recap", fill: "#14B8A6" },
+];
+
+function TeamTVisual({ grid, visibleDates, showRawSheet, setShowRawSheet }) {
+  const headers = grid?.headers || [];
+  const idx = useMemo(() => ({
+    date:      0,
+    committed: _ttColIndex(headers, "committed"),
+    booked:    _ttColIndex(headers, "booked"),
+    bodStatus: _ttColIndex(headers, "bod status"),
+    eodStatus: headers.findIndex((h) => {
+      const l = (h || "").toLowerCase();
+      return l.includes("eod status") && !l.includes("detail");
+    }),
+    notes:     _ttColIndex(headers, "key points", "notes"),
+    returns:   _ttColIndex(headers, "returns"),
+  }), [headers]);
+
+  const days = useMemo(() => {
+    let rows = grid?.rows || [];
+    if (visibleDates && visibleDates.size) {
+      const f = rows.filter((r) => visibleDates.has((r[idx.date] || "").trim()));
+      if (f.length) rows = f;
+    }
+    return rows.map((r) => {
+      const cell = (i) => (i >= 0 && i < r.length ? r[i] : "") || "";
+      // Task counts live in BOD Status; fall back to Key Points/Notes.
+      const taskText = cell(idx.bodStatus) || cell(idx.notes);
+      const parsed = parseTeamTTaskText(taskText);
+      return {
+        date:      (cell(idx.date) || "").trim(),
+        committed: Number(cell(idx.committed)) || 0,
+        booked:    Number(cell(idx.booked)) || 0,
+        eodStatus: (cell(idx.eodStatus) || "").trim(),
+        returns:   parseInt(cell(idx.returns), 10) || 0,
+        ...parsed,
+      };
+    });
+  }, [grid, visibleDates, idx]);
+
+  const summary = useMemo(() => {
+    const totalReturns = days.reduce((s, d) => s + d.returns, 0);
+    const totalTasks   = days.reduce((s, d) => s + d.total_tasks, 0);
+    const totalQueries = days.reduce((s, d) => s + d.queries, 0);
+    const filled       = days.filter((d) => d.eodStatus);
+    const completed    = filled.filter((d) => d.eodStatus.toLowerCase().includes("complete"));
+    const compliance   = filled.length ? (completed.length / filled.length) * 100 : 0;
+    return { totalReturns, totalTasks, totalQueries, compliance, daysCount: days.length };
+  }, [days]);
+
+  // Newest-first for the heatmap so the latest day reads first.
+  const heatmapDays = useMemo(() => [...days].reverse().slice(0, 28), [days]);
+  const hasReturns = summary.totalReturns > 0;
+
+  return (
+    <>
+      {/* Parsed KPI cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+        <ClickableKpi label="📋 Total Tasks (planned)" value={summary.totalTasks} color={BLUE}
+          subtitle={`${summary.daysCount} day${summary.daysCount === 1 ? "" : "s"} in view`} onClick={() => {}} />
+        <ClickableKpi label="✅ Returns Completed" value={summary.totalReturns} color={GREEN}
+          subtitle={hasReturns ? "from 'No of returns completed'" : "column not filled yet"} onClick={() => {}} />
+        <ClickableKpi label="❓ Queries Asked" value={summary.totalQueries} color={PURPLE}
+          subtitle="parsed from daily plan" onClick={() => {}} />
+        <ClickableKpi label="📊 EOD Completion" value={`${summary.compliance.toFixed(0)}%`} color={ORANGE}
+          subtitle="days marked EOD Completed" onClick={() => {}} />
+      </div>
+
+      {/* Status heatmap */}
+      <div style={panelStyle()}>
+        <ChartHeader title="🗓 Daily EOD Status" hint="🟢 Completed · 🟡 In Progress · 🔴 Awaiting · 🟠 Delay · ▫ not filled" />
+        {heatmapDays.length === 0 ? (
+          <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12 }}>No days in this window.</div>
+        ) : (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {heatmapDays.map((d, i) => {
+              const color = teamTStatusColor(d.eodStatus);
+              return (
+                <div key={i}
+                  title={`${d.date} · EOD: ${d.eodStatus || "not filled"} · ${d.total_tasks} tasks · ${d.booked.toFixed(1)}h booked`}
+                  style={{
+                    minWidth: 64, padding: "8px 6px", borderRadius: 8,
+                    background: `${color}22`, border: `1px solid ${color}`,
+                    textAlign: "center", cursor: "default",
+                  }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: C.pri }}>
+                    {d.date.split("/").slice(0, 2).join("/")}
+                  </div>
+                  <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginTop: 2 }}>
+                    {d.total_tasks} tasks
+                  </div>
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: color, margin: "5px auto 0" }} />
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Task breakdown stacked bar */}
+      {days.some((d) => TT_TASK_SERIES.some((s) => d[s.key] > 0)) && (
+        <div style={panelStyle()}>
+          <ChartHeader title="📊 Task Breakdown by Day" hint="Daily / TB / Tax Return / Proforma / Billing / Reports / K1 Recap" />
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={days} margin={{ top: 12, right: 16, left: 0, bottom: 40 }}>
+              <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="date" tick={{ fill: C.sec, fontSize: 10, fontWeight: 700 }} angle={-30} textAnchor="end" height={50} interval={0} />
+              <YAxis tick={{ fill: C.muted, fontSize: 10, fontWeight: 700 }} />
+              <Tooltip cursor={{ fill: "rgba(255,255,255,0.04)" }} contentStyle={tooltipStyle()} />
+              <Legend wrapperStyle={{ color: C.pri, fontWeight: 700, fontSize: 11 }} />
+              {TT_TASK_SERIES.map((s) => (
+                <Bar key={s.key} dataKey={s.key} stackId="t" fill={s.fill} name={s.name} />
+              ))}
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Collapsible raw daily sheet */}
+      <div>
+        <button
+          onClick={() => setShowRawSheet((v) => !v)}
+          style={{
+            background: "transparent", border: `1px solid ${C.border}`, color: C.pri,
+            borderRadius: 8, padding: "8px 14px", cursor: "pointer",
+            fontSize: 12, fontWeight: 800, letterSpacing: 0.4, fontFamily: "inherit",
+          }}
+        >
+          {showRawSheet ? "▼ Hide Raw Daily Sheet" : "▶ Show Raw Daily Sheet (all columns)"}
+        </button>
+      </div>
+      {showRawSheet && <RawSheetTable grid={grid} visibleDates={visibleDates} />}
+    </>
   );
 }
 
