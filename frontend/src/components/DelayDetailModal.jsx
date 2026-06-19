@@ -340,6 +340,27 @@ export default function DelayDetailModal({ day, teamId, clientName, onClose }) {
       .filter((s) => s.delays.length > 0)
   ), [baseSections, selectedClient, statusFilter]);
 
+  // Additive "open questions — all dates" sections: open/in_progress delays
+  // from every date (not just the clicked day), so unanswered questions surface
+  // even when nothing was posted on this specific date. Respects the client +
+  // status filters; the status filter naturally empties it when "Completed" is
+  // selected (these rows are open/in_progress by construction).
+  const openSections = useMemo(() => (
+    (fetchState.data?.clients || [])
+      .filter((s) => selectedClient === "all" || s.client_name === selectedClient)
+      .map((s) => ({
+        ...s,
+        delays: (s.open_all_dates || []).filter(
+          (d) => statusFilter === "all" || resolveDelayStatus(d) === statusFilter,
+        ),
+      }))
+      .filter((s) => s.delays.length > 0)
+  ), [fetchState.data, selectedClient, statusFilter]);
+  const openTotal = useMemo(
+    () => openSections.reduce((n, s) => n + s.delays.length, 0),
+    [openSections],
+  );
+
   const totals = statusCounts;
   const tabErrors = fetchState.data?.tab_errors || [];
 
@@ -547,8 +568,41 @@ export default function DelayDetailModal({ day, teamId, clientName, onClose }) {
           />
         ))}
 
-        {/* Empty state — distinguish "filtered out" from "no data at all" */}
-        {!fetchState.loading && !fetchState.error && sections.length === 0 && (
+        {/* Open questions across ALL dates — additive section so unanswered
+            delays surface even when nothing was posted on the clicked day. */}
+        {!fetchState.loading && !fetchState.error && openSections.length > 0 && (
+          <div style={{ marginTop: sections.length > 0 ? 20 : 8 }}>
+            <div
+              style={{
+                display: "flex", alignItems: "center", gap: 8,
+                padding: "8px 0", marginBottom: 8,
+                borderTop: sections.length > 0 ? `1px solid ${C.border}` : "none",
+                paddingTop: sections.length > 0 ? 14 : 0,
+              }}
+            >
+              <span style={{ fontSize: 13, fontWeight: 800, color: C.pri, letterSpacing: 0.4 }}>
+                🔓 Open Questions — All Dates
+              </span>
+              <span style={{ fontSize: 11, fontWeight: 800, color: "#F0B947" }}>
+                {openTotal}
+              </span>
+              <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>
+                · open & in-progress, regardless of post date
+              </span>
+            </div>
+            {openSections.map((section) => (
+              <ClientSection
+                key={`open-${section.tab_gid}`}
+                section={section}
+                date={null}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Empty state — distinguish "filtered out" from "no data at all".
+            Suppressed when the open-questions section has content. */}
+        {!fetchState.loading && !fetchState.error && sections.length === 0 && openSections.length === 0 && (
           <div
             style={{
               padding: "12px 14px",

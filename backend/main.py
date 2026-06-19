@@ -7006,6 +7006,7 @@ def _build_team_delays(team_id: str, date: str | None, client: str | None) -> di
     open_count = 0
     in_progress_count = 0
     completed_count = 0
+    open_all_total = 0
 
     for client_key, gid in gid_map.items():
         display_name = _client_display_name(client_key)
@@ -7033,31 +7034,33 @@ def _build_team_delays(team_id: str, date: str | None, client: str | None) -> di
             })
             continue
 
+        full_sorted = _sort_delays(parsed)
+        # Open questions across ALL dates (not date-scoped) — open + in_progress,
+        # sorted oldest-first, capped to keep the payload reasonable. Powers the
+        # modal's "Open questions — all dates" section so unanswered delays
+        # surface even on a day with no newly-posted questions.
+        open_all = [d for d in full_sorted if d.get("status") in ("open", "in_progress")][:100]
+        open_all_total += len(open_all)
+
+        day_rows = full_sorted
         if norm_date:
-            parsed = [
-                d for d in parsed
+            day_rows = [
+                d for d in full_sorted
                 if (d.get("date_posted_iso") or "") == norm_date
             ]
-        if not parsed:
-            sections.append({
-                "client_name": display_name,
-                "tab_gid":     gid,
-                "delays":      [],
-                "count":       0,
-            })
-            continue
-        parsed = _sort_delays(parsed)
-        for d in parsed:
+        for d in day_rows:
             grand_total += 1
             s = d.get("status")
             if s == "open":          open_count += 1
             elif s == "in_progress": in_progress_count += 1
             elif s == "completed":   completed_count += 1
         sections.append({
-            "client_name": display_name,
-            "tab_gid":     gid,
-            "delays":      parsed,
-            "count":       len(parsed),
+            "client_name":    display_name,
+            "tab_gid":        gid,
+            "delays":         day_rows,
+            "count":          len(day_rows),
+            "open_all_dates": open_all,
+            "open_all_count": len(open_all),
         })
 
     return {
@@ -7071,6 +7074,7 @@ def _build_team_delays(team_id: str, date: str | None, client: str | None) -> di
             "open":         open_count,
             "in_progress":  in_progress_count,
             "completed":    completed_count,
+            "open_all_dates": open_all_total,
         },
         "clients":     sections,
         "tab_errors":  tab_errors,
