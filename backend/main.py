@@ -436,8 +436,12 @@ TEAM_CLIENTS: dict[str, list[dict]] = {
         {"name": "ACS",                  "tsMatch": ["ACS"],                                   "estHrs": 320, "tz": "PST", "meeting": "No scheduled meeting"},
     ],
     "team_f": [
-        # Thrive removed 2026-06-19 — inactive (also in INACTIVE_CLIENTS so any
-        # legacy timesheet rows are filtered out, not surfaced as a stray bucket).
+        # Thrive removed 2026-06-19 — inactive (also in INACTIVE_CLIENTS).
+        # Scotts Laws + Pereira Azevedo are Team F's real clients; configured so
+        # they always show with committed from their BOD/EOD tabs (estHrs=0 →
+        # committed resolves from the sheet, not the member×preparer fallback).
+        {"name": "Scotts Laws",          "tsMatch": ["Scotts Laws", "Scotts"],                 "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "Pereira Azevedo",       "tsMatch": ["Pereira Azevedo", "Pereira", "Azevedo"], "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
     ],
     "team_g": [
         {"name": "Ez Ledger",            "tsMatch": ["Ez Ledger", "EZ Ledger"],                "estHrs": 320, "tz": "IST", "meeting": "Every Friday 8:30 AM IST"},
@@ -556,17 +560,27 @@ def is_inactive_client(customer: str) -> bool:
 TEAM_HIDDEN_CLIENTS: dict[str, set[str]] = {
     "team_a": {"Stay by Rafa"},                       # Stay by Rafa belongs to Team C
     "team_d": {"LAH", "LAH CPA", "LAH CPAs", "L A H"}, # LAH belongs to Team L / Team T
+    "team_f": {"SoCo", "Empower Accounting"},          # SoCo→Team I, Empower→Team K
 }
 
 
 def is_hidden_client_for_team(team_id: str, customer: str) -> bool:
     """True iff `customer` should be suppressed for THIS team (configured in
-    TEAM_HIDDEN_CLIENTS). Exact normalized-name match."""
+    TEAM_HIDDEN_CLIENTS). A hidden name of >=4 normalized chars matches as a
+    substring of the customer (so "SoCo"/"Empower Accounting" catch "SoCo
+    Business Solutions Inc" / "Empower Accounting & Tax"); shorter names (e.g.
+    "LAH") require an exact match so they can't over-hit ("Lahiri")."""
     cust_norm = _normalize_for_match(customer)
     if not cust_norm:
         return False
     for name in TEAM_HIDDEN_CLIENTS.get(team_id, set()):
-        if _normalize_for_match(name) == cust_norm:
+        nm = _normalize_for_match(name)
+        if not nm:
+            continue
+        if len(nm) >= 4:
+            if nm in cust_norm:
+                return True
+        elif nm == cust_norm:
             return True
     return False
 
