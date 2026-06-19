@@ -65,6 +65,13 @@ export default function BodEodReview({ teamId }) {
 
   const allEntries = client?.entries || [];
 
+  // Team T's BOD/EOD sheet uses a different column layout AND a free-text
+  // status format (not the standard Not-Started/In-Process/Completed file
+  // pipeline). The committed/booked columns (1,2) still parse correctly, but
+  // the structured file-status cards + category tabs would read misaligned
+  // columns — so for Team T we hide those and render the verbatim sheet grid.
+  const isTeamT = teamId === "team_t";
+
   // Filter entries by period. "Today" = latest entry only. "Week" / "Month"
   // = entries within that window from now. "Custom" = inclusive range.
   // Falls back to all entries when a window matches nothing — empty state
@@ -97,6 +104,13 @@ export default function BodEodReview({ teamId }) {
     });
     return within.length ? within : allEntries;
   }, [allEntries, period, customStart, customEnd]);
+
+  // Dates currently in view — used to slice the raw sheet grid to the same
+  // window the rest of the dashboard is showing.
+  const visibleDates = useMemo(
+    () => new Set(filteredEntries.map((e) => (e.date || "").trim())),
+    [filteredEntries],
+  );
 
   // Period stats. CRITICAL: committed_hours / booked_hours on each entry
   // are CUMULATIVE running totals (sheet column B/C is "8, 16, 24, ..."
@@ -290,8 +304,9 @@ export default function BodEodReview({ teamId }) {
         </button>
       </div>
 
-      {/* File-status row — 6 cards driven by latest day's EOD actuals */}
-      {fileCountStats && (
+      {/* File-status row — 6 cards driven by latest day's EOD actuals.
+          Hidden for Team T (different sheet layout → would misalign). */}
+      {!isTeamT && fileCountStats && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10 }}>
           <FileStatusCard
             label="Total Files"   value={fileCountStats.total}       icon="📁" color={C.pri}
@@ -429,12 +444,19 @@ export default function BodEodReview({ teamId }) {
         </div>
       )}
 
+      {/* Team T: verbatim daily sheet (all columns), rendered dynamically
+          from the sheet headers since its layout differs from the template. */}
+      {isTeamT && client?.raw_grid?.headers?.length > 0 && (
+        <RawSheetTable grid={client.raw_grid} visibleDates={visibleDates} />
+      )}
+
       {/* Category breakdown — 4-tab switcher (Monthly / Daily / Weekly /
           Special Task). Each tab renders BOD vs EOD side-by-side for that
           specific status block, a per-category Plan vs Actual chart, and
           auto-generated Key Observations. Replaces the previous monthly-
-          only BOD/EOD bars + Status Progression + Daily Variance. */}
-      {latestEntry && (
+          only BOD/EOD bars + Status Progression + Daily Variance.
+          Hidden for Team T (different sheet layout → would misalign). */}
+      {!isTeamT && latestEntry && (
         <CategorySection
           bodEntry={latestEntry}
           eodEntry={latestWithEOD || latestEntry}
@@ -611,6 +633,84 @@ function FileStatusCard({ label, value, icon, color, onClick }) {
         {label}
       </div>
     </button>
+  );
+}
+
+// Verbatim sheet grid for teams whose BOD/EOD layout diverges from the
+// standard template. Renders every column from the sheet header, sliced to
+// the dates currently in view (newest first), with horizontal scroll for the
+// wide tax-team layout.
+function RawSheetTable({ grid, visibleDates }) {
+  const headers = grid?.headers || [];
+  let rows = grid?.rows || [];
+  if (visibleDates && visibleDates.size) {
+    const filtered = rows.filter((r) => visibleDates.has((r[0] || "").trim()));
+    if (filtered.length) rows = filtered;
+  }
+  rows = [...rows].reverse(); // newest first (sheet is chronological)
+  if (!headers.length) return null;
+  return (
+    <div style={panelStyle()}>
+      <ChartHeader
+        title="📋 Daily Sheet — All Columns"
+        hint={`${rows.length} day${rows.length === 1 ? "" : "s"} · Team T extended format`}
+      />
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 11 }}>
+          <thead>
+            <tr>
+              {headers.map((h, i) => (
+                <th
+                  key={i}
+                  style={{
+                    position: i === 0 ? "sticky" : "static",
+                    left: i === 0 ? 0 : undefined,
+                    background: C.elevated,
+                    color: C.pri,
+                    fontWeight: 800,
+                    textAlign: "left",
+                    padding: "8px 10px",
+                    borderBottom: `1px solid ${C.border}`,
+                    whiteSpace: "nowrap",
+                    textTransform: "uppercase",
+                    letterSpacing: 0.4,
+                    fontSize: 10,
+                  }}
+                >
+                  {h || "—"}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, ri) => (
+              <tr key={ri} style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                {headers.map((_, ci) => (
+                  <td
+                    key={ci}
+                    style={{
+                      position: ci === 0 ? "sticky" : "static",
+                      left: ci === 0 ? 0 : undefined,
+                      background: ci === 0 ? C.card : "transparent",
+                      color: ci === 0 ? C.pri : C.sec,
+                      fontWeight: ci === 0 ? 800 : 600,
+                      padding: "8px 10px",
+                      verticalAlign: "top",
+                      maxWidth: 280,
+                      minWidth: ci === 0 ? 90 : undefined,
+                      whiteSpace: "pre-wrap",
+                      fontFamily: (ci === 1 || ci === 2) ? "'DM Mono', monospace" : "inherit",
+                    }}
+                  >
+                    {r[ci] || ""}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 

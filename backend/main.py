@@ -292,7 +292,8 @@ TEAM_ROSTERS: dict[str, list[str]] = {
     # prior "shiyamala devi" (same person, corrected surname). "swetha sub" is
     # specific enough to win the longest-keyword tiebreak over Team D's "swetha s".
     "team_t": ["pragathi", "reshma hameeth", "prithvi b", "akshaya manojkumar",
-               "naveena", "dharani p", "shiyamala saravanan", "swetha sub"],
+               "naveena", "dharani p", "shiyamala saravanan", "swetha sub",
+               "fathima saleem"],
 }
 
 # Startup warning — Team T preparers haven't been provided by management yet.
@@ -9086,9 +9087,20 @@ def _bod_eod_parse_rows(client_name: str, csv_text: str) -> dict:
     """Drive the parse: skip the 2 header rows the sheet template ships with,
     then turn each data row into a structured entry."""
     entries: list[dict] = []
+    # Verbatim column grid (header row + data rows), independent of the
+    # position-based structured parse below. Teams whose sheet layout diverges
+    # from the standard template (e.g. Team T, whose status columns sit at
+    # different indices and use a free-text format) render this grid directly
+    # so every real column is visible even when the structured parse can't
+    # align it. Header is taken from the first row of the tab.
+    raw_headers: list[str] = []
+    raw_rows: list[list[str]] = []
     if csv_text:
         reader = csv.reader(io.StringIO(csv_text))
         rows = list(reader)
+        if rows:
+            raw_headers = [(h or "").strip() for h in rows[0]]
+        ncols = len(raw_headers)
         # Header rows: typical sheet template has 2 header rows. We
         # tolerate variance by detecting the first data row (date-looking
         # first cell) rather than hard-coded skip.
@@ -9098,6 +9110,7 @@ def _bod_eod_parse_rows(client_name: str, csv_text: str) -> dict:
             date_str = _bod_eod_cell(raw, 0)
             if not _bod_eod_is_data_row(date_str):
                 continue
+            raw_rows.append([_bod_eod_cell(raw, i) for i in range(ncols)])
             committed = _bod_eod_float(raw, 1)
             booked    = _bod_eod_float(raw, 2)
             bod = {
@@ -9178,6 +9191,7 @@ def _bod_eod_parse_rows(client_name: str, csv_text: str) -> dict:
         "client_name": client_name,
         "entries":     entries,
         "heatmap":     _bod_eod_build_heatmaps(entries),
+        "raw_grid":    {"headers": raw_headers, "rows": raw_rows},
         "summary": {
             "total_committed": cum_c,                  # cumulative MTD
             "total_booked":    cum_b,                  # cumulative MTD
