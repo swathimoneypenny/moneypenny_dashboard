@@ -388,23 +388,9 @@ function ClientCard({ client, onClick }) {
         </div>
         <span style={{ color: C.muted, fontSize: 16, opacity: hovered ? 1 : 0.5, transition: "opacity 0.18s" }}>→</span>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span
-          style={{
-            background: `${C.teal}18`,
-            border: `1px solid ${C.teal}40`,
-            color: C.teal,
-            borderRadius: 20,
-            padding: "3px 10px",
-            fontSize: 12,
-            fontWeight: 600,
-            fontFamily: "'DM Mono', monospace",
-          }}
-        >
-          {(client.totalHours ?? 0).toFixed(2)}h
-        </span>
-        <span style={{ fontSize: 11, color: C.muted }}>total hours</span>
-      </div>
+      {/* Total-hours pill removed 2026-06-19 — the /active-clients total was
+          a misleading all-time figure shown before the user opens the client.
+          Open the client to see period-scoped, billable-correct hours. */}
     </div>
   );
 }

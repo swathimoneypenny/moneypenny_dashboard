@@ -324,7 +324,7 @@ TEAM_EXPECTED_COUNTS: dict[str, int] = {
 # dashboard meeting banner. `day` is a weekday name; `time` is a display string
 # (IST). Add teams as TLs confirm their cadence.
 TEAM_MEETINGS: dict[str, dict] = {
-    "team_g": {"day": "Friday", "time": "08:30 IST", "description": "EZ Ledger Weekly Meeting", "client": "EZ Ledger"},
+    "team_g": {"day": "Friday", "time": "8:30 AM IST", "description": "EZ Ledger Weekly Meeting", "client": "EZ Ledger"},
 }
 
 _WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -436,10 +436,11 @@ TEAM_CLIENTS: dict[str, list[dict]] = {
         {"name": "ACS",                  "tsMatch": ["ACS"],                                   "estHrs": 320, "tz": "PST", "meeting": "No scheduled meeting"},
     ],
     "team_f": [
-        {"name": "Thrive",               "tsMatch": ["Thrive"],                                "estHrs": 320, "tz": "PST", "meeting": "No scheduled meeting"},
+        # Thrive removed 2026-06-19 — inactive (also in INACTIVE_CLIENTS so any
+        # legacy timesheet rows are filtered out, not surfaced as a stray bucket).
     ],
     "team_g": [
-        {"name": "Ez Ledger",            "tsMatch": ["Ez Ledger", "EZ Ledger"],                "estHrs": 320, "tz": "EST", "meeting": "Every Friday 5:15pm IST"},
+        {"name": "Ez Ledger",            "tsMatch": ["Ez Ledger", "EZ Ledger"],                "estHrs": 320, "tz": "IST", "meeting": "Every Friday 8:30 AM IST"},
         {"name": "Proper Trust",         "tsMatch": ["Proper Trust", "Mintage", "Artesani"],   "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
         {"name": "Putman Accountancy",   "tsMatch": ["Putman"],                                "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
         # Keyword broadened to "Manzelli" 2026-06-19 — the old "Manzelli Consulting"
@@ -530,6 +531,7 @@ INACTIVE_CLIENTS = {
     "bkp repair",
     "bookkeeping repair",
     "bookkeeping repair llc",
+    "thrive",
 }
 
 
@@ -2153,11 +2155,11 @@ def get_weekly_review(team_id: str, week_offset: int = 0) -> dict:
 # `DELAYS_TAB_GIDS[team_id][client_key]` → gid string. client_key is a
 # free-form lowercase label the TL recognizes; it surfaces in the API
 # response as `client_name` after we Title-Case it.
-# Delays older than this ISO date are hidden everywhere (TL request 2026-06-19 —
-# pre-May Jan/Feb/Mar/Apr 2026 entries were clutter). Applied at the single parse
+# Delays older than this ISO date are hidden everywhere (TL request 2026-06-19,
+# cutoff set to Mar 1 2026 — pre-March Jan/Feb entries were clutter). Single parse
 # chokepoint so team day-popup, open-all-dates, client delays, and the aging
 # aggregation all respect it. Undated rows are kept (can't judge their age).
-DELAYS_CUTOFF_ISO = "2026-05-01"
+DELAYS_CUTOFF_ISO = "2026-03-01"
 
 DELAYS_TAB_COLUMNS = {
     "date":             0,
@@ -6242,24 +6244,20 @@ def _build_leaderboard(
     # with no kwargs, which silently returned 0 for period='custom' (no
     # period_start/period_end) and a monthly value otherwise — driving the
     # 145.5h "monthly" committed shown in TeamMembersTable on Custom Range.
-    # Per-period committed target per member: today=8h, weekly=40h (full week),
-    # monthly/custom = pro-rated (working days elapsed × 8h). Weekly is
-    # intentionally NOT pro-rated so the card reads a clean 40h; monthly stays
-    # pro-rated so a mid-month member isn't unfairly flagged behind.
-    _lb_prorate = period in ("monthly", "custom")
-    committed = get_employee_committed_hours(
-        team_id, period, prorate=_lb_prorate,
-        period_start=full_start, period_end=full_end, as_of=today_iso,
-    )
+    # Per-period committed target per member = 8h × working days, computed
+    # directly (NOT the pro-rated 160×elapsed/total formula, which gave 109.8h
+    # instead of the expected 15×8=120h on Jun 19). today=8h, weekly=40h (full
+    # week), monthly/custom = working-days-elapsed × 8h (month/range-to-date).
     if period == "today":
+        committed = float(_PER_PREPARER_DAILY)
         committed_label = "8h/day target"
     elif period in ("weekly", "week"):
-        committed_label = "40h/week target"
-    elif period in ("monthly", "custom"):
+        committed = round(_PER_PREPARER_DAILY * _working_days_between(full_start, full_end), 2)
+        committed_label = f"{round(committed)}h/week target"
+    else:  # monthly / custom → working days elapsed (start → today) × 8h
         _wd_elapsed = _working_days_between(full_start, min(today_iso, full_end))
-        committed_label = f"{round(committed)}h ({_wd_elapsed} working days)"
-    else:
-        committed_label = f"{round(committed)}h target"
+        committed = round(_PER_PREPARER_DAILY * _wd_elapsed, 2)
+        committed_label = f"{round(committed)}h ({_wd_elapsed} working days × 8h)"
 
     # Same logic _team_response uses: assign_row_to_team handles multi-team ambiguity.
     def _row_matches(row) -> bool:
@@ -8010,19 +8008,31 @@ def get_bod_eod_review(team_id: str):
             "clients":      [],
             "summary":      {},
         }
-    clients: list[dict] = []
-    for client_name, gid in clients_gid_map.items():
+    # Fetch + parse every client tab CONCURRENTLY — the CSV exports are the
+    # slow part (network I/O), so a team with 9 tabs went from ~9× sequential
+    # round-trips to ~1×. ThreadPoolExecutor.map preserves input order.
+    import concurrent.futures
+
+    def _fetch_and_parse(item):
+        client_name, gid = item
         try:
             csv_text = _fetch_bod_eod_csv(sheet_id, gid)
-            clients.append(_bod_eod_parse_rows(client_name, csv_text))
+            return _bod_eod_parse_rows(client_name, csv_text)
         except Exception as e:
             print(f"[bod-eod] parse {client_name} gid={gid} error: {e}")
-            clients.append({
+            return {
                 "client_name": client_name,
                 "error":       str(e),
                 "entries":     [],
                 "summary":     {"total_committed": 0, "total_booked": 0, "total_variance": 0, "days_tracked": 0},
-            })
+            }
+
+    items = list(clients_gid_map.items())
+    if len(items) <= 1:
+        clients = [_fetch_and_parse(it) for it in items]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(items))) as _ex:
+            clients = list(_ex.map(_fetch_and_parse, items))
     return {
         "team_id":    team_id,
         "team_label": cfg.get("label", team_id),
@@ -9143,6 +9153,7 @@ def _bod_eod_parse_status_block(text: str) -> dict:
     if not text:
         return {}
     out: dict = {}
+    master_total_files = False  # a "Total no. of files" line locks the count
     for raw in str(text).split("\n"):
         line = raw.strip()
         if not line:
@@ -9156,13 +9167,27 @@ def _bod_eod_parse_status_block(text: str) -> dict:
             value = float(num_raw)
         except ValueError:
             continue
+        if value != value:  # NaN check
+            continue
         key = _bod_eod_canonical_key(label_raw)
         if not key:
             continue
-        # Sum duplicate rows (rare — sometimes TLs split "In process - 2"
-        # across two lines). Drop NaN if it sneaks in.
-        if value != value:  # NaN check
+        # "Total Files" must NOT be summed: a sheet has ONE master total
+        # ("Total no. of files - 62"), often followed by per-week breakdowns
+        # ("Total Files - 27" / "18" / "17") that would otherwise add up to a
+        # bogus 124. The master ("no. of files"/"number of files") wins and
+        # locks the value; absent a master, take the MAX (never the sum).
+        if key == "Total Files":
+            ll = label_raw.lower()
+            is_master = ("no" in ll and "file" in ll) or "number of file" in ll
+            if is_master:
+                out["Total Files"] = value
+                master_total_files = True
+            elif not master_total_files:
+                out["Total Files"] = max(out.get("Total Files", 0.0), value)
             continue
+        # Sum duplicate rows for other keys (rare — sometimes TLs split
+        # "In process - 2" across two lines).
         out[key] = out.get(key, 0.0) + value
     return out
 
