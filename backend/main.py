@@ -4869,6 +4869,10 @@ async def _team_response(
         team_id, period,
         period_start=full_start, period_end=full_end, as_of=today_iso,
     )
+    # Pre-warm every org's BOD/EOD CSV concurrently so the per-org
+    # _eod_committed_for_org calls below hit warm cache instead of N sequential
+    # network round-trips — the main cold-load cost on the team dashboard.
+    _prewarm_bod_eod_for_orgs(team_id, list(orgs.keys()))
     clients_data = []
     for org_name, h in orgs.items():
         actual = h["billable"] + h["nonBillable"]
@@ -5047,11 +5051,14 @@ async def _team_response(
     wd_total   = _working_days_between(full_start, full_end)
     wd_elapsed = _working_days_between(full_start, min(today_iso, full_end))
 
+    _elapsed = time.perf_counter() - t_total
     print(f"[_team_response] team={team_id} period={period} "
           f"rosterCount={len(roster)} totalRows={total_rows} matchedRows={matched_rows} "
           f"orgs={len(clients_data)} eodRows={len(eod_rows)} months={len(monthly_trend)} "
           f"members={team_member_count} perPreparer={per_preparer_target} target={team_target} "
-          f"utilPct={target_util_pct}% status={team_target_status}")
+          f"utilPct={target_util_pct}% status={team_target_status} ({_elapsed:.2f}s)")
+    if _elapsed > 1.0:
+        print(f"[PERF] team={team_id}/{period} response took {_elapsed:.2f}s (cold cache)")
 
     if roster and len(roster) == 1 and matched_rows == 0 and total_rows > 0:
         print(f"[WARN] {team_id} roster has only 1 entry {roster!r} but matched 0 rows. "
@@ -9382,6 +9389,29 @@ def _resolve_bod_eod_gid(team_id: str, org_name: str) -> str | None:
         if nk and (nk in target or target in nk):
             return gid
     return None
+
+
+def _prewarm_bod_eod_for_orgs(team_id: str, org_names: list[str]) -> None:
+    """Concurrently fetch + cache the BOD/EOD CSV for every org that resolves to
+    a tab, so the subsequent per-org _eod_committed_for_org calls hit warm cache
+    instead of N sequential network round-trips. Best-effort; failures are
+    swallowed (the per-org call retries / falls back). The ThreadPoolExecutor
+    context waits for all fetches before returning, populating _bod_eod_csv_cache."""
+    cfg = TEAM_LETTER_MAP.get(team_id)
+    sheet_id = cfg.get("sheetId") if cfg else None
+    if not sheet_id:
+        return
+    gids = set()
+    for name in org_names:
+        gid = _resolve_bod_eod_gid(team_id, name)
+        if gid:
+            gids.add(gid)
+    if len(gids) <= 1:
+        return  # nothing to parallelize — the single call will warm it
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(gids))) as ex:
+        for gid in gids:
+            ex.submit(_fetch_bod_eod_csv, sheet_id, gid)
 
 
 def _eod_committed_for_org(team_id: str, org_name: str, win_start: str, win_end: str) -> float | None:
