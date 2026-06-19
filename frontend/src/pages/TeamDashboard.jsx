@@ -2103,6 +2103,7 @@ ${clients.map((o) => (
         {!data?.needsRosterSetup && (
           <TeamMembersTable
             members={leaderboard?.members ?? null}
+            committedLabel={leaderboard?.committedLabel}
             onSelect={(name) => onSelectEmployee && onSelectEmployee({ teamId, employeeName: name, teamName: displayLabel })}
           />
         )}
@@ -2544,7 +2545,7 @@ function UserSelectorDropdown({ members, onSelect }) {
 }
 
 
-function TeamMembersTable({ members, onSelect }) {
+function TeamMembersTable({ members, onSelect, committedLabel }) {
   const [sort, setSort] = useState({ col: "billable", dir: "desc" });
   const sorted = useMemo(() => {
     if (!Array.isArray(members)) return [];
@@ -2617,7 +2618,7 @@ function TeamMembersTable({ members, onSelect }) {
                 {[
                   ["totalHours", "Total Hours"],
                   ["billable",   "Billable"],
-                  ["committed",  "Committed"],
+                  ["committed",  committedLabel ? `Committed · ${committedLabel}` : "Committed"],
                 ].map(([col, lbl]) => (
                   <th key={col} style={{ ...th, textAlign: "right" }} onClick={() => toggle(col)}>
                     {lbl}{sort.col === col && <span style={{ marginLeft: 4, opacity: 0.5, fontSize: 10 }}>{sort.dir === "asc" ? "▲" : "▼"}</span>}

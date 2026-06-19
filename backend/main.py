@@ -255,7 +255,10 @@ for _tid in list(TEAM_LETTER_MAP.keys()):
 # (case-insensitive substring match against the timesheet FULLNAME).
 # If a team's roster is empty, all timesheet rows pass through ("include all").
 TEAM_ROSTERS: dict[str, list[str]] = {
-    "team_a": ["kokila", "uma", "jayashree r", "jayashree b", "irfhana"],
+    # "fathima irfhana" — two-token keyword (both must prefix-match a name token),
+    # so it matches "Irfhana Fathima" / "Fathima Irfhana" but NOT Team T's
+    # "Fathima Saleem" or a bare "Irfhana". Replaced the looser single-token "irfhana".
+    "team_a": ["kokila", "uma", "jayashree r", "jayashree b", "fathima irfhana"],
     "team_b": ["buela", "ivanjalin", "varshini", "pavithra s"],
     "team_c": ["grace", "mahalakshmi", "jeevtha s", "keerthana"],
     # Removed "sharmila" (Sharmila Rajkumar — Director) and "swetha s" (Swetha
@@ -314,13 +317,14 @@ TEAM_EXPECTED_COUNTS: dict[str, int] = {
     "team_j": 4,  # TL — confirmed 4 (2026-06-17)
     "team_h": 3,  # TL — confirmed 3 executives (2026-06-17)
     "team_d": 8,  # 6 + Gunasekaran Sharmila + Sagada Swetha (2026-06-17)
+    "team_a": 5,  # 4 + Fathima Irfhana added 2026-06-19
 }
 
 # Recurring team-meeting schedule — drives the /meeting-status endpoint + the
 # dashboard meeting banner. `day` is a weekday name; `time` is a display string
 # (IST). Add teams as TLs confirm their cadence.
 TEAM_MEETINGS: dict[str, dict] = {
-    "team_g": {"day": "Friday", "time": "08:30 IST", "description": "Team G Weekly Meeting"},
+    "team_g": {"day": "Friday", "time": "08:30 IST", "description": "EZ Ledger Weekly Meeting", "client": "EZ Ledger"},
 }
 
 _WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -548,8 +552,8 @@ def is_inactive_client(customer: str) -> bool:
 # team — the client still shows on its real team(s). Exact normalized match so
 # a short token like "lah" can't accidentally hide other customers.
 TEAM_HIDDEN_CLIENTS: dict[str, set[str]] = {
-    "team_a": {"Stay by Rafa"},   # Stay by Rafa belongs to Team C
-    "team_d": {"LAH"},            # LAH belongs to Team L / Team T
+    "team_a": {"Stay by Rafa"},                       # Stay by Rafa belongs to Team C
+    "team_d": {"LAH", "LAH CPA", "LAH CPAs", "L A H"}, # LAH belongs to Team L / Team T
 }
 
 
@@ -2149,6 +2153,12 @@ def get_weekly_review(team_id: str, week_offset: int = 0) -> dict:
 # `DELAYS_TAB_GIDS[team_id][client_key]` → gid string. client_key is a
 # free-form lowercase label the TL recognizes; it surfaces in the API
 # response as `client_name` after we Title-Case it.
+# Delays older than this ISO date are hidden everywhere (TL request 2026-06-19 —
+# pre-May Jan/Feb/Mar/Apr 2026 entries were clutter). Applied at the single parse
+# chokepoint so team day-popup, open-all-dates, client delays, and the aging
+# aggregation all respect it. Undated rows are kept (can't judge their age).
+DELAYS_CUTOFF_ISO = "2026-05-01"
+
 DELAYS_TAB_COLUMNS = {
     "date":             0,
     "serial_no":        1,
@@ -6232,10 +6242,24 @@ def _build_leaderboard(
     # with no kwargs, which silently returned 0 for period='custom' (no
     # period_start/period_end) and a monthly value otherwise — driving the
     # 145.5h "monthly" committed shown in TeamMembersTable on Custom Range.
+    # Per-period committed target per member: today=8h, weekly=40h (full week),
+    # monthly/custom = pro-rated (working days elapsed × 8h). Weekly is
+    # intentionally NOT pro-rated so the card reads a clean 40h; monthly stays
+    # pro-rated so a mid-month member isn't unfairly flagged behind.
+    _lb_prorate = period in ("monthly", "custom")
     committed = get_employee_committed_hours(
-        team_id, period,
+        team_id, period, prorate=_lb_prorate,
         period_start=full_start, period_end=full_end, as_of=today_iso,
     )
+    if period == "today":
+        committed_label = "8h/day target"
+    elif period in ("weekly", "week"):
+        committed_label = "40h/week target"
+    elif period in ("monthly", "custom"):
+        _wd_elapsed = _working_days_between(full_start, min(today_iso, full_end))
+        committed_label = f"{round(committed)}h ({_wd_elapsed} working days)"
+    else:
+        committed_label = f"{round(committed)}h target"
 
     # Same logic _team_response uses: assign_row_to_team handles multi-team ambiguity.
     def _row_matches(row) -> bool:
@@ -6372,6 +6396,10 @@ def _build_leaderboard(
         "team_name": team_label,
         "period":   label,
         "members":  members,
+        # Per-period committed target (same for every member) + human label, so
+        # the Team Members table can show "vs 8h target" / "40h this week" etc.
+        "committedPerPerson": round(committed, 2),
+        "committedLabel":     committed_label,
         # Single source of truth: the count IS the length of the rendered list,
         # so the "N members" / "N executives" badge can never disagree with the
         # number of rows in the Team Members table.
@@ -6971,7 +6999,13 @@ def _parse_delays_csv_fixed(csv_text: str, client_name: str, tab_gid: str) -> li
         workflow_status = (row[workflow_idx] if workflow_idx < len(row) else "").strip()
         if _is_placeholder_delay_row(question, status_raw, workflow_status):
             continue
-        out.append(_shape_delay_entry_fixed(row, client_name, tab_gid))
+        entry = _shape_delay_entry_fixed(row, client_name, tab_gid)
+        # Hide delays posted before the cutoff. Undated rows (no parseable
+        # date_posted_iso) are kept — we can't judge their age.
+        posted_iso = entry.get("date_posted_iso")
+        if posted_iso and posted_iso < DELAYS_CUTOFF_ISO:
+            continue
+        out.append(entry)
     return out
 
 
@@ -7939,6 +7973,7 @@ def get_meeting_status(team_id: str):
         "urgency":     urgency,
         "day":         meeting["day"],
         "time":        tm,
+        "client":      meeting.get("client"),
         "days_until":  days_until,
     }
 
