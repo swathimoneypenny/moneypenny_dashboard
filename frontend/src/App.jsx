@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Home from "./pages/Home";
 import TeamDashboard from "./pages/TeamDashboard";
 import ClientDashboard from "./pages/ClientDashboard";
@@ -8,9 +8,12 @@ import WhaleSOPsPage from "./pages/WhaleSOPsPage";
 import LoginPage from "./pages/LoginPage";
 import Chatbot from "./components/Chatbot";
 import { API_BASE, getToken, clearToken } from "./config";
+import { readViewFromUrl, syncUrlToView } from "./urlState";
 
 export default function App() {
-  const [view, setView] = useState({ page: "home" });
+  // Seeded from ?view=&team=&client=&period= so a shared link opens that
+  // screen directly. Unknown or missing params fall back to the home page.
+  const [view, setView] = useState(() => readViewFromUrl());
   const [richContext, setRichContext] = useState("");
 
   // null = checking, true = authed, false = needs login
@@ -43,6 +46,22 @@ export default function App() {
         setAuthed(false);
       });
   }, [authed]);
+
+  // Keep the address bar in step with the current screen. replaceState, not
+  // pushState: a click should update the shareable URL, not stack up history
+  // entries the Back button has to walk through.
+  useEffect(() => {
+    syncUrlToView(view);
+  }, [view]);
+
+  // Remember the period a dashboard is showing so it survives a copy-paste of
+  // the URL. Only stores it — the page still owns its own period state.
+  // Stable identity so the dashboards' effect doesn't re-fire every render.
+  const handlePeriodChange = useCallback((period) => {
+    setView((current) =>
+      current.period === period ? current : { ...current, period }
+    );
+  }, []);
 
   if (authed === null) {
     // Brief loading state while verifying the token
@@ -118,6 +137,8 @@ export default function App() {
         <TeamDashboard
           teamId={view.teamId}
           teamName={view.teamName}
+          initialPeriod={view.period}
+          onPeriodChange={handlePeriodChange}
           onBack={() => { setRichContext(""); setView({ page: "home" }); }}
           onContextUpdate={setRichContext}
           onSelectEmployee={handleSelectEmployee}
@@ -132,6 +153,8 @@ export default function App() {
       <>
         <ClientDashboard
           clientName={view.clientName}
+          initialPeriod={view.period}
+          onPeriodChange={handlePeriodChange}
           onBack={() => { setRichContext(""); setView({ page: "home" }); }}
           onContextUpdate={setRichContext}
           onOpenDepartureAnalysis={(slug) => setView({ page: "departure_analysis", clientSlug: slug, fromClientName: view.clientName })}

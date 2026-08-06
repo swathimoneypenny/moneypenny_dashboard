@@ -941,10 +941,17 @@ function ProjectsBreakdownChart({ projects, clientName, loading }) {
 }
 
 // ── Main ─────────────────────────────────────────────────────────
-export default function ClientDashboard({ clientName, onBack, onContextUpdate, onOpenDepartureAnalysis }) {
-  const [period, setPeriod] = useState("monthly");
+export default function ClientDashboard({ clientName, initialPeriod, onPeriodChange, onBack, onContextUpdate, onOpenDepartureAnalysis }) {
+  // initialPeriod seeds from ?period= on a shared link; the page still owns
+  // its own period state from then on.
+  const [period, setPeriod] = useState(initialPeriod || "monthly");
   const [customRange, setCustomRange]   = useState(_defaultCustomRange);
   const [pendingCustom, setPendingCustom] = useState(_defaultCustomRange);
+
+  // Report the active period upward so it can ride along in the URL.
+  useEffect(() => {
+    if (onPeriodChange) onPeriodChange(period);
+  }, [period, onPeriodChange]);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [trend, setTrend] = useState([]);

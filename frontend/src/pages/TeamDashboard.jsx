@@ -1204,10 +1204,19 @@ function RosterSetupCard({ teamId, teamName }) {
 }
 
 // ── Main ───────────────────────────────────────────────────────────
-export default function TeamDashboard({ teamId, teamName, onBack, onContextUpdate, onSelectEmployee }) {
-  const [period, setPeriod] = useState("monthly");
+export default function TeamDashboard({ teamId, teamName, initialPeriod, onPeriodChange, onBack, onContextUpdate, onSelectEmployee }) {
+  // initialPeriod seeds from ?period= on a shared link; the page still owns
+  // its own period state from then on.
+  const [period, setPeriod] = useState(initialPeriod || "monthly");
   const [customRange, setCustomRange] = useState(_defaultCustomRange);
   const [pendingCustom, setPendingCustom] = useState(_defaultCustomRange);
+
+  // Report the active period upward so it can ride along in the URL. One
+  // effect rather than touching every setPeriod call site.
+  useEffect(() => {
+    if (onPeriodChange) onPeriodChange(period);
+  }, [period, onPeriodChange]);
+
   // Leaderboard for the current period (drives "Team Members" table).
   const [leaderboard, setLeaderboard] = useState(null);
   // Weekly leaderboard for "Most Underutilized This Week" widget.

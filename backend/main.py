@@ -4593,6 +4593,35 @@ def list_teams():
     return {"teams": out, "count": len(out)}
 
 
+@app.get("/api/team-clients")
+def team_clients():
+    """Team → client mapping, for the Slack Home tab's cascading dropdowns.
+
+    Reads the existing TEAM_LETTER_MAP + BOD_EOD_TAB_GIDS so the Slack bot
+    never keeps its own copy of the roster. Teams come back in TEAM_ORDER,
+    clients A-Z, with each team's TEAM_HIDDEN_CLIENTS filtered out.
+    """
+    out = []
+    for team_id in TEAM_ORDER:
+        cfg = TEAM_LETTER_MAP.get(team_id) or {}
+        names = [
+            name
+            for name in (BOD_EOD_TAB_GIDS.get(team_id) or {})
+            if not is_hidden_client_for_team(team_id, name)
+        ]
+        out.append({
+            "id":       team_id,
+            "label":    cfg.get("label") or team_id,
+            "leadName": cfg.get("leadName") or "",
+            "clients":  sorted(names),
+        })
+    return {
+        "teams":       out,
+        "count":       len(out),
+        "clientCount": sum(len(t["clients"]) for t in out),
+    }
+
+
 @app.get("/api/active-clients")
 async def active_clients():
     cached = cache_get("active_clients")
