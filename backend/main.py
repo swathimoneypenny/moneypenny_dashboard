@@ -627,6 +627,59 @@ def is_hidden_client_for_team(team_id: str, customer: str) -> bool:
     return False
 
 
+# ── Permanent (assigned) clients vs cross-team help ──────────────
+# Timesheets.com carries NO customer→team assignment. Verified 2026-08-10:
+# every customer endpoint 404s (11 variants tried), CUSTOMERNUMBER is empty for
+# all 65 customers, and PROJECTNAME holds the CLIENT's own sub-client (Ollin
+# Balance → "Voss Coaching", 1311 distinct values), not a team. So the permanent
+# assignment must come from configuration, and it already exists: the curated
+# TEAM_CLIENTS list, independently corroborated by BOD_EOD_TAB_GIDS and
+# DELAYS_TAB_GIDS (per-team, per-client tabs the TLs maintain in their own
+# sheets). Those three agree exactly for 10 of 15 teams.
+#
+# When PERMANENT_CLIENTS_ONLY is on, a team's dashboard shows only clients that
+# resolve against its own TEAM_CLIENTS; everything else its members logged is
+# swept into the CROSS_TEAM_BUCKET so the hours are still counted and the team
+# total reconciles with the timesheet — never silently dropped.
+CROSS_TEAM_BUCKET = "Cross-Team Help"
+
+
+def _permanent_clients_only() -> bool:
+    """Read at call time so pm2 restart --update-env applies it."""
+    return os.getenv("PERMANENT_CLIENTS_ONLY", "").strip().lower() in ("1", "true", "yes")
+
+
+# Manual escape hatch: force a customer onto a team even when its TEAM_CLIENTS
+# entry doesn't match. Takes priority over resolution, so an edge case can be
+# fixed without touching tsMatch. Matching is the same normalized-substring rule
+# used by TEAM_HIDDEN_CLIENTS.
+TEAM_CLIENT_OVERRIDES: dict[str, set[str]] = {
+    # Team E's curated entry is {"name": "ACS", "tsMatch": ["ACS"]}, but the real
+    # customer is "ASC Custom Books" — the letters are transposed, so "acs" is
+    # NOT a substring of "asccustombooks" and it has never matched. It shows up
+    # today only because unresolved customers get an ad-hoc bucket. Without this
+    # override, PERMANENT_CLIENTS_ONLY would file Team E's single biggest client
+    # (~890h, most of their work) under Cross-Team Help.
+    "team_e": {"ASC Custom Books"},
+}
+
+
+def is_override_client_for_team(team_id: str, customer: str) -> bool:
+    cust_norm = _normalize_for_match(customer)
+    if not cust_norm:
+        return False
+    for name in TEAM_CLIENT_OVERRIDES.get(team_id, set()):
+        nm = _normalize_for_match(name)
+        if not nm:
+            continue
+        if len(nm) >= 4:
+            if nm in cust_norm:
+                return True
+        elif nm == cust_norm:
+            return True
+    return False
+
+
 def _reverse_match(customer_norm: str, kw_norm: str, min_short_len: int = 4) -> bool:
     """True iff the customer name (normalized) is a substring of the keyword.
     Use this when the config's tsMatch entry is LONGER than the actual
@@ -4842,6 +4895,12 @@ async def _team_response(
     total_internal_b  = 0.0
     total_internal_nb = 0.0
 
+    # Hours this team's members logged on clients that are NOT theirs. Only
+    # populated under PERMANENT_CLIENTS_ONLY; surfaced as a summary stat so the
+    # work is visible even though it isn't broken out per client on this view.
+    cross_team_hours = 0.0
+    cross_team_clients: set = set()
+
     # Match priority: assign_row_to_team (handles multi-team name ambiguity)
     # → falls back to row["team"] label equality when no roster is configured.
     def _row_matches(row) -> bool:
@@ -4892,8 +4951,34 @@ async def _team_response(
             # organization data" despite real billable client work. Empty-customer
             # rows still fall through to Internal / Other.
             resolved = _resolve_client_for_team(team_id, customer, desc)
+            if not resolved and customer and is_override_client_for_team(team_id, customer):
+                # TEAM_CLIENT_OVERRIDES wins over resolution — see its comment
+                # for why Team E needs it.
+                resolved = customer
             if resolved:
+                if resolved not in orgs:
+                    orgs[resolved] = {
+                        "billable": 0.0, "nonBillable": 0.0, "staff": set(),
+                        "estHrs": 0, "tz": "", "meeting": "No scheduled meeting",
+                        "tsMatch": [], "matchedCustomers": set(), "rowsMatched": 0,
+                        "isConfig": False, "entries": [],
+                    }
                 bucket = orgs[resolved]
+            elif customer and _permanent_clients_only():
+                # Not one of this team's assigned clients — cross-team help.
+                # Bucketed rather than skipped so the hours still count toward
+                # the team total and reconcile against the timesheet.
+                if CROSS_TEAM_BUCKET not in orgs:
+                    orgs[CROSS_TEAM_BUCKET] = {
+                        "billable": 0.0, "nonBillable": 0.0, "staff": set(),
+                        "estHrs": 0, "tz": "", "meeting": "No scheduled meeting",
+                        "tsMatch": [], "matchedCustomers": set(), "rowsMatched": 0,
+                        "isConfig": False, "entries": [], "isCrossTeam": True,
+                    }
+                bucket = orgs[CROSS_TEAM_BUCKET]
+                resolved = CROSS_TEAM_BUCKET
+                cross_team_hours += h
+                cross_team_clients.add(customer)
             elif customer:
                 if customer not in orgs:
                     orgs[customer] = {
@@ -5161,6 +5246,11 @@ async def _team_response(
             "totalBillable":         total_b,         # excludes Internal categories
             "totalNonBillable":      total_nb,        # excludes Internal categories
             "totalInternal":         total_internal,  # SNMP / BREAKS / Training / Admin combined
+            # Hours this team's members logged on OTHER teams' clients. 0 unless
+            # PERMANENT_CLIENTS_ONLY is on. The per-client breakdown deliberately
+            # lives on the Client view and /api/audit/cross-team-help, not here.
+            "crossTeamHelpHours":    round(cross_team_hours, 2),
+            "crossTeamHelpClients":  len(cross_team_clients),
             "totalUtilized":         total_b,
             "totalTarget":           team_target,
             "totalTargetFull":       team_target_full,
@@ -9795,6 +9885,94 @@ async def _roster_refresh_loop() -> None:
         except Exception as e:
             print(f"[roster-sync] tick failed: {e}")
         await asyncio.sleep(dynamic_roster.CACHE_TTL_SECONDS)
+
+
+@app.get("/api/audit/cross-team-help")
+def audit_cross_team_help(period: str = "monthly", days: int = 0):
+    """Per team: its permanent (assigned) clients, and every other client its
+    members logged hours on — i.e. exactly what PERMANENT_CLIENTS_ONLY moves
+    into the Cross-Team Help bucket.
+
+    Run this BEFORE enabling the flag. A client appearing under
+    `cross_team_help` with `owned_by: null` and substantial hours is usually a
+    gap in that team's TEAM_CLIENTS config, not real cross-team work — hiding it
+    would lose a genuine client from the team view.
+
+    `days` overrides the period with a rolling window (e.g. days=90).
+    """
+    if days and days > 0:
+        end_d = datetime.now()
+        start, end = ((end_d - timedelta(days=days)).strftime("%Y-%m-%d"),
+                      end_d.strftime("%Y-%m-%d"))
+        label = f"last {days} days"
+    else:
+        start, end, label = date_range_for_period(period)
+    rows = get_cached_rows(start, end)
+
+    out = []
+    grand_help = 0.0
+    for team_id in TEAM_ORDER:
+        cfg = TEAM_LETTER_MAP.get(team_id) or {}
+        permanent = [e.get("name", "") for e in (TEAM_CLIENTS.get(team_id) or [])]
+
+        own: dict[str, float] = {}
+        help_: dict[str, float] = {}
+        for r in rows:
+            if not row_belongs_to_team(r, team_id):
+                continue
+            h = float(r.get("hours") or 0)
+            if h <= 0:
+                continue
+            customer = (r.get("customer") or "").strip()
+            if not customer or is_internal_code(customer) or is_inactive_client(customer):
+                continue
+            if is_hidden_client_for_team(team_id, customer):
+                continue
+            resolved = _resolve_client_for_team(team_id, customer, (r.get("desc") or ""))
+            if not resolved and is_override_client_for_team(team_id, customer):
+                resolved = customer
+            if resolved:
+                own[resolved] = own.get(resolved, 0.0) + h
+            else:
+                help_[customer] = help_.get(customer, 0.0) + h
+
+        help_rows = []
+        for customer, h in sorted(help_.items(), key=lambda kv: -kv[1]):
+            owner = find_team_for_client(customer)
+            help_rows.append({
+                "client": customer,
+                "hours": round(h, 1),
+                "owned_by": owner,
+                "owned_by_label": (TEAM_LETTER_MAP.get(owner) or {}).get("label") if owner else None,
+                # The signal that matters: real hours that no team claims are
+                # far more likely a config gap than genuine helping-out.
+                "likely_config_gap": owner is None and h >= 20,
+            })
+        help_total = round(sum(help_.values()), 1)
+        grand_help += help_total
+
+        out.append({
+            "team_id": team_id,
+            "team": cfg.get("label", team_id),
+            "lead": cfg.get("leadName", ""),
+            "permanent_clients": permanent,
+            "permanent_hours": round(sum(own.values()), 1),
+            "cross_team_help_hours": help_total,
+            "cross_team_help": help_rows,
+            "config_gap_candidates": [r for r in help_rows if r["likely_config_gap"]],
+        })
+
+    return {
+        "period": label,
+        "range": {"start": start, "end": end},
+        "permanent_clients_only": _permanent_clients_only(),
+        "note": ("Enable with PERMANENT_CLIENTS_ONLY=1. Review "
+                 "config_gap_candidates first — those are unowned clients with "
+                 ">=20h that would be hidden from a team view despite probably "
+                 "belonging to it."),
+        "grand_total_cross_team_hours": round(grand_help, 1),
+        "teams": out,
+    }
 
 
 @app.get("/api/sheets/health")
