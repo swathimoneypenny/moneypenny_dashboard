@@ -58,6 +58,36 @@ _creds_lock = threading.Lock()
 _creds_cache = None
 _import_error: str | None = None
 
+# Documents the Sheets API structurally cannot read: .xlsx/.xls files stored in
+# Drive rather than native Google Sheets. The API answers 400 FAILED_PRECONDITION
+# ("The document must not be an Office file") no matter how it is shared, so
+# there is no auth fix — the file has to be converted to a native Sheet.
+#
+# Verified 2026-08-10: 15 of the 16 documents are native; WEEKLY_REVIEW_SHEET_ID
+# is an Office file (33-char Drive id, not the usual 44-char Sheets id).
+#
+# Such a document falls back to the legacy CSV export so API mode does not break
+# a live feature. That means it stays dependent on public link sharing and
+# CANNOT be restricted in Phase 4 until it is converted. Surfaced by
+# health_check() and logged once per document so it can't be forgotten.
+_office_file_ids: set[str] = set()
+_office_warned: set[str] = set()
+
+
+def _note_office_file(sheet_id: str) -> None:
+    _office_file_ids.add(sheet_id)
+    if sheet_id not in _office_warned:
+        _office_warned.add(sheet_id)
+        print(f"[sheets-client] WARNING {sheet_id} is an Office (.xlsx) file — "
+              f"the Sheets API cannot read it. Falling back to the PUBLIC CSV "
+              f"export, so this document must stay link-shared. Convert it to a "
+              f"native Google Sheet (File > Save as Google Sheets) before "
+              f"restricting it.")
+
+
+def is_office_file(sheet_id: str) -> bool:
+    return sheet_id in _office_file_ids
+
 
 def use_api() -> bool:
     """Read the flag at call time, not import time, so pm2 restart --update-env
@@ -182,6 +212,8 @@ def api_get(sheet_id: str, query: str) -> tuple[int, dict | None]:
             session = _authorized_session()
             resp = session.get(f"{SHEETS_API_BASE}/{sheet_id}{query}", timeout=20)
             if resp.status_code != 200:
+                if resp.status_code == 400 and "Office file" in (resp.text or ""):
+                    _note_office_file(sheet_id)
                 return resp.status_code, None
             return 200, resp.json()
         except Exception as e:
@@ -251,6 +283,8 @@ def _fetch_values_csv(sheet_id: str, range_a1: str, descriptor: str) -> SheetRes
             timeout=30,
         )
         if resp.status_code != 200:
+            if resp.status_code == 400 and "Office file" in (resp.text or ""):
+                _note_office_file(sheet_id)
             print(f"[sheets-client] values sid={sheet_id} range={range_a1} "
                   f"-> {resp.status_code}: {resp.text[:160]}")
             return SheetResult(resp.status_code, "", descriptor)
@@ -300,7 +334,7 @@ def fetch_csv(sheet_id: str, gid: str | None = None, tab: str | None = None,
     if not sheet_id:
         return SheetResult(0, "", "")
 
-    if not use_api():
+    if not use_api() or is_office_file(sheet_id):
         return _fetch_legacy(_legacy_url(sheet_id, gid, tab, cell_range))
 
     descriptor = f"sheets-api://{sheet_id}/{gid or tab or 'first-tab'}"
@@ -309,6 +343,10 @@ def fetch_csv(sheet_id: str, gid: str | None = None, tab: str | None = None,
         # One metadata call serves both the gid lookup and the first-tab case.
         status, tabs = _list_tabs_with_status(sheet_id)
         if status != 200:
+            if is_office_file(sheet_id):
+                # Discovered mid-call: retry over the legacy transport rather
+                # than failing a live feature.
+                return _fetch_legacy(_legacy_url(sheet_id, gid, tab, cell_range))
             # Propagate the REAL failure (403 not shared, 0 no credentials)
             # rather than flattening it to a misleading 404.
             return SheetResult(status, "", descriptor)
@@ -322,7 +360,12 @@ def fetch_csv(sheet_id: str, gid: str | None = None, tab: str | None = None,
                 return SheetResult(404, "", descriptor)
             title = tabs[0]["title"]
 
-    return _fetch_values_csv(sheet_id, _quote_range(title, cell_range), descriptor)
+    res = _fetch_values_csv(sheet_id, _quote_range(title, cell_range), descriptor)
+    if res.status_code == 400 and is_office_file(sheet_id):
+        # Only reachable on the by-tab path, which skips the metadata call and
+        # so learns the document is an Office file here instead.
+        return _fetch_legacy(_legacy_url(sheet_id, gid, tab, cell_range))
+    return res
 
 
 # ── Diagnostics ───────────────────────────────────────────────────
@@ -336,6 +379,10 @@ def health_check(probe_sheet_id: str | None = None) -> dict:
         "google_auth_installed": False,
         "sa_email": None,
         "error": None,
+        # Documents seen falling back to the public CSV export because the
+        # Sheets API can't read them. Anything listed here CANNOT be restricted
+        # in Phase 4 until it is converted to a native Google Sheet.
+        "office_file_fallbacks": sorted(_office_file_ids),
     }
     try:
         import google.auth  # noqa: F401, PLC0415
