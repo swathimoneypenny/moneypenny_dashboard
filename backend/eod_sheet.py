@@ -1,21 +1,33 @@
-import pandas as pd
+import io
 import os
+
+import pandas as pd
 from dotenv import load_dotenv
+
+import sheets_client
 
 load_dotenv()
 
 SHEET_ID = os.getenv("SHEET_ID", "1aRDAD4rn6_Aezvf3MNNLTtE6di17Zd5JtUnHvGzMaaY")
 
 
+def _read_tab(tab: str) -> pd.DataFrame:
+    """Fetch a tab through sheets_client and parse it as a DataFrame.
+
+    Previously `pd.read_csv(url)` fetched a public gviz URL directly, which
+    required the sheet to be shared "Anyone with the link". Routing through
+    sheets_client lets SHEETS_USE_API=1 use the service account instead.
+    """
+    res = sheets_client.fetch_csv(SHEET_ID, tab=tab)
+    if res.status_code != 200 or not res.text:
+        raise RuntimeError(f"tab {tab!r} fetch failed: HTTP {res.status_code}")
+    return pd.read_csv(io.StringIO(res.text))
+
+
 def get_eod_data():
     try:
-        # EOD Sheet
-        url_eod = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=ABS"
-        df_eod = pd.read_csv(url_eod)
-
-        # Delay Questions Sheet
-        url_delay = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=ABS%20-%20Delay%20qsn"
-        df_delay = pd.read_csv(url_delay)
+        df_eod = _read_tab("ABS")
+        df_delay = _read_tab("ABS - Delay qsn")
 
         eod_text = format_eod(df_eod)
         delay_text = format_delay(df_delay)

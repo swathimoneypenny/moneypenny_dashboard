@@ -8,9 +8,15 @@
 #   1. PowerShell `pip freeze > requirements.txt` writes UTF-16 with a BOM,
 #      which pip cannot parse cleanly.
 #   2. A Windows/py3.12+ env resolves versions the deploy target cannot install
-#      — the previous revision pinned numpy==2.5.1, which requires Python >=3.12
+#      — an earlier revision pinned numpy==2.5.1, which requires Python >=3.12
 #      while the server runs 3.11, so `pip install -r requirements.txt` failed
 #      outright and installed nothing.
+#
+# google-auth (+ cryptography/pyasn1/cffi) backs sheets_client.py's service
+# account. Deliberately NOT google-api-python-client or google-auth-oauthlib:
+# the Sheets reads are plain REST GETs via AuthorizedSession, and oauthlib is
+# only for interactive user consent flows. This keeps the tree ~6 packages
+# instead of pulling httplib2/protobuf/uritemplate.
 #
 # Target: Linux x86_64, Python 3.11
 
@@ -18,10 +24,13 @@ annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==4.13.0
 certifi==2026.5.20
+cffi==2.1.1
 charset-normalizer==3.4.7
 click==8.4.1
+cryptography==50.0.0
 distro==1.9.0
 fastapi==0.136.3
+google-auth==2.56.3
 groq==1.4.0
 h11==0.16.0
 httpcore==1.0.9
@@ -30,6 +39,9 @@ idna==3.18
 numpy==2.4.6
 packaging==26.2
 pandas==3.0.3
+pyasn1==0.6.4
+pyasn1_modules==0.4.2
+pycparser==3.0
 pydantic==2.13.4
 pydantic_core==2.46.4
 python-dateutil==2.9.0.post0

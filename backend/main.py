@@ -31,6 +31,12 @@ from whale_api import WhaleAPI, WhaleAPIError, get_all_sops_cached, clear_sops_c
 # it injects are defined.
 import dynamic_roster
 
+# Google Sheets transport. Reads go through this so they can be switched from
+# unauthenticated public CSV export URLs to service-account Sheets API v4 calls
+# via SHEETS_USE_API=1 — the prerequisite for restricting the 17 sheets that are
+# currently readable by anyone with the link.
+import sheets_client
+
 load_dotenv()
 
 
@@ -943,31 +949,28 @@ def _fetch_eod_csv(sheet_id: str, tab: str | None = None, gid: str | None = None
     """
     if not sheet_id:
         return "", ""
-    if gid:
-        # /export?format=csv returns the full sheet content for that gid,
-        # blank rows included — bypasses gviz's auto-truncate-at-first-blank.
-        url = (f"https://docs.google.com/spreadsheets/d/{sheet_id}"
-               f"/export?format=csv&gid={gid}")
-    elif tab:
-        url = (f"https://docs.google.com/spreadsheets/d/{sheet_id}"
-               f"/gviz/tq?tqx=out:csv&range=A1:O10000"
-               f"&sheet={requests.utils.quote(tab)}")
-    else:
-        # No tab/gid → default first tab via gviz
-        url = (f"https://docs.google.com/spreadsheets/d/{sheet_id}"
-               f"/gviz/tq?tqx=out:csv&range=A1:O10000")
-
-    print(f"[eod-fetch] url={url}")
-    resp = requests.get(url, timeout=15)
-    if resp.status_code in (401, 403):
+    # gid → whole tab (blank rows included, bypassing gviz's truncate-at-first-
+    # blank). tab name → the A1:O10000 window the gviz calls always used; kept
+    # so the column count doesn't shift under the API transport.
+    res = sheets_client.fetch_csv(
+        sheet_id,
+        gid=gid,
+        tab=None if gid else tab,
+        cell_range=None if gid else "A1:O10000",
+    )
+    print(f"[eod-fetch] url={res.url}")
+    if res.status_code in (401, 403):
         raise EodSheetError(
-            "EOD source not accessible. Share the sheet as 'Anyone with the link can view'.",
-            resp.status_code,
+            "EOD source not accessible. Grant the service account Viewer access "
+            "to this sheet (or, in legacy mode, share as 'Anyone with the link can view').",
+            res.status_code,
         )
-    if resp.status_code == 404:
+    if res.status_code == 404:
         raise EodSheetError("EOD source not found (404). Verify the sheet URL.", 404)
-    resp.raise_for_status()
-    return resp.text, url
+    if res.status_code != 200:
+        raise EodSheetError(f"EOD source fetch failed (HTTP {res.status_code}).",
+                            res.status_code)
+    return res.text, res.url
 
 
 def _normalize_eod_status(raw: str) -> str:
@@ -2575,18 +2578,12 @@ def _fetch_weekly_checklist_csv(sheet_id: str, gid: str) -> str:
     now = datetime.now()
     if entry and (now - entry["at"]).total_seconds() < _CHECKLIST_CSV_TTL:
         return entry["csv"]
-    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
-    try:
-        resp = requests.get(url, timeout=15, allow_redirects=True)
-        if resp.status_code != 200:
-            print(f"[checklist] fetch gid={gid} returned {resp.status_code}")
-            _checklist_csv_cache[key] = {"at": now, "csv": ""}
-            return ""
-        csv_text = resp.content.decode("utf-8", errors="replace")
-    except Exception as e:
-        print(f"[checklist] fetch gid={gid} error: {e}")
+    res = sheets_client.fetch_csv(sheet_id, gid=gid)
+    if res.status_code != 200:
+        print(f"[checklist] fetch gid={gid} returned {res.status_code}")
         _checklist_csv_cache[key] = {"at": now, "csv": ""}
         return ""
+    csv_text = res.text
     _checklist_csv_cache[key] = {"at": now, "csv": csv_text}
     return csv_text
 
@@ -2617,30 +2614,26 @@ def _sheet_tab_name_for_gid(sheet_id: str, gid: str) -> str | None:
     metadata endpoint. Cached for 1 hour per spreadsheet. Returns None when
     the API key is missing, the metadata fetch fails, or the GID isn't found.
     """
-    api_key = _get_sheets_api_key()
-    if not api_key or not sheet_id or gid is None:
+    if not sheet_id or gid is None:
         return None
     entry = _sheets_metadata_cache.get(sheet_id)
     now = datetime.now()
     if entry and (now - entry["at"]).total_seconds() < _SHEETS_METADATA_TTL:
         return entry["gid_to_name"].get(str(gid))
-    url = (f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}"
-           f"?fields=sheets(properties(sheetId,title))&key={api_key}")
-    try:
-        resp = requests.get(url, timeout=10)
-        if resp.status_code != 200:
-            print(f"[sheets-api] metadata fetch sid={sheet_id} returned "
-                  f"{resp.status_code}: {resp.text[:120]}")
-            return None
-        gid_to_name = {
-            str((s.get("properties") or {}).get("sheetId")):
-                (s.get("properties") or {}).get("title", "")
-            for s in (resp.json().get("sheets") or [])
-            if (s.get("properties") or {}).get("title")
-        }
-    except Exception as e:
-        print(f"[sheets-api] metadata sid={sheet_id} error: {e}")
+    # Routed through sheets_client so this uses the service account once
+    # SHEETS_USE_API=1. An API key can only read PUBLIC files, so leaving this
+    # on &key= would 403 the moment the sheets are set to Restricted.
+    status, data = sheets_client.api_get(
+        sheet_id, "?fields=sheets(properties(sheetId,title))")
+    if status != 200 or not data:
+        print(f"[sheets-api] metadata fetch sid={sheet_id} returned {status}")
         return None
+    gid_to_name = {
+        str((s.get("properties") or {}).get("sheetId")):
+            (s.get("properties") or {}).get("title", "")
+        for s in (data.get("sheets") or [])
+        if (s.get("properties") or {}).get("title")
+    }
     _sheets_metadata_cache[sheet_id] = {"at": now, "gid_to_name": gid_to_name}
     return gid_to_name.get(str(gid))
 
@@ -2780,8 +2773,7 @@ def _fetch_weekly_checklist_rich(
     Returns None when GOOGLE_API_KEY is missing, the metadata lookup fails,
     or any error occurs — caller falls back to the CSV path.
     """
-    api_key = _get_sheets_api_key()
-    if not api_key or not sheet_id or not gid:
+    if not sheet_id or not gid:
         return None
     key = (sheet_id, gid)
     entry = _checklist_rich_cache.get(key)
@@ -2793,22 +2785,16 @@ def _fetch_weekly_checklist_rich(
     if not tab_name:
         return None
     from urllib.parse import quote
-    range_param = quote(f"'{tab_name}'!A1:Z300", safe="")
-    url = (
-        f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}"
+    # Escape an embedded apostrophe by doubling it — A1 notation requires it and
+    # tab titles here do contain them.
+    range_param = quote(f"'{tab_name.replace(chr(39), chr(39) * 2)}'!A1:Z300", safe="")
+    status, data = sheets_client.api_get(
+        sheet_id,
         f"?ranges={range_param}"
-        f"&fields=sheets(data(rowData(values(formattedValue,hyperlink,userEnteredValue,textFormatRuns(startIndex,format(link(uri)))))))"
-        f"&key={api_key}"
+        f"&fields=sheets(data(rowData(values(formattedValue,hyperlink,userEnteredValue,textFormatRuns(startIndex,format(link(uri)))))))",
     )
-    try:
-        resp = requests.get(url, timeout=15)
-        if resp.status_code != 200:
-            print(f"[sheets-api] checklist sid={sheet_id} gid={gid} returned "
-                  f"{resp.status_code}: {resp.text[:120]}")
-            return None
-        data = resp.json()
-    except Exception as e:
-        print(f"[sheets-api] checklist sid={sheet_id} gid={gid} error: {e}")
+    if status != 200 or not data:
+        print(f"[sheets-api] checklist sid={sheet_id} gid={gid} returned {status}")
         return None
 
     sheets_block = (data.get("sheets") or [])
@@ -3419,6 +3405,14 @@ def _list_team_sheet_tabs(sheet_id: str) -> list[str]:
     """
     if not sheet_id:
         return []
+    # Prefer the Sheets API — it returns tab titles directly, needs no HTML
+    # parsing, and keeps working once the sheet is Restricted. The /htmlview
+    # scrape below is retained only for legacy (flag-off) mode; it depends on
+    # public access and on a page format that has changed in production before.
+    tabs = sheets_client.list_tabs(sheet_id)
+    if tabs:
+        return [t["title"] for t in tabs]
+
     url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/htmlview"
     try:
         resp = requests.get(url, timeout=12)
@@ -3894,11 +3888,10 @@ def get_eod_delays_by_org(sheet_id: str) -> dict:
         return {}
     try:
         tab = "ABS - Delay qsn"
-        url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={requests.utils.quote(tab)}"
-        resp = requests.get(url, timeout=15)
-        if resp.status_code != 200:
+        res = sheets_client.fetch_csv(sheet_id, tab=tab)
+        if res.status_code != 200:
             return {}
-        reader = csv.reader(io.StringIO(resp.text))
+        reader = csv.reader(io.StringIO(res.text))
         rows = list(reader)
         counts: dict = {}
         for row in rows[1:]:
@@ -6957,10 +6950,6 @@ def _normalize_delay_status(
     return "open"
 
 
-def _delays_csv_url(sheet_id: str, gid: str) -> str:
-    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
-
-
 def _fetch_delays_csv(sheet_id: str, gid: str) -> str:
     """Cached CSV fetch for a specific Delays tab (sheet_id + gid). Returns
     the raw CSV text, or "" on any failure. 5-min cache per (sheet, gid).
@@ -6976,22 +6965,16 @@ def _fetch_delays_csv(sheet_id: str, gid: str) -> str:
     now = datetime.now()
     if entry and (now - entry["at"]).total_seconds() < _DELAYS_CSV_TTL:
         return entry["csv"]
-    url = _delays_csv_url(sheet_id, gid)
-    try:
-        resp = requests.get(url, timeout=15, allow_redirects=True)
-        if resp.status_code != 200:
-            print(f"[delaysTab] fetch {gid} returned {resp.status_code}")
-            _delays_csv_cache[key] = {"at": now, "csv": ""}
-            return ""
-        csv_text = resp.content.decode("utf-8", errors="replace")
-    except Exception as e:
-        print(f"[delaysTab] fetch {gid} error: {e}")
+    res = sheets_client.fetch_csv(sheet_id, gid=gid)
+    if res.status_code != 200:
+        print(f"[delaysTab] fetch {gid} returned {res.status_code}")
         _delays_csv_cache[key] = {"at": now, "csv": ""}
         return ""
+    csv_text = res.text
     _delays_csv_cache[key] = {"at": now, "csv": csv_text}
-    # Debug: surface the exact sheet URL + row count so a "delay popup empty"
+    # Debug: surface the exact source + row count so a "delay popup empty"
     # report can be traced to fetch vs. parse vs. mapping.
-    print(f"[delaysTab] fetched gid={gid} url={url} bytes={len(csv_text)} "
+    print(f"[delaysTab] fetched gid={gid} url={res.url} bytes={len(csv_text)} "
           f"lines={csv_text.count(chr(10)) + 1 if csv_text else 0}")
     return csv_text
 
@@ -9183,18 +9166,12 @@ def _fetch_bod_eod_csv(sheet_id: str, gid: str) -> str:
     now = datetime.now()
     if entry and (now - entry["at"]).total_seconds() < _BOD_EOD_CSV_TTL:
         return entry["csv"]
-    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
-    try:
-        resp = requests.get(url, timeout=15, allow_redirects=True)
-        if resp.status_code != 200:
-            print(f"[bod-eod] fetch gid={gid} returned {resp.status_code}")
-            _bod_eod_csv_cache[key] = {"at": now, "csv": ""}
-            return ""
-        csv_text = resp.content.decode("utf-8", errors="replace")
-    except Exception as e:
-        print(f"[bod-eod] fetch gid={gid} error: {e}")
+    res = sheets_client.fetch_csv(sheet_id, gid=gid)
+    if res.status_code != 200:
+        print(f"[bod-eod] fetch gid={gid} returned {res.status_code}")
         _bod_eod_csv_cache[key] = {"at": now, "csv": ""}
         return ""
+    csv_text = res.text
     _bod_eod_csv_cache[key] = {"at": now, "csv": csv_text}
     return csv_text
 
@@ -9818,6 +9795,58 @@ async def _roster_refresh_loop() -> None:
         except Exception as e:
             print(f"[roster-sync] tick failed: {e}")
         await asyncio.sleep(dynamic_roster.CACHE_TTL_SECONDS)
+
+
+@app.get("/api/sheets/health")
+def sheets_health():
+    """Service-account readiness for the Sheets migration. Key-file level only —
+    use /api/sheets/health/{team_id} to prove an actual authorised read."""
+    return sheets_client.health_check()
+
+
+@app.get("/api/sheets/health/{team_id}")
+def sheets_health_probe(team_id: str):
+    """Same check, but actually reads that team's sheet metadata — this is what
+    distinguishes 'key loads' from 'service account has Viewer access'."""
+    sid = (TEAM_LETTER_MAP.get(team_id) or {}).get("sheetId")
+    if not sid:
+        return {"error": f"no sheetId configured for {team_id}",
+                "known": sorted(TEAM_LETTER_MAP.keys())}
+    return sheets_client.health_check(probe_sheet_id=sid)
+
+
+@app.get("/api/sheets/inventory")
+def sheets_inventory():
+    """Every distinct sheet the backend actually reads, resolved from live
+    config (env overrides included). This is the list to share with the service
+    account in Phase 0.3."""
+    seen: dict[str, list[str]] = {}
+
+    def add(sid, label):
+        if sid:
+            seen.setdefault(sid, []).append(label)
+
+    # BOD_EOD_TAB_GIDS / DELAYS_TAB_GIDS / WEEKLY_CHECKLIST_GIDS are
+    # {team_id: {client: gid}} — those gids are TABS INSIDE the team's own
+    # spreadsheet, so TEAM_LETTER_MAP already covers their documents. Sharing is
+    # per-document, so there is nothing extra to grant for them.
+    for tid, cfg in TEAM_LETTER_MAP.items():
+        add(cfg.get("sheetId"), tid)
+    add(WEEKLY_REVIEW_SHEET_ID, "weekly_review")
+    add(os.getenv("ABS_SHEET_ID"), "abs_sheet")
+    add(os.getenv("SHEET_ID"), "eod_sheet_default")
+
+    return {
+        "count": len(seen),
+        "note": ("Share each of these with the service account as Viewer "
+                 "(Phase 0.3) BEFORE setting any of them to Restricted."),
+        "sheets": [
+            {"sheet_id": sid,
+             "url": f"https://docs.google.com/spreadsheets/d/{sid}",
+             "used_by": sorted(set(labels))}
+            for sid, labels in sorted(seen.items(), key=lambda kv: sorted(kv[1]))
+        ],
+    }
 
 
 @app.get("/api/roster/status")

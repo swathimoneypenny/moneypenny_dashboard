@@ -4,6 +4,14 @@
 !frontend/.env.production
 backend/.env
 
+# Google service account private keys. A committed SA key is a full credential
+# leak, and this repo is PUBLIC — added before any key exists so there is no
+# window in which one could be committed by accident.
+moneypenny-sa.json
+*-sa.json
+*service-account*.json
+*.json.key
+
 # Security working docs. This repo is PUBLIC — a secrets inventory (which
 # credentials exist, where they live, what is already exposed) must not be
 # published, even with the values stripped.
