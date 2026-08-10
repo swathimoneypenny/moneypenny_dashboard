@@ -51,8 +51,16 @@ CACHE_TTL_SECONDS = 300           # 5 min — matches the spec's auto-sync windo
 # are worked by every team (top team held only ~9%), so a single-winner rule
 # assigns them arbitrarily and silently drops legitimate secondary owners
 # (e.g. Neve Group is team_c 60% / team_t 32%).
-CLIENT_SHARE_THRESHOLD = 0.10
-CLIENT_MIN_HOURS       = 5.0      # ignore rounding-noise attributions
+#
+# Both gates must pass. Share alone is not enough: with a 2-person team the
+# denominator is small, so a couple of stray hours on another team's client can
+# clear 10% (Team A picked up SoCo, Inspire Advisors and Scotts Law SD that way).
+# An absolute-hours floor is what separates "this team works on it" from "someone
+# logged a bit of time here once".
+#
+# Tunable without a deploy via ROSTER_CLIENT_SHARE_MIN / ROSTER_CLIENT_HOURS_MIN.
+CLIENT_SHARE_THRESHOLD = float(os.getenv("ROSTER_CLIENT_SHARE_MIN", "0.10"))
+CLIENT_MIN_HOURS       = float(os.getenv("ROSTER_CLIENT_HOURS_MIN", "20"))
 CLIENT_LOOKBACK_DAYS   = 90
 
 # Service/backup logins ("MPLLC3 BKP3"). They are real Timesheets users
@@ -316,7 +324,9 @@ def build_dynamic_roster(users: list[dict] | None = None) -> dict:
 
 
 # ── Client construction ───────────────────────────────────────────
-def build_dynamic_team_clients(teams: dict, rows: list[dict] | None = None) -> dict:
+def build_dynamic_team_clients(teams: dict, rows: list[dict] | None = None,
+                               share_min: float | None = None,
+                               hours_min: float | None = None) -> dict:
     """Attribute clients to teams from recent timesheet activity.
 
     Merge, not replace. Curated TEAM_CLIENTS entries carry estHrs / tz /
@@ -367,6 +377,9 @@ def build_dynamic_team_clients(teams: dict, rows: list[dict] | None = None) -> d
         per_team = pair_hours.setdefault(customer, {})
         per_team[tid] = per_team.get(tid, 0.0) + hours
 
+    share_gate = CLIENT_SHARE_THRESHOLD if share_min is None else share_min
+    hours_gate = CLIENT_MIN_HOURS if hours_min is None else hours_min
+
     discovered: dict[str, list[dict]] = {}
     orphans: list[dict] = []
     for customer, per_team in pair_hours.items():
@@ -375,7 +388,7 @@ def build_dynamic_team_clients(teams: dict, rows: list[dict] | None = None) -> d
             continue
         claimed = False
         for tid, hrs in per_team.items():
-            if hrs < CLIENT_MIN_HOURS or (hrs / total) < CLIENT_SHARE_THRESHOLD:
+            if hrs < hours_gate or (hrs / total) < share_gate:
                 continue
             if is_hidden(tid, customer):
                 continue
