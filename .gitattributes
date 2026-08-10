@@ -1,0 +1,13 @@
+# Force LF for files executed on the Linux deploy target. Without this, a
+# checkout on Windows (autocrlf=true) can commit CRLF back, and a shell script
+# with CRLF fails on the server with "bad interpreter: /usr/bin/env bash^M".
+*.sh        text eol=lf
+*.py        text eol=lf
+
+# pip cannot cleanly parse a UTF-16/BOM requirements file, which is how the
+# previous revision broke. Keep it plain LF text.
+requirements.txt text eol=lf
+
+# Shell/env templates read by deploy scripts.
+.env.example text eol=lf
+Procfile     text eol=lf

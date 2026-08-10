@@ -327,7 +327,7 @@ def build_dynamic_team_clients(teams: dict, rows: list[dict] | None = None) -> d
     rows_fetcher = _cfg.get("rows_fetcher")
     if rows is None:
         if not rows_fetcher:
-            return {"team_clients": {}, "discovered": {}, "skipped": "no rows_fetcher configured"}
+            return {"team_clients": {}, "discovered": {}, "orphans": [], "skipped": "no rows_fetcher configured"}
         end = _now()
         start = end - timedelta(days=CLIENT_LOOKBACK_DAYS)
         # NB: main.get_cached_rows takes ISO dates and owns its own long timeout.
@@ -336,7 +336,7 @@ def build_dynamic_team_clients(teams: dict, rows: list[dict] | None = None) -> d
         # exceeds it, so it returns None and every team silently gets 0 clients.
         rows = rows_fetcher(start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
     if not rows:
-        return {"team_clients": {}, "discovered": {}, "skipped": "no rows returned"}
+        return {"team_clients": {}, "discovered": {}, "orphans": [], "skipped": "no rows returned"}
 
     uid_to_team: dict[str, str] = {}
     for tid, tdata in teams.items():
@@ -368,20 +368,34 @@ def build_dynamic_team_clients(teams: dict, rows: list[dict] | None = None) -> d
         per_team[tid] = per_team.get(tid, 0.0) + hours
 
     discovered: dict[str, list[dict]] = {}
+    orphans: list[dict] = []
     for customer, per_team in pair_hours.items():
         total = sum(per_team.values())
         if total <= 0:
             continue
+        claimed = False
         for tid, hrs in per_team.items():
             if hrs < CLIENT_MIN_HOURS or (hrs / total) < CLIENT_SHARE_THRESHOLD:
                 continue
             if is_hidden(tid, customer):
                 continue
+            claimed = True
             discovered.setdefault(tid, []).append({
                 "name": customer,
                 "hours": round(hrs, 1),
                 "share": round(hrs / total, 3),
             })
+        if not claimed:
+            # Real logged hours that no team claims — every team's share fell
+            # under the threshold, or the only qualifying team suppresses it.
+            top = max(per_team.items(), key=lambda kv: kv[1])
+            orphans.append({
+                "name": customer,
+                "hours": round(total, 1),
+                "top_team": top[0],
+                "top_share": round(top[1] / total, 3),
+            })
+    orphans.sort(key=lambda o: -o["hours"])
     for tid in discovered:
         discovered[tid].sort(key=lambda c: -c["hours"])
 
@@ -422,7 +436,7 @@ def build_dynamic_team_clients(teams: dict, rows: list[dict] | None = None) -> d
 
         merged[tid] = entries
 
-    return {"team_clients": merged, "discovered": additions, "skipped": None}
+    return {"team_clients": merged, "discovered": additions, "orphans": orphans, "skipped": None}
 
 
 # ── Payload assembly ──────────────────────────────────────────────
@@ -447,6 +461,7 @@ def _build_payload() -> dict:
         "raw_teams": teams,
         "unmapped_teams": built["unmapped_teams"],
         "client_additions": clients["discovered"],
+        "client_orphans": clients.get("orphans") or [],
         "client_note": clients["skipped"],
         "user_count": len(users),
     }
@@ -481,6 +496,7 @@ def _fallback_payload() -> dict:
         "raw_teams": {},
         "unmapped_teams": [],
         "client_additions": {},
+        "client_orphans": [],
         "client_note": "hardcoded fallback — no live data",
         "user_count": 0,
     }
@@ -705,6 +721,69 @@ def build_diff() -> dict:
             "clients_added":    payload["client_additions"].get(tid, []),
         }
 
+    # ── Derived cross-team views (consumed by scripts/review_roster.py) ──
+    dynamic_teams = {
+        tid: [m["name"] for m in t.get("members", [])]
+        for tid, t in payload["raw_teams"].items()
+    }
+    dynamic_clients = {
+        tid: [c.get("name", "") for c in entries]
+        for tid, entries in (payload.get("TEAM_CLIENTS") or {}).items()
+    }
+    members_added   = {tid: d["added"] for tid, d in teams_diff.items() if d["added"]}
+    members_removed = {tid: d["removed"] for tid, d in teams_diff.items() if d["removed"]}
+    clients_added   = {tid: [c["name"] for c in d["clients_added"]]
+                       for tid, d in teams_diff.items() if d["clients_added"]}
+
+    # A name dropped by one team and picked up by another is a MOVE, not an
+    # unrelated add+remove. Surfacing these separately is the point of the
+    # review — they're the changes that silently reassign someone's hours.
+    added_index: dict[str, str] = {}
+    for tid, names in members_added.items():
+        for n in names:
+            added_index[n] = tid
+    members_moved = []
+    for tid, names in members_removed.items():
+        for n in names:
+            dest = added_index.get(n)
+            if dest and dest != tid:
+                members_moved.append({"name": n, "from_team": tid, "to_team": dest})
+    members_moved.sort(key=lambda m: m["name"])
+    moved_names = {m["name"] for m in members_moved}
+
+    # Clients legitimately worked by more than one team (>=10% share each).
+    client_teams: dict[str, list[str]] = {}
+    for tid, names in dynamic_clients.items():
+        for n in names:
+            if n:
+                client_teams.setdefault(n, []).append(tid)
+    shared_clients = [
+        {"client": n, "teams": sorted(tids)}
+        for n, tids in sorted(client_teams.items()) if len(tids) > 1
+    ]
+
+    warnings: list[str] = []
+    for tid, d in sorted(teams_diff.items()):
+        for kw in d["unresolved_keywords"]:
+            warnings.append(
+                f"{tid}: hardcoded keyword {kw!r} matches NO timesheet user "
+                f"(likely a spelling error — it has never filtered anything)"
+            )
+        if d["new_count"] == 0:
+            warnings.append(f"{tid}: dynamic roster is EMPTY — lead resolved no active members")
+        if payload["raw_teams"].get(tid, {}).get("missing_lead"):
+            warnings.append(f"{tid}: lead not found in the live user list")
+        old, new = d["old_count"], d["new_count"]
+        if old and new and abs(new - old) / old >= 0.5:
+            warnings.append(f"{tid}: headcount changes by >=50% ({old} -> {new}) — confirm with the TL")
+    for t in payload.get("unmapped_teams") or []:
+        warnings.append(
+            f"unmapped team: {t['lead_name']} ({t['job_title']}) has "
+            f"{t['member_count']} active reports but no TEAM_LETTER_MAP entry"
+        )
+    if payload.get("client_note"):
+        warnings.append(f"clients not derived from activity: {payload['client_note']}")
+
     return {
         "source": source,
         "generated_at": _now().isoformat(),
@@ -719,8 +798,25 @@ def build_diff() -> dict:
             "teams":         len(teams_diff),
             "members_old":   sum(len(v) for v in fallback_rosters.values()),
             "members_new":   sum(len(v) for v in payload["TEAM_ROSTERS"].values()),
+            # Moves are counted once, not as both an add and a remove.
+            "members_added":   sum(len(v) for v in members_added.values()) - len(moved_names),
+            "members_removed": sum(len(v) for v in members_removed.values()) - len(moved_names),
+            "members_moved":   len(members_moved),
+            "clients_added":   sum(len(v) for v in clients_added.values()),
+            "shared_clients":  len(shared_clients),
+            "orphan_clients":  len(payload.get("client_orphans") or []),
+            "warnings":        len(warnings),
         },
         "teams": teams_diff,
+        "dynamic_teams": dynamic_teams,
+        "dynamic_clients": dynamic_clients,
+        "members_added": members_added,
+        "members_removed": members_removed,
+        "members_moved": members_moved,
+        "clients_added": clients_added,
+        "shared_clients": shared_clients,
+        "orphan_clients": payload.get("client_orphans") or [],
+        "warnings": warnings,
         "unmapped_teams": payload["unmapped_teams"],
         "client_note": payload.get("client_note"),
     }

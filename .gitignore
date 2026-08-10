@@ -4,6 +4,12 @@
 !frontend/.env.production
 backend/.env
 
+# Security working docs. This repo is PUBLIC — a secrets inventory (which
+# credentials exist, where they live, what is already exposed) must not be
+# published, even with the values stripped.
+CREDENTIAL_ROTATION_CHECKLIST.md
+roster_diff_full.json
+
 # Python
 __pycache__/
 *.pyc
