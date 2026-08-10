@@ -7,6 +7,7 @@ import ClientDepartureAnalysisPage from "./pages/ClientDepartureAnalysisPage";
 import WhaleSOPsPage from "./pages/WhaleSOPsPage";
 import LoginPage from "./pages/LoginPage";
 import Chatbot from "./components/Chatbot";
+import RosterBanner from "./components/RosterBanner";
 import { API_BASE, getToken, clearToken } from "./config";
 import { readViewFromUrl, syncUrlToView } from "./urlState";
 
@@ -17,12 +18,27 @@ export default function App() {
   const [richContext, setRichContext] = useState("");
 
   // null = checking, true = authed, false = needs login
-  const [authed, setAuthed] = useState(getToken() ? null : false);
+  //
+  // In dev we start at "checking" even with no token, so /api/auth/verify runs
+  // and a local backend with auth disabled (AUTH_DISABLED in main.py) can let
+  // us straight in. Without this the app deadlocks against such a backend: no
+  // token means the login screen renders, and /api/auth/login answers 503
+  // auth_disabled, so no token can ever be obtained.
+  //
+  // import.meta.env.DEV is replaced with the literal `false` by `vite build`,
+  // so in production this is dead code and the password gate below is
+  // untouched — a misconfigured prod server still shows the login screen.
+  const [authed, setAuthed] = useState(
+    getToken() || import.meta.env.DEV ? null : false
+  );
 
   useEffect(() => {
     if (authed !== null) return;
     const token = getToken();
-    if (!token) {
+    // In dev, ask the server even with no token — an auth-disabled local
+    // backend answers {valid:true} and we skip the pointless login screen.
+    // In production a missing token still goes straight to LoginPage.
+    if (!token && !import.meta.env.DEV) {
       setAuthed(false);
       return;
     }
@@ -30,7 +46,7 @@ export default function App() {
     // We deliberately do NOT honor d.authDisabled — that would let a misconfigured
     // server bypass the password gate entirely.
     fetch(`${API_BASE}/api/auth/verify`, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
       .then((r) => r.ok ? r.json() : null)
       .then((d) => {
@@ -104,6 +120,10 @@ export default function App() {
     setView({ page: "employee", teamId, employeeName, teamName, fromTeamId: teamId });
   };
 
+  // Each branch yields just the page; the shared chrome (roster banner +
+  // chatbot) is mounted once in the single return below, so the banner's poll
+  // doesn't restart on every navigation.
+  const page = (() => {
   if (view.page === "employee") {
     return (
       <>
@@ -126,7 +146,6 @@ export default function App() {
           }}
           onContextUpdate={setRichContext}
         />
-        <Chatbot context={context} viewHint={viewHint} />
       </>
     );
   }
@@ -143,7 +162,6 @@ export default function App() {
           onContextUpdate={setRichContext}
           onSelectEmployee={handleSelectEmployee}
         />
-        <Chatbot context={context} viewHint={viewHint} />
       </>
     );
   }
@@ -159,7 +177,6 @@ export default function App() {
           onContextUpdate={setRichContext}
           onOpenDepartureAnalysis={(slug) => setView({ page: "departure_analysis", clientSlug: slug, fromClientName: view.clientName })}
         />
-        <Chatbot context={context} viewHint={viewHint} />
       </>
     );
   }
@@ -178,7 +195,6 @@ export default function App() {
             }
           }}
         />
-        <Chatbot context={context} viewHint={viewHint} />
       </>
     );
   }
@@ -187,7 +203,6 @@ export default function App() {
     return (
       <>
         <WhaleSOPsPage onBack={() => setView({ page: "home" })} />
-        <Chatbot context={context} viewHint={viewHint} />
       </>
     );
   }
@@ -205,6 +220,14 @@ export default function App() {
         }}
         onOpenWhale={() => setView({ page: "whale_sops" })}
       />
+    </>
+  );
+  })();
+
+  return (
+    <>
+      <RosterBanner />
+      {page}
       <Chatbot context={context} viewHint={viewHint} />
     </>
   );

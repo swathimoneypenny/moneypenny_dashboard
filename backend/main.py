@@ -26,15 +26,23 @@ from groq import Groq
 # WHALE_WORKSPACE_ID env vars; gracefully degrades when unset.
 from whale_api import WhaleAPI, WhaleAPIError, get_all_sops_cached, clear_sops_cache
 
+# Team structure sourced from Timesheets.com (ADMINUSERID hierarchy). Wired up
+# by _configure_dynamic_roster() near the bottom of this file, once the helpers
+# it injects are defined.
+import dynamic_roster
+
 load_dotenv()
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    _configure_dynamic_roster()
+    _startup_load_roster()
     _deduplicate_rosters()
     _log_team_rosters()
     # Schedule warmup but don't block startup
     asyncio.create_task(_run_warmup_background())
+    asyncio.create_task(_roster_refresh_loop())
     yield
 
 
@@ -251,10 +259,14 @@ for _tid in list(TEAM_LETTER_MAP.keys()):
 
 
 # ── Team rosters (staff-name keyword filter) ─────────────────────
-# Manually configured per team. Each entry is a list of partial name keywords
-# (case-insensitive substring match against the timesheet FULLNAME).
-# If a team's roster is empty, all timesheet rows pass through ("include all").
-TEAM_ROSTERS: dict[str, list[str]] = {
+# EMERGENCY FALLBACK ONLY as of 2026-08-10. The live roster is derived from
+# Timesheets.com (ADMINUSERID hierarchy) by backend/dynamic_roster.py; this
+# hand-maintained copy is used only when that API is unreachable with no warm
+# cache, or when DYNAMIC_ROSTER_ENABLED is off. See _apply_dynamic_roster().
+#
+# Each entry is a list of partial name keywords (token-prefix match against the
+# timesheet FULLNAME). If a team's roster is empty, all rows pass through.
+FALLBACK_TEAM_ROSTERS: dict[str, list[str]] = {
     # "fathima irfhana" — two-token keyword (both must prefix-match a name token),
     # so it matches "Irfhana Fathima" / "Fathima Irfhana" but NOT Team T's
     # "Fathima Saleem" or a bare "Irfhana". Replaced the looser single-token "irfhana".
@@ -298,6 +310,18 @@ TEAM_ROSTERS: dict[str, list[str]] = {
                "naveena", "dharani p", "shiyamala saravanan", "swetha sub",
                "fathima saleem"],
 }
+
+# ACTIVE roster. Seeded from the fallback, then replaced in place by
+# _apply_dynamic_roster() once Timesheets.com data is available. Mutated rather
+# than rebound so the ~30 modules-level readers of TEAM_ROSTERS (and the
+# existing POST /api/team/{id}/roster overrides) all observe refreshes.
+TEAM_ROSTERS: dict[str, list[str]] = {k: list(v) for k, v in FALLBACK_TEAM_ROSTERS.items()}
+
+# Former members (Timesheets USERSTATUS=0), consulted by assign_row_to_team
+# ONLY when a name matches no current roster. Keeps a departed preparer's
+# historical hours credited to their old team without counting them as
+# headcount. Populated by _apply_dynamic_roster(); empty under the fallback.
+TEAM_ROSTERS_HISTORICAL: dict[str, list[str]] = {}
 
 # Startup warning — Team T preparers haven't been provided by management yet.
 # The single-entry roster will only match Pragathi herself; all other Team T
@@ -404,11 +428,17 @@ UNCATEGORIZED_CLIENTS = [
 # authoritative per-client source.
 
 
-# ── Authoritative team → client mapping ──────────────────────────
-# Per-team list of clients. Used as the SOURCE OF TRUTH for which orgs appear
-# under each team. tsMatch = case-insensitive substring keywords against
-# CUSTOMERNAME (or WORKDESCRIPTION as fallback). estHrs = monthly commitment.
-TEAM_CLIENTS: dict[str, list[dict]] = {
+# ── Curated team → client mapping ────────────────────────────────
+# Per-team list of clients. tsMatch = case-insensitive substring keywords
+# against CUSTOMERNAME (or WORKDESCRIPTION as fallback). estHrs = monthly
+# commitment.
+#
+# This stays hand-curated: estHrs / tz / meeting / tsMatch have NO equivalent
+# in the Timesheets.com API (there is no customer endpoint at all — it 404s).
+# dynamic_roster.build_dynamic_team_clients() MERGES on top of this — it adds
+# clients a team is demonstrably working on but that aren't configured here,
+# and never removes or rewrites a curated entry.
+FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
     "team_a": [
         {"name": "Bookkeeping Doctor",   "tsMatch": ["BKP Doctor", "Bookkeeping Doctor", "BKD", "Bkd"],         "estHrs": 80,  "tz": "EST", "meeting": "2nd & 3rd week Thursday 9am IST & every Wednesday 4:30pm IST"},
         {"name": "Ollin Balance",        "tsMatch": ["Ollin Balance", "Ollinbalance", "Ollin"],                  "estHrs": 160, "tz": "EST", "meeting": "4th week Tuesday 4:30pm IST"},
@@ -507,6 +537,12 @@ TEAM_CLIENTS: dict[str, list[dict]] = {
         {"name": "Business Fitness",     "tsMatch": ["Business Fitness"],                      "estHrs": 0,   "tz": "AEST","meeting": "No scheduled meeting"},
         {"name": "David Beck",           "tsMatch": ["David Beck"],                            "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
     ],
+}
+
+# ACTIVE client map — see the TEAM_ROSTERS note above for why this is a mutated
+# copy rather than a rebind.
+TEAM_CLIENTS: dict[str, list[dict]] = {
+    k: [dict(e) for e in v] for k, v in FALLBACK_TEAM_CLIENTS.items()
 }
 
 
@@ -781,14 +817,22 @@ def assign_row_to_team(row: dict) -> str | None:
     if not name:
         row["_assignedTeam"] = None
         return None
-    matches: list[tuple[str, int]] = []
-    for tid, roster in TEAM_ROSTERS.items():
-        best = 0
-        for kw in roster or []:
-            if _kw_matches_name(kw, name) and len(kw) > best:
-                best = len(kw)
-        if best > 0:
-            matches.append((tid, best))
+    def _collect(source: dict[str, list[str]]) -> list[tuple[str, int]]:
+        found: list[tuple[str, int]] = []
+        for tid, roster in source.items():
+            best = 0
+            for kw in roster or []:
+                if _kw_matches_name(kw, name) and len(kw) > best:
+                    best = len(kw)
+            if best > 0:
+                found.append((tid, best))
+        return found
+
+    matches = _collect(TEAM_ROSTERS)
+    if not matches and TEAM_ROSTERS_HISTORICAL:
+        # Nobody current owns this name — try former members so historical
+        # rows (e.g. a preparer who left in May) still credit their old team.
+        matches = _collect(TEAM_ROSTERS_HISTORICAL)
 
     result: str | None = None
     if not matches:
@@ -4318,13 +4362,18 @@ def iter_rows(data) -> list[dict]:
 
 
 # ── Team membership / department mapping ─────────────────────────
-# Legacy hardcoded data — kept only for the chatbot context strings.
-TEAM_MEMBERS: dict[str, list[str]] = {
+# Legacy hardcoded data — kept only for the chatbot context strings, and as the
+# emergency fallback for the display roster.
+FALLBACK_TEAM_MEMBERS: dict[str, list[str]] = {
     # "Vinayaga Moorthy, Pavithira" is the TL — listed first. Roster matching for
     # the UI/API uses TEAM_ROSTERS (keyword "vinayaga moorthy"); this dict only
     # feeds chatbot context strings.
     "team_m": ["Vinayaga Moorthy, Pavithira", "Reshma Lakshmanaboopathi", "Bhuvaneswari Balaji"],
 }
+
+# ACTIVE display roster — populated for ALL teams by _apply_dynamic_roster()
+# (the fallback only ever covered team_m).
+TEAM_MEMBERS: dict[str, list[str]] = {k: list(v) for k, v in FALLBACK_TEAM_MEMBERS.items()}
 
 TEAM_DEPT_MAP: dict[str, str] = {
     "team_a": "Team A", "team_b": "Team B", "team_c": "Team C",
@@ -9619,6 +9668,192 @@ def _bod_eod_build_team_summary(clients: list[dict]) -> dict:
         "efficiency_pct":  round(efficiency, 1),
         "days_tracked":    days_tracked,
         "clients_count":   len(clients),
+    }
+
+
+# ── Dynamic roster wiring ─────────────────────────────────────────
+# dynamic_roster.py owns the Timesheets.com → team-structure derivation and the
+# three-tier resolution (live → stale cache → hardcoded fallback). It never
+# imports this module; everything it needs is injected here.
+
+def _configure_dynamic_roster() -> None:
+    dynamic_roster.configure(
+        team_letter_map=TEAM_LETTER_MAP,
+        team_admin_map=TEAM_ADMIN_MAP,
+        team_order=TEAM_ORDER,
+        fallback_rosters=FALLBACK_TEAM_ROSTERS,
+        fallback_members=FALLBACK_TEAM_MEMBERS,
+        fallback_clients=FALLBACK_TEAM_CLIENTS,
+        # Reuse the existing cached fetcher — it already handles the 420
+        # rate-limit backoff and shares USERS_CACHE with discover_teams().
+        users_fetcher=_get_users_cached,
+        rows_fetcher=get_cached_rows,
+        is_internal_code=is_internal_code,
+        is_inactive_client=is_inactive_client,
+        is_hidden_for_team=is_hidden_client_for_team,
+        normalize_match=_normalize_for_match,
+    )
+
+
+def _apply_dynamic_roster(payload: dict) -> dict:
+    """Replace the ACTIVE config in place from a dynamic-roster payload.
+
+    Mutates rather than rebinds so every existing reader of TEAM_ROSTERS /
+    TEAM_CLIENTS / TEAM_MEMBERS / TEAM_ADMIN_MAP picks the change up without
+    touching their ~30 call sites.
+    """
+    rosters = payload.get("TEAM_ROSTERS") or {}
+    if not rosters:
+        return {"applied": False, "reason": "empty roster payload"}
+
+    TEAM_ROSTERS.clear()
+    TEAM_ROSTERS.update({k: list(v) for k, v in rosters.items()})
+
+    TEAM_ROSTERS_HISTORICAL.clear()
+    TEAM_ROSTERS_HISTORICAL.update(
+        {k: list(v) for k, v in (payload.get("TEAM_ROSTERS_HISTORICAL") or {}).items()}
+    )
+
+    TEAM_MEMBERS.clear()
+    TEAM_MEMBERS.update({k: list(v) for k, v in (payload.get("TEAM_MEMBERS") or {}).items()})
+
+    TEAM_EXPECTED_COUNTS.clear()
+    TEAM_EXPECTED_COUNTS.update(payload.get("TEAM_EXPECTED_COUNTS") or {})
+
+    clients = payload.get("TEAM_CLIENTS") or {}
+    if clients:
+        TEAM_CLIENTS.clear()
+        TEAM_CLIENTS.update({k: [dict(e) for e in v] for k, v in clients.items()})
+
+    admin_map = payload.get("TEAM_ADMIN_MAP") or {}
+    if admin_map:
+        TEAM_ADMIN_MAP.clear()
+        TEAM_ADMIN_MAP.update(admin_map)
+        # Keyed off USERS_CACHE["at"], which hasn't changed — force a rebuild so
+        # parse_rows() stops stamping rows with the previous team labels.
+        _USERID_TEAM_MAP_CACHE["users_at"] = None
+
+    # discover_teams() and every per-team aggregate are now stale.
+    TEAMS_CACHE["data"] = None
+    TEAMS_CACHE["at"] = None
+    _team_cache.clear()
+    _cache.clear()
+
+    return {
+        "applied": True,
+        "teams": len(TEAM_ROSTERS),
+        "members": sum(len(v) for v in TEAM_ROSTERS.values()),
+        "clients": sum(len(v) for v in TEAM_CLIENTS.values()),
+    }
+
+
+def _startup_load_roster() -> None:
+    """Load the dynamic roster at boot and report what happened.
+
+    Always fetches (so /api/roster/diff has live data to compare against), but
+    only APPLIES when DYNAMIC_ROSTER_ENABLED is set.
+    """
+    try:
+        env = dynamic_roster.get_dynamic_roster(force_refresh=True)
+    except Exception as e:
+        print(f"[STARTUP] dynamic roster failed, using hardcoded fallback: {e}")
+        return
+
+    payload, source = env["data"], env["source"]
+    enabled = dynamic_roster.is_enabled()
+
+    print("=" * 70)
+    print(f"DYNAMIC ROSTER — source={source} enabled={enabled} "
+          f"users={payload.get('user_count', 0)}")
+    print("=" * 70)
+
+    if enabled and source in ("live", "stale_cache"):
+        res = _apply_dynamic_roster(payload)
+        print(f"  applied: {res}")
+        for tid in TEAM_ORDER:
+            if tid not in TEAM_ROSTERS:
+                continue
+            members = TEAM_ROSTERS.get(tid, [])
+            clients = TEAM_CLIENTS.get(tid, [])
+            print(f"  {tid}: {len(members)} members, {len(clients)} clients")
+    else:
+        why = ("DYNAMIC_ROSTER_ENABLED is off — serving the hardcoded roster. "
+               "GET /api/roster/diff to preview the cutover."
+               if not enabled else
+               f"source={source} — not applying.")
+        print(f"  NOT APPLIED. {why}")
+        for tid in TEAM_ORDER:
+            live = len((payload.get("TEAM_ROSTERS") or {}).get(tid, []))
+            cur  = len(TEAM_ROSTERS.get(tid, []))
+            flag = "  <-- differs" if live != cur else ""
+            print(f"  {tid}: hardcoded={cur} timesheets={live}{flag}")
+
+    for t in payload.get("unmapped_teams") or []:
+        print(f"  [unmapped team] {t['lead_name']} ({t['job_title']}) "
+              f"has {t['member_count']} active reports but no TEAM_LETTER_MAP entry")
+    print("=" * 70)
+
+
+async def _roster_refresh_loop() -> None:
+    """Re-sync the roster on the cache TTL so an ops change in Timesheets.com
+    lands on the dashboard within ~5 minutes with no restart and no deploy.
+
+    On failure dynamic_roster keeps serving the last good payload and applies
+    its own retry ladder (60s, then every 5 min), so this loop just ticks.
+    """
+    await asyncio.sleep(30)  # let startup + warmup settle first
+    while True:
+        try:
+            env = await asyncio.to_thread(dynamic_roster.get_dynamic_roster)
+            if dynamic_roster.is_enabled() and env["source"] in ("live", "stale_cache"):
+                before = {k: list(v) for k, v in TEAM_ROSTERS.items()}
+                _apply_dynamic_roster(env["data"])
+                if before != TEAM_ROSTERS:
+                    changed = sorted(
+                        tid for tid in set(list(before) + list(TEAM_ROSTERS))
+                        if before.get(tid) != TEAM_ROSTERS.get(tid)
+                    )
+                    print(f"[roster-sync] roster changed for {changed} "
+                          f"(source={env['source']})")
+        except Exception as e:
+            print(f"[roster-sync] tick failed: {e}")
+        await asyncio.sleep(dynamic_roster.CACHE_TTL_SECONDS)
+
+
+@app.get("/api/roster/status")
+def roster_status():
+    """Health of the Timesheets.com roster sync — drives the dashboard banner."""
+    return dynamic_roster.get_roster_status()
+
+
+@app.get("/api/roster/diff")
+def roster_diff():
+    """Preview: what changes if the dynamic roster replaces the hardcoded one."""
+    return dynamic_roster.build_diff()
+
+
+@app.post("/api/roster/refresh")
+def refresh_roster():
+    """Force an immediate re-sync, bypassing the 5-minute cache."""
+    dynamic_roster.clear_roster_cache()
+    env = dynamic_roster.get_dynamic_roster(force_refresh=True)
+    payload, source = env["data"], env["source"]
+
+    applied = {"applied": False, "reason": "DYNAMIC_ROSTER_ENABLED is off"}
+    if dynamic_roster.is_enabled() and source in ("live", "stale_cache"):
+        applied = _apply_dynamic_roster(payload)
+
+    return {
+        "status": "refreshed",
+        "source": source,
+        "last_updated": env["last_updated"],
+        "enabled": dynamic_roster.is_enabled(),
+        "applied": applied,
+        "teams": len(payload.get("TEAM_ROSTERS") or {}),
+        "total_members": sum(len(m) for m in (payload.get("TEAM_ROSTERS") or {}).values()),
+        "total_clients": sum(len(c) for c in (payload.get("TEAM_CLIENTS") or {}).values()),
+        "unmapped_teams": len(payload.get("unmapped_teams") or []),
+        "client_note": payload.get("client_note"),
     }
 
 
