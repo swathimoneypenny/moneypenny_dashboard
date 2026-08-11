@@ -448,7 +448,9 @@ FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
     "team_a": [
         {"name": "Bookkeeping Doctor",   "tsMatch": ["BKP Doctor", "Bookkeeping Doctor", "BKD", "Bkd"],         "estHrs": 80,  "tz": "EST", "meeting": "2nd & 3rd week Thursday 9am IST & every Wednesday 4:30pm IST"},
         {"name": "Ollin Balance",        "tsMatch": ["Ollin Balance", "Ollinbalance", "Ollin"],                  "estHrs": 160, "tz": "EST", "meeting": "4th week Tuesday 4:30pm IST"},
-        {"name": "24hr Bookkeeper",      "tsMatch": ["24hr Bookkeeper", "24 hrs", "24hrs", "24 Hrs", "24 hr"], "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
+        # 24hr Bookkeeper removed 2026-08-10 — the client left MPLLC. Also added
+        # to INACTIVE_CLIENTS so lingering historical rows stop counting, and its
+        # BOD/EOD + Delays tab gids were dropped below.
     ],
     "team_b": [
         {"name": "NisiVoccia",           "tsMatch": ["NisiVoccia"],                            "estHrs": 120, "tz": "EST", "meeting": "3rd week Thursday 6:30pm IST"},
@@ -478,6 +480,14 @@ FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
         # committed resolves from the sheet, not the member×preparer fallback).
         {"name": "Scotts Laws",          "tsMatch": ["Scotts Laws", "Scotts"],                 "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
         {"name": "Pereira Azevedo",       "tsMatch": ["Pereira Azevedo", "Pereira", "Azevedo"], "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
+        # Added 2026-08-10 — Team F's permanent client, previously unconfigured.
+        # Until now find_team_for_client("Inspire Advisors & CPA") returned None,
+        # so its hours were unowned: 6.3h on Team F plus 5.2h logged by Team A.
+        # With Team F as owner, Team A's share is correctly cross-team help.
+        # TODO(ops): supply the BOD/EOD + Delays tab gids for this client so
+        # committed hours resolve from the sheet instead of the member×preparer
+        # fallback — see BOD_EOD_TAB_GIDS["team_f"] / DELAYS_TAB_GIDS["team_f"].
+        {"name": "Inspire Advisors & CPA", "tsMatch": ["Inspire Advisors & CPA", "Inspire Advisors", "Inspire"], "estHrs": 0, "tz": "EST", "meeting": "No scheduled meeting"},
     ],
     "team_g": [
         {"name": "Ez Ledger",            "tsMatch": ["Ez Ledger", "EZ Ledger"],                "estHrs": 320, "tz": "EST", "meeting": "Every Friday 8:30 AM EST (7:00 PM IST)"},
@@ -578,6 +588,20 @@ INACTIVE_CLIENTS = {
     "bookkeeping repair",
     "bookkeeping repair llc",
     "thrive",
+    # Left MPLLC 2026-08-10. Matching is normalized substring, so
+    # "24hr bookkeeper" -> "24hrbookkeeper" also catches the timesheet's actual
+    # "ZZZ-24 Hr Bookkeeper" ("zzz24hrbookkeeper"). NOTE this is a GLOBAL drop,
+    # not Team A only: Team I logged 105.2h against this client in the last 90
+    # days, and those rows stop counting toward Team I's totals as well.
+    "24hr bookkeeper",
+    "24 hr bookkeeper",
+    "zzz-24 hr bookkeeper",
+    # Plural / long-form spellings. The live timesheet customer is
+    # "ZZZ-24 Hr Bookkeeper", but CLIENT_ALIASES shows these variants have
+    # appeared, and "24hrbookkeeper" alone does NOT match "24hrsbookkeeper".
+    "24 hrs bookkeeper",
+    "24hrs bookkeeper",
+    "24 hours bookkeeper",
 }
 
 
@@ -2292,7 +2316,7 @@ DELAYS_TAB_GIDS: dict[str, dict[str, str]] = {
     "team_a": {
         "bookkeeping doctor":   "1721105744",
         "ollin balance":        "213832720",
-        "24HR Bookkeeper":      "1240442985",
+        # "24HR Bookkeeper": "1240442985" removed 2026-08-10 — client left MPLLC.
     },
     "team_b": {
         "Nisivoccia":           "146469907",
@@ -2319,6 +2343,8 @@ DELAYS_TAB_GIDS: dict[str, dict[str, str]] = {
     "team_f": {
         "scotts laws":          "1565152388",
         "pereira azevedo":      "2140023746",
+        # TODO(ops): add "inspire advisors": "<GID>" once the TL supplies the
+        # Delays tab gid. Until then the client shows with no delays data.
     },
     "team_g": {
         "manzelli":             "1255292486",
@@ -2452,7 +2478,7 @@ BOD_EOD_TAB_GIDS: dict[str, dict[str, str]] = {
     "team_a": {
         "Bookkeeping Doctor": "273916475",
         "Ollinbalance":       "677777582",
-        "24 Hrs Bookkeeper":  "930660300",
+        # "24 Hrs Bookkeeper": "930660300" removed 2026-08-10 — client left MPLLC.
     },
     "team_b": {
         "Nisivoccia":         "1774184677",
@@ -2479,6 +2505,9 @@ BOD_EOD_TAB_GIDS: dict[str, dict[str, str]] = {
     "team_f": {
         "Scotts Laws":        "139250466",
         "Pereira Azevedo":    "609837330",
+        # TODO(ops): add "Inspire Advisors": "<GID>" once the TL supplies the
+        # BOD/EOD tab gid. Until then committed hours for this client fall back
+        # to the member x per-preparer calculation rather than the sheet.
     },
     "team_g": {
         "Jeo Manzelli":       "2126272770",
