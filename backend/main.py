@@ -681,6 +681,12 @@ def is_hidden_client_for_team(team_id: str, customer: str) -> bool:
 # total reconciles with the timesheet — never silently dropped.
 CROSS_TEAM_BUCKET = "Cross-Team Help"
 
+# Under this many hours in the period, a permanent client is labelled "Hardly"
+# rather than shown as ordinary activity. Every permanent client is listed
+# regardless of hours so a TL sees the whole roster; the label distinguishes
+# "worked a little" from "not touched at all".
+HARDLY_WORKED_THRESHOLD_HOURS = float(os.getenv("HARDLY_WORKED_THRESHOLD_HOURS", "5"))
+
 
 def _permanent_clients_only() -> bool:
     """Read at call time so pm2 restart --update-env applies it."""
@@ -5182,6 +5188,9 @@ async def _team_response(
             "timezone":    h["tz"],
             "meeting":     h["meeting"],
             "isPlaceholder": h["isConfig"] and committed == 0 and actual == 0,
+            # Needed by the activity-label + keep/sort pass below.
+            "isConfig":      bool(h["isConfig"]),
+            "isCrossTeam":   bool(h.get("isCrossTeam")),
             # Only the catch-all bucket is "Internal / Other"; dynamically-surfaced
             # unmapped client customers (isConfig=False but real clients) must NOT
             # be hidden by the frontend's isInternalOther filter.
@@ -5194,18 +5203,44 @@ async def _team_response(
                   f"customersMatched={sorted(h['matchedCustomers'])} "
                   f"rowsMatched={h['rowsMatched']} hours={round(actual, 1)}")
 
-    # Sort: configured clients first (by actual desc), Internal / Other last (only if non-zero).
+    # Activity label per client. Every CONFIGURED (permanent) client is kept
+    # regardless of hours so a TL sees the full client roster at a glance —
+    # previously a configured client with 0 actual AND 0 committed was dropped,
+    # which hid 9 of Team M's 15 clients (they carry estHrs=0, so their committed
+    # was 0 too, unlike Team G's Manzelli at estHrs=160).
+    for c in clients_data:
+        if c["isInternalOther"] or c.get("isCrossTeam"):
+            c["activityStatus"] = "active"
+            c["activityLabel"]  = None
+            continue
+        actual_h = c.get("actual") or 0
+        if actual_h <= 0:
+            c["activityStatus"] = "inactive"
+            c["activityLabel"]  = "No activity this period"
+        elif actual_h < HARDLY_WORKED_THRESHOLD_HOURS:
+            c["activityStatus"] = "hardly"
+            c["activityLabel"]  = "Hardly"
+            c["hardlyThresholdHours"] = HARDLY_WORKED_THRESHOLD_HOURS
+        else:
+            c["activityStatus"] = "active"
+            c["activityLabel"]  = None
+
+    # Sort: active first (hours desc), then "hardly", then no-activity, with
+    # Internal / Other and Cross-Team Help last.
+    _ACTIVITY_RANK = {"active": 0, "hardly": 1, "inactive": 2}
+
     def _sort_key(c):
-        if c["isInternalOther"]:
-            return (1, -c["actual"])
-        return (0, -c["actual"])
-    # Hide clutter rows: the Internal/Other catch-all when empty, AND any
-    # configured client with no activity AND no committed target (a 0h/0committed
-    # placeholder adds nothing but a misleading status badge). A client reappears
-    # automatically once it has booked hours OR a committed target for the period.
+        if c["isInternalOther"] or c.get("isCrossTeam"):
+            return (3, 0, -c["actual"])
+        return (_ACTIVITY_RANK.get(c.get("activityStatus"), 0), 0, -c["actual"])
+
+    # Only the catch-all buckets are hidden when empty. Configured clients always
+    # stay; an UNconfigured ad-hoc bucket only exists because it had hours.
     def _keep_org(c) -> bool:
-        if c["isInternalOther"]:
+        if c["isInternalOther"] or c.get("isCrossTeam"):
             return c["actual"] > 0
+        if c.get("isConfig"):
+            return True
         return (c["actual"] or 0) > 0 or (c["committed"] or 0) > 0
     clients_data = [c for c in clients_data if _keep_org(c)]
     clients_data.sort(key=_sort_key)
@@ -9965,6 +10000,14 @@ def _startup_load_roster() -> None:
     for t in payload.get("unmapped_teams") or []:
         print(f"  [unmapped team] {t['lead_name']} ({t['job_title']}) "
               f"has {t['member_count']} active reports but no TEAM_LETTER_MAP entry")
+    # Manual placements diverge from Timesheets on purpose — always log them so a
+    # future engineer sees why a roster doesn't match the ADMINUSERID hierarchy.
+    for ov in payload.get("member_overrides") or []:
+        print(f"  [MEMBER OVERRIDE] {ov['name']} (USERID {ov['userid']}) forced into "
+              f"{ov['team_id']} as {ov['role']} (is_tl={ov['is_tl']}); Timesheets has "
+              f"ADMINUSERID={ov['timesheet_admin_id']} JOBTITLE={ov['timesheet_job_title']!r}"
+              + (f", removed from {ov['moved_from']}" if ov.get("moved_from") else ""))
+        print(f"      reason: {ov['reason']}")
     print("=" * 70)
 
 

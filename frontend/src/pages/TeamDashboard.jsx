@@ -563,10 +563,14 @@ function PerfTable({ orgs, onRowClick }) {
             // entries we want to show.
             const hasEntries = Array.isArray(o.entries) && o.entries.length > 0;
             const clickable  = onRowClick && !isPlaceholder && hasEntries;
+            // Every permanent client is listed now, even with no hours, so the TL
+            // sees the whole roster. These badges say why a row reads as empty.
+            const activity = o.activityStatus;
+            const lowActivity = activity === "hardly" || activity === "inactive";
             return (
               <tr
                 key={i}
-                style={{ transition: "background 0.12s", background: baseBg, cursor: clickable ? "pointer" : "default" }}
+                style={{ transition: "background 0.12s", background: baseBg, cursor: clickable ? "pointer" : "default", opacity: lowActivity ? 0.7 : 1 }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(61,142,240,0.05)"; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = baseBg; }}
                 onClick={() => { if (clickable) onRowClick(o); }}
@@ -592,6 +596,30 @@ function PerfTable({ orgs, onRowClick }) {
                       {initials(o.name ?? "?")}
                     </div>
                     <span style={{ fontWeight: 500, color: isPlaceholder ? C.muted : C.pri }}>{o.name}</span>
+                    {activity === "hardly" && (
+                      <span
+                        title={`Under ${o.hardlyThresholdHours ?? 5}h logged this period`}
+                        style={{
+                          padding: "2px 7px", fontSize: 10, borderRadius: 5,
+                          background: C.statusYellow, color: C.yellow,
+                          whiteSpace: "nowrap", fontWeight: 600, letterSpacing: 0.3,
+                        }}
+                      >
+                        Hardly
+                      </span>
+                    )}
+                    {activity === "inactive" && (
+                      <span
+                        title="No hours logged against this client in this period"
+                        style={{
+                          padding: "2px 7px", fontSize: 10, borderRadius: 5,
+                          background: "rgba(255,255,255,0.06)", color: C.muted,
+                          whiteSpace: "nowrap", fontWeight: 600, letterSpacing: 0.3,
+                        }}
+                      >
+                        No activity
+                      </span>
+                    )}
                   </div>
                 </td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: committed > 0 ? (gap >= 0 ? C.green : C.red) : C.muted }}>

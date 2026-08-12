@@ -74,6 +74,98 @@ _SERVICE_ACCOUNT_RE = re.compile(r"(?:^|\s)(?:MPLLC\d*|BKP\d*)(?:\s|$)", re.IGNO
 # rank-and-file member of their supervisor's team.
 LEAD_JOB_TITLES = frozenset({"team lead", "training lead", "manager"})
 
+# ── Manual member placement, overriding the ADMINUSERID hierarchy ──
+# For people whose Timesheets.com reporting line does not reflect the team they
+# actually work on. The override wins over ADMINUSERID and over JOBTITLE: the
+# person is removed from whichever mapped team the hierarchy put them in, then
+# added to the target team with the role stated here.
+#
+# This is a deliberate divergence from "Timesheets.com is the source of truth",
+# so each entry records why, and every applied override is logged at startup.
+# Keep this list SHORT — the right long-term fix is to correct ADMINUSERID in
+# Timesheets.com, after which the entry can simply be deleted.
+TEAM_MEMBER_OVERRIDES: dict[str, list[dict]] = {
+    "team_g": [
+        {
+            "userid": "372101",
+            "display_name": "Indra Vijayababu",
+            "match_keyword": "indra vijayababu",
+            "is_tl": False,          # explicitly NOT a lead, despite JOBTITLE
+            "role": "preparer",
+            "reason": ("Timesheets ADMINUSERID is 372099 (Vidya Laksmi Prakash, "
+                       "Manager) and JOBTITLE reads 'Team Lead', but she works as "
+                       "a Team G preparer under Hema (372164). Ops cannot change "
+                       "the reporting line right now. Delete this entry once "
+                       "ADMINUSERID is repointed to 372164."),
+        },
+    ],
+}
+
+
+def _apply_member_overrides(teams: dict, users: list[dict]) -> list[dict]:
+    """Force TEAM_MEMBER_OVERRIDES placements. Returns the applied entries.
+
+    Runs AFTER the hierarchy build so it can relocate someone. Inactive users are
+    still skipped — an override changes which team a person belongs to, not
+    whether they are employed.
+    """
+    by_id = {str(u.get("USERID")): u for u in users}
+    applied: list[dict] = []
+
+    for team_id, overrides in TEAM_MEMBER_OVERRIDES.items():
+        target = teams.get(team_id)
+        if target is None:
+            print(f"[DYNAMIC_ROSTER] override skipped — unknown team {team_id!r}")
+            continue
+
+        for ov in overrides:
+            uid = str(ov.get("userid") or "").strip()
+            user = by_id.get(uid)
+            if not uid or user is None:
+                print(f"[DYNAMIC_ROSTER] override skipped — USERID {uid!r} "
+                      f"not in the Timesheets user list")
+                continue
+            if not is_active_user(user):
+                print(f"[DYNAMIC_ROSTER] override skipped — {ov.get('display_name')} "
+                      f"(USERID {uid}) is inactive in Timesheets")
+                continue
+
+            # Pull them out of whichever mapped team the hierarchy placed them in.
+            moved_from = None
+            for other_id, other in teams.items():
+                if other_id == team_id:
+                    continue
+                before = len(other["members"])
+                other["members"] = [m for m in other["members"]
+                                    if m["timesheet_id"] != uid]
+                if len(other["members"]) != before:
+                    moved_from = other_id
+
+            full = (user.get("FULLNAME") or "").strip()
+            name = ov.get("display_name") or full
+            if not any(m["timesheet_id"] == uid for m in target["members"]):
+                target["members"].append({
+                    "name": name,
+                    "timesheet_id": uid,
+                    "is_tl": bool(ov.get("is_tl", False)),
+                    "job_title": ov.get("role") or (user.get("JOBTITLE") or "").strip(),
+                    # Match on the real timesheet FULLNAME, not the display name,
+                    # or their rows would never be attributed.
+                    "match_keyword": (ov.get("match_keyword") or full).lower().strip(),
+                    "overridden": True,
+                    "override_reason": ov.get("reason", ""),
+                })
+            target["members"].sort(key=lambda m: (not m["is_tl"], m["name"]))
+            applied.append({
+                "team_id": team_id, "userid": uid, "name": name,
+                "role": ov.get("role"), "is_tl": bool(ov.get("is_tl", False)),
+                "moved_from": moved_from,
+                "timesheet_admin_id": str(user.get("ADMINUSERID") or ""),
+                "timesheet_job_title": (user.get("JOBTITLE") or "").strip(),
+                "reason": ov.get("reason", ""),
+            })
+    return applied
+
 # Retry ladder after a failed fetch: 60s, then every 5 min.
 RETRY_FIRST_SECONDS  = 60
 RETRY_STEADY_SECONDS = 300
@@ -321,7 +413,12 @@ def build_dynamic_roster(users: list[dict] | None = None) -> dict:
                 "members": sorted((r.get("FULLNAME") or "").strip() for r in reports),
             })
 
-    return {"teams": teams, "unmapped_teams": unmapped_teams}
+    # Manual placements win over the hierarchy — applied last so they can
+    # relocate someone the ADMINUSERID chain already assigned.
+    overrides_applied = _apply_member_overrides(teams, users)
+
+    return {"teams": teams, "unmapped_teams": unmapped_teams,
+            "member_overrides": overrides_applied}
 
 
 # ── Client construction ───────────────────────────────────────────
@@ -479,6 +576,7 @@ def _build_payload() -> dict:
         "TEAM_ADMIN_MAP": {},
         "raw_teams": teams,
         "unmapped_teams": built["unmapped_teams"],
+        "member_overrides": built.get("member_overrides") or [],
         "client_additions": clients["discovered"],
         "client_orphans": clients.get("orphans") or [],
         "client_note": clients["skipped"],
@@ -514,6 +612,7 @@ def _fallback_payload() -> dict:
         "TEAM_ADMIN_MAP": dict(_cfg["team_admin_map"] or {}),
         "raw_teams": {},
         "unmapped_teams": [],
+        "member_overrides": [],
         "client_additions": {},
         "client_orphans": [],
         "client_note": "hardcoded fallback — no live data",
@@ -837,5 +936,6 @@ def build_diff() -> dict:
         "orphan_clients": payload.get("client_orphans") or [],
         "warnings": warnings,
         "unmapped_teams": payload["unmapped_teams"],
+        "member_overrides": payload.get("member_overrides") or [],
         "client_note": payload.get("client_note"),
     }
