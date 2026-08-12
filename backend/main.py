@@ -288,7 +288,16 @@ FALLBACK_TEAM_ROSTERS: dict[str, list[str]] = {
                "gunasekaran sharmila", "sagada swetha"],
     "team_e": ["shaalini", "kaviya", "preethi"],
     "team_f": ["inbamozhi", "sarika"],
-    "team_g": ["hema", "indra", "amala", "nidisha", "pechi"],
+    # "indra" and "vijayababu" are the SAME PERSON — Indra Vijayababu, USERID
+    # 372101, JOBTITLE "Team Lead". Both keywords are listed only because the
+    # timesheet FULLNAME is "Indra Vijayababu" and either token identifies her;
+    # she counts once. NOTE this fallback list is inert while
+    # DYNAMIC_ROSTER_ENABLED=1: the live roster comes from ADMINUSERID, and
+    # Timesheets.com has her reporting to Vidya Laksmi Prakash (Manager, 372099),
+    # NOT to Hema (372164). Hema's actual direct reports are Amala Bharathi
+    # Bernard, Nidishablessy Biju and Pechiammal Selvam. To put her on Team G for
+    # real, ops must repoint her ADMINUSERID to 372164 in Timesheets.com.
+    "team_g": ["hema", "indra", "vijayababu", "amala", "nidisha", "pechi"],
     "team_h": ["deepali", "yashika", "madu"],
     "team_i": ["radhika", "aparna s", "jeevitha", "sakthi s"],
     # TL-confirmed roster = 4 (2026-06-17). Dropped "monikaa" to match the count
@@ -490,8 +499,13 @@ FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
         {"name": "Inspire Advisors & CPA", "tsMatch": ["Inspire Advisors & CPA", "Inspire Advisors", "Inspire"], "estHrs": 0, "tz": "EST", "meeting": "No scheduled meeting"},
     ],
     "team_g": [
-        {"name": "Ez Ledger",            "tsMatch": ["Ez Ledger", "EZ Ledger"],                "estHrs": 320, "tz": "EST", "meeting": "Every Friday 8:30 AM EST (7:00 PM IST)"},
-        {"name": "Proper Trust",         "tsMatch": ["Proper Trust", "Mintage", "Artesani"],   "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "Ez Ledger",            "tsMatch": ["Ez Ledger", "EZ Ledger", "EzLedger"],    "estHrs": 320, "tz": "EST", "meeting": "Every Friday 8:30 AM EST (7:00 PM IST)"},
+        # Mintage + Artesani split out into their own entries 2026-08-10 — they are
+        # separate clients with their own BOD/EOD and Delays tabs, and folding them
+        # into Proper Trust's tsMatch merged three clients' hours into one row.
+        {"name": "Proper Trust",         "tsMatch": ["Proper Trust", "ProperTrust"],           "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "Mintage",              "tsMatch": ["Mintage"],                               "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "Artesani",             "tsMatch": ["Artesani"],                              "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
         {"name": "Putman Accountancy",   "tsMatch": ["Putman"],                                "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
         # Keyword broadened to "Manzelli" 2026-06-19 — the old "Manzelli Consulting"
         # keyword is LONGER than the timesheet customer (e.g. "Jeo Manzelli"/"Manzelli"),
@@ -686,6 +700,41 @@ TEAM_CLIENT_OVERRIDES: dict[str, set[str]] = {
     # (~890h, most of their work) under Cross-Team Help.
     "team_e": {"ASC Custom Books"},
 }
+
+
+# Clients that belong to NO single team — shared work anyone may log against.
+# They are shown as a normal client entry on EVERY team whose members touched
+# them (never swept into CROSS_TEAM_BUCKET), and they are excluded from
+# activity-based discovery so they never get "assigned" to one team's list.
+#
+# canonical display name → alias spellings. Matching is the same normalized
+# substring rule as the rest of the config, so PREFLIGHT / Preflight /
+# Pre-Flight / "PREFLIGHT " all collapse into one bucket named "PREFLIGHT".
+SHARED_CLIENTS: dict[str, list[str]] = {
+    "PREFLIGHT": ["PREFLIGHT", "Preflight", "Pre-Flight", "Pre Flight"],
+}
+
+
+def resolve_shared_client(customer: str) -> str | None:
+    """Canonical shared-client name for `customer`, else None.
+
+    Longest matching alias wins, so a future "Preflight Tax" entry couldn't be
+    swallowed by a shorter "Preflight".
+    """
+    cust_norm = _normalize_for_match(customer)
+    if not cust_norm:
+        return None
+    best, best_len = None, 0
+    for canonical, aliases in SHARED_CLIENTS.items():
+        for alias in list(aliases) + [canonical]:
+            n = _normalize_for_match(alias)
+            if n and n in cust_norm and len(n) > best_len:
+                best, best_len = canonical, len(n)
+    return best
+
+
+def is_shared_client(customer: str) -> bool:
+    return resolve_shared_client(customer) is not None
 
 
 def is_override_client_for_team(team_id: str, customer: str) -> bool:
@@ -2511,11 +2560,14 @@ BOD_EOD_TAB_GIDS: dict[str, dict[str, str]] = {
     },
     "team_g": {
         "Jeo Manzelli":       "2126272770",
-        # NOTE: User-supplied gid for Putman Accountancy duplicates Jeo
-        # Manzelli's. Likely a typo on intake — flagged for TL confirmation
-        # 2026-06-16. Keeping both entries so the dropdown shows correctly;
-        # the endpoint will surface identical data until a fresh gid lands.
-        "Putman Accountancy": "2126272770",
+        # FIXED 2026-08-10: was "2126272770", which is the "Joe Manzelli " tab —
+        # so Putman's BOD/EOD row showed Manzelli's committed hours. The flagged
+        # typo above is now resolved. 175850952 is "Putmanaccountancy Corp", the
+        # tab in the CURRENT BOD/EOD format (Date | Committed | Booked | Practice
+        # Protect | ...) with rows running to 2026-08-12. The similarly-named
+        # "Putman Accountancy Corp" (894064860) is the ARCHIVE tab: legacy column
+        # layout and rows that stop at 2026-06-02.
+        "Putman Accountancy": "175850952",
         "EZ Ledger":          "535352390",
         "The Proper Trust":   "892917002",
         "Artesani Accounting": "1692283",
@@ -4979,7 +5031,13 @@ async def _team_response(
             # whose TEAM_CLIENTS config is incomplete (e.g. Team E/F) show "No
             # organization data" despite real billable client work. Empty-customer
             # rows still fall through to Internal / Other.
-            resolved = _resolve_client_for_team(team_id, customer, desc)
+            # Shared/unowned clients (PREFLIGHT) resolve for EVERY team, ahead of
+            # the permanent-clients filter, so they render as a normal entry with
+            # their own billable/non-billable split instead of being folded into
+            # Cross-Team Help. Canonicalised so every spelling shares one bucket.
+            resolved = resolve_shared_client(customer) if customer else None
+            if not resolved:
+                resolved = _resolve_client_for_team(team_id, customer, desc)
             if not resolved and customer and is_override_client_for_team(team_id, customer):
                 # TEAM_CLIENT_OVERRIDES wins over resolution — see its comment
                 # for why Team E needs it.
@@ -9582,6 +9640,23 @@ def _bod_eod_parse_rows(client_name: str, csv_text: str) -> dict:
     }
 
 
+def _bod_eod_source(team_id: str, entry) -> tuple[str | None, str | None]:
+    """(sheet_id, gid) for a BOD_EOD_TAB_GIDS value.
+
+    A value is normally a bare gid string, meaning "a tab inside this team's own
+    spreadsheet". It may instead be {"sheet_id": ..., "gid": ...} for a client
+    whose BOD/EOD tab lives in a DIFFERENT document — some clients are tracked in
+    their own sheet rather than the team's.
+
+    Any such external document must also be shared with the service account, or
+    the fetch 404s once SHEETS_USE_API is on.
+    """
+    default_sheet = (TEAM_LETTER_MAP.get(team_id) or {}).get("sheetId")
+    if isinstance(entry, dict):
+        return (entry.get("sheet_id") or default_sheet), entry.get("gid")
+    return default_sheet, entry
+
+
 def _resolve_bod_eod_gid(team_id: str, org_name: str) -> str | None:
     """Match an org/client name to a BOD_EOD_TAB_GIDS key for the team.
     The org names (TEAM_CLIENTS / raw timesheet customers) don't always equal
@@ -9787,6 +9862,9 @@ def _configure_dynamic_roster() -> None:
         is_internal_code=is_internal_code,
         is_inactive_client=is_inactive_client,
         is_hidden_for_team=is_hidden_client_for_team,
+        # Shared clients must never be auto-assigned to a single team's list —
+        # they're deliberately unowned and render on every team that logs them.
+        is_shared_client=is_shared_client,
         normalize_match=_normalize_for_match,
     )
 
@@ -9914,6 +9992,72 @@ async def _roster_refresh_loop() -> None:
         except Exception as e:
             print(f"[roster-sync] tick failed: {e}")
         await asyncio.sleep(dynamic_roster.CACHE_TTL_SECONDS)
+
+
+@app.get("/api/audit/shared-clients")
+def audit_shared_clients(period: str = "monthly", days: int = 0):
+    """Per SHARED_CLIENTS entry: hours by team and by preparer.
+
+    Shared clients are unowned by design, so this is the only place the full
+    picture exists — each team's dashboard shows only its own slice.
+    """
+    if days and days > 0:
+        end_d = datetime.now()
+        start, end = ((end_d - timedelta(days=days)).strftime("%Y-%m-%d"),
+                      end_d.strftime("%Y-%m-%d"))
+        label = f"last {days} days"
+    else:
+        start, end, label = date_range_for_period(period)
+    rows = get_cached_rows(start, end)
+
+    agg: dict[str, dict] = {
+        canonical: {"canonical": canonical, "aliases": aliases, "totalHours": 0.0,
+                    "billable": 0.0, "nonBillable": 0.0,
+                    "byTeam": {}, "byPreparer": {}, "spellingsSeen": {}}
+        for canonical, aliases in SHARED_CLIENTS.items()
+    }
+
+    for r in rows:
+        customer = (r.get("customer") or "").strip()
+        canonical = resolve_shared_client(customer)
+        if not canonical:
+            continue
+        h = float(r.get("hours") or 0)
+        if h <= 0:
+            continue
+        e = agg[canonical]
+        e["totalHours"] += h
+        if r.get("billable"):
+            e["billable"] += h
+        else:
+            e["nonBillable"] += h
+        e["spellingsSeen"][customer] = round(e["spellingsSeen"].get(customer, 0.0) + h, 2)
+        tid = assign_row_to_team(r)
+        tlabel = (TEAM_LETTER_MAP.get(tid) or {}).get("label", tid or "unassigned")
+        e["byTeam"][tlabel] = round(e["byTeam"].get(tlabel, 0.0) + h, 2)
+        nm = (r.get("name") or "").strip() or "Unknown"
+        e["byPreparer"][nm] = round(e["byPreparer"].get(nm, 0.0) + h, 2)
+
+    out = []
+    for e in agg.values():
+        out.append({
+            **e,
+            "totalHours": round(e["totalHours"], 2),
+            "billable": round(e["billable"], 2),
+            "nonBillable": round(e["nonBillable"], 2),
+            "teamCount": len(e["byTeam"]),
+            "byTeam": dict(sorted(e["byTeam"].items(), key=lambda kv: -kv[1])),
+            "byPreparer": dict(sorted(e["byPreparer"].items(), key=lambda kv: -kv[1])),
+        })
+
+    return {
+        "period": label,
+        "range": {"start": start, "end": end},
+        "note": ("Shared clients are unowned: they render as a normal client entry "
+                 "on every team that logs hours, and are excluded from "
+                 "activity-based team assignment."),
+        "clients": sorted(out, key=lambda c: -c["totalHours"]),
+    }
 
 
 @app.get("/api/audit/cross-team-help")

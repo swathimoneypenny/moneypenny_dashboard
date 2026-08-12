@@ -97,6 +97,7 @@ _cfg: dict = {
     "is_internal_code":  None,   # (customer) -> bool
     "is_inactive_client": None,  # (customer) -> bool
     "is_hidden_for_team": None,  # (team_id, customer) -> bool
+    "is_shared_client":  None,   # (customer) -> bool  — unowned, never auto-assigned
     "normalize_match":   None,   # (str) -> str
 }
 
@@ -356,6 +357,7 @@ def build_dynamic_team_clients(teams: dict, rows: list[dict] | None = None,
     is_internal = _cfg.get("is_internal_code") or (lambda c: False)
     is_inactive = _cfg.get("is_inactive_client") or (lambda c: False)
     is_hidden   = _cfg.get("is_hidden_for_team") or (lambda t, c: False)
+    is_shared   = _cfg.get("is_shared_client") or (lambda c: False)
 
     # customer -> team -> hours
     pair_hours: dict[str, dict[str, float]] = {}
@@ -373,6 +375,10 @@ def build_dynamic_team_clients(teams: dict, rows: list[dict] | None = None,
         # worked by every team and belong in "Internal / Other", not on a
         # client list. Churned clients never come back.
         if is_internal(customer) or is_inactive(customer):
+            continue
+        # SHARED_CLIENTS are deliberately unowned — attributing one to a single
+        # team would be exactly the bug this whole mechanism exists to avoid.
+        if is_shared(customer):
             continue
         per_team = pair_hours.setdefault(customer, {})
         per_team[tid] = per_team.get(tid, 0.0) + hours
