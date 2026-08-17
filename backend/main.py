@@ -37,11 +37,46 @@ import dynamic_roster
 # currently readable by anyone with the link.
 import sheets_client
 
+# Email + OTP auth and the role/route policy. access_control.classify_path is
+# the single decision point for scoping; see its module docstring for why the
+# policy is default-deny rather than a path allowlist.
+import access_control
+import otp_auth
+
 load_dotenv()
+
+
+def _client_visible_to_team(client_slug: str, team_id: str | None) -> bool:
+    """May a non-admin on `team_id` open this client's dashboard?
+
+    True when the client resolves against that team's own TEAM_CLIENTS, or when
+    it's a SHARED_CLIENTS entry (deliberately unowned, worked by everyone).
+    Lives here because access_control must not import main.
+    """
+    if not team_id:
+        return False
+    from urllib.parse import unquote
+    name = unquote(client_slug or "").replace("-", " ").strip()
+    if not name:
+        return False
+    if resolve_shared_client(name):
+        return True
+    if _resolve_client_for_team(team_id, name, ""):
+        return True
+    # Slugs may not round-trip exactly (punctuation stripped), so also compare
+    # normalized against the team's configured names and aliases.
+    target = _normalize_for_match(name)
+    for entry in (TEAM_CLIENTS.get(team_id) or []):
+        for cand in [entry.get("name", "")] + list(entry.get("tsMatch") or []):
+            c = _normalize_for_match(cand)
+            if c and target and (c in target or target in c):
+                return True
+    return False
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    _log_auth_mode()
     _configure_dynamic_roster()
     _startup_load_roster()
     _deduplicate_rosters()
@@ -73,19 +108,80 @@ async def add_cache_control(request: Request, call_next):
 
 @app.middleware("http")
 async def require_auth(request: Request, call_next):
-    """Protect every /api/* route except /api/auth/* and a few exempt prefixes.
-    If DASHBOARD_PASSWORD or DASHBOARD_SESSION_SECRET is unset, auth is disabled
-    so local dev keeps working without env config."""
+    """Protect every /api/* route.
+
+    Two modes, selected by OTP_AUTH_ENABLED:
+
+      off (default) — legacy shared-password tokens, unchanged. OTP endpoints
+                      still work, so the flow can be exercised before cutover.
+      on            — OTP session tokens only, plus per-role scope enforcement.
+
+    Scoping is DEFAULT-DENY: access_control.classify_path decides, and anything
+    unrecognised is admin-only. Only 17 of 68 routes live under /api/team/, so a
+    path-regex allowlist would have left team members reading every other team's
+    data through /api/client/*, /api/debug/* and the cross-team audits.
+    """
     path = request.url.path
-    # Allow CORS preflight + non-API paths
-    if request.method == "OPTIONS" or not path.startswith("/api/") or AUTH_DISABLED:
+    if request.method == "OPTIONS" or not path.startswith("/api/"):
         return await call_next(request)
-    if any(path.startswith(p) for p in AUTH_EXEMPT_PREFIXES):
+
+    kind, detail = access_control.classify_path(path)
+    if kind == "public":
         return await call_next(request)
-    token = extract_bearer(request)
-    if not verify_token(token or ""):
+
+    if not otp_auth.enabled():
+        # ── Legacy mode ──────────────────────────────────────────
+        if AUTH_DISABLED:
+            return await call_next(request)
+        if any(path.startswith(p) for p in AUTH_EXEMPT_PREFIXES):
+            return await call_next(request)
+        token = extract_bearer(request)
+        # Accept an OTP token too, so users migrated early aren't logged out
+        # when the flag is flipped back and forth during rollout.
+        if verify_token(token or ""):
+            return await call_next(request)
+        user = otp_auth.verify_session_token(token or "")
+        if user:
+            request.state.user = user
+            return await call_next(request)
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    return await call_next(request)
+
+    # ── OTP mode ─────────────────────────────────────────────────
+    user = otp_auth.verify_session_token(extract_bearer(request) or "")
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    request.state.user = user
+
+    if user["role"] == "admin":
+        return await call_next(request)
+
+    if kind == "any_user":
+        return await call_next(request)
+
+    if kind == "team":
+        if detail != user["team"]:
+            return JSONResponse({
+                "error": "forbidden",
+                "message": f"You do not have access to {detail}. Your team is {user['team']}.",
+                "yourTeam": user["team"],
+            }, status_code=403)
+        return await call_next(request)
+
+    if kind == "client":
+        if not _client_visible_to_team(detail, user["team"]):
+            return JSONResponse({
+                "error": "forbidden",
+                "message": ("That client is not assigned to your team."),
+                "yourTeam": user["team"],
+            }, status_code=403)
+        return await call_next(request)
+
+    # kind == "admin_only"
+    return JSONResponse({
+        "error": "forbidden",
+        "message": "This view is restricted to admins.",
+        "yourTeam": user["team"],
+    }, status_code=403)
 
 
 # Registered LAST so it sits OUTERMOST in the stack — runs on every response
@@ -110,6 +206,13 @@ async def add_charset_header(request: Request, call_next):
 
 @app.post("/api/auth/login")
 async def auth_login(req: dict):
+    """Legacy shared-password login. Disabled once OTP_AUTH_ENABLED is set."""
+    if otp_auth.enabled():
+        return JSONResponse(
+            {"error": "password_login_disabled",
+             "message": "Sign in with your work email — a login code will be emailed to you."},
+            status_code=410,
+        )
     password = (req or {}).get("password") or ""
     if not DASHBOARD_PASSWORD or not DASHBOARD_SESSION_SECRET:
         return JSONResponse(
@@ -121,13 +224,66 @@ async def auth_login(req: dict):
     return {"token": issue_token(), "expiresInSecs": TOKEN_TTL_SECS}
 
 
+@app.post("/api/auth/request-otp")
+async def auth_request_otp(req: dict):
+    return otp_auth.request_otp((req or {}).get("email") or "")
+
+
+@app.post("/api/auth/verify-otp")
+async def auth_verify_otp(req: dict):
+    body = req or {}
+    result, token = otp_auth.verify_otp_and_issue_token(
+        body.get("email") or "", body.get("code") or "")
+    if not token:
+        return JSONResponse(result, status_code=401)
+    return result
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    """Current user + what the UI should let them reach."""
+    user = otp_auth.verify_session_token(extract_bearer(request) or "")
+    if user:
+        return {
+            **user,
+            "authMode": "otp",
+            "allTeams": user["role"] == "admin",
+            "teams": (TEAM_ORDER if user["role"] == "admin"
+                      else ([user["team"]] if user["team"] else [])),
+        }
+    # Legacy password session: full access, no identity. Lets the UI keep
+    # working during rollout instead of bouncing everyone to the login screen.
+    if not otp_auth.enabled():
+        if AUTH_DISABLED:
+            return {"email": None, "name": "Local dev", "role": "admin", "team": None,
+                    "authMode": "disabled", "allTeams": True, "teams": TEAM_ORDER}
+        if verify_token(extract_bearer(request) or ""):
+            return {"email": None, "name": "Dashboard user", "role": "admin", "team": None,
+                    "authMode": "password", "allTeams": True, "teams": TEAM_ORDER}
+    return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+
 @app.get("/api/auth/verify")
 async def auth_verify(request: Request):
+    if otp_auth.enabled():
+        user = otp_auth.verify_session_token(extract_bearer(request) or "")
+        return {"valid": bool(user), "authMode": "otp",
+                "role": user["role"] if user else None,
+                "team": user["team"] if user else None}
     if AUTH_DISABLED:
         return {"valid": True, "authDisabled": True}
     token = extract_bearer(request)
     payload = verify_token(token or "") if token else None
-    return {"valid": bool(payload), "exp": payload.get("exp") if payload else None}
+    if payload:
+        return {"valid": True, "exp": payload.get("exp")}
+    user = otp_auth.verify_session_token(token or "")
+    return {"valid": bool(user), "authMode": "otp" if user else None}
+
+
+@app.get("/api/auth/health")
+async def auth_health():
+    """OTP/SES readiness. Auth-exempt so it can be checked before login works."""
+    return {**otp_auth.health(), "access_control": access_control.summarize()}
 
 
 # Liveness probe. Also reports the git commit SHA when Railway sets the
@@ -4746,9 +4902,18 @@ def build_client_report(rows: list, client_name: str, period_label: str) -> dict
 # ── Endpoints ─────────────────────────────────────────────────────
 
 @app.get("/api/teams")
-def list_teams():
-    """Return the configured teams in the canonical order for the Home page."""
+def list_teams(request: Request):
+    """Configured teams in canonical order for the Home page.
+
+    Non-admins get only their own team, so the Home grid and the admin team
+    switcher have nothing else to offer. This is defence in depth — the
+    per-team endpoints are scoped independently in require_auth.
+    """
     teams = discover_teams()
+    user = getattr(request.state, "user", None)
+    if user and user.get("role") != "admin":
+        allowed = {user.get("team")}
+        teams = [t for t in teams if t["id"] in allowed]
     out = []
     for t in teams:
         # Roster is the single source of truth for member counts (TL included,
@@ -9882,6 +10047,26 @@ def _bod_eod_build_team_summary(clients: list[dict]) -> dict:
 # three-tier resolution (live → stale cache → hardcoded fallback). It never
 # imports this module; everything it needs is injected here.
 
+def _log_auth_mode() -> None:
+    h = otp_auth.health()
+    s = access_control.summarize()
+    print("=" * 70)
+    print(f"AUTH MODE: {'EMAIL + OTP' if h['otp_auth_enabled'] else 'legacy shared password'}"
+          f"   (OTP_AUTH_ENABLED={'1' if h['otp_auth_enabled'] else 'unset'})")
+    print("=" * 70)
+    print(f"  whitelist: {s['total_users']} users — {s['admins']} admins across "
+          f"{s['teams']} teams")
+    print(f"  session secret ok: {h['session_secret_ok']}"
+          + (f"  ({h['session_secret_error']})" if not h['session_secret_ok'] else ""))
+    print(f"  boto3: {h['boto3_installed']}   SES: {h['ses_from']} @ {h['ses_region']}")
+    if not h["otp_auth_enabled"]:
+        print("  password login is still active; OTP endpoints work for testing.")
+        print("  flip with OTP_AUTH_ENABLED=1 + pm2 restart backend --update-env")
+    if not h["session_secret_ok"] or not h["boto3_installed"]:
+        print("  !! OTP LOGIN WOULD FAIL — fix the above before enabling")
+    print("=" * 70)
+
+
 def _configure_dynamic_roster() -> None:
     dynamic_roster.configure(
         team_letter_map=TEAM_LETTER_MAP,
@@ -10035,6 +10220,22 @@ async def _roster_refresh_loop() -> None:
         except Exception as e:
             print(f"[roster-sync] tick failed: {e}")
         await asyncio.sleep(dynamic_roster.CACHE_TTL_SECONDS)
+
+
+@app.post("/api/auth/ses-test")
+async def auth_ses_test(request: Request, req: dict = None):
+    """Send a test email. Admin-only — guarded explicitly because /api/auth/* is
+    public to the middleware (the login endpoints must be reachable), so this one
+    cannot rely on the default-deny classifier."""
+    user = otp_auth.verify_session_token(extract_bearer(request) or "")
+    is_legacy_admin = not otp_auth.enabled() and verify_token(extract_bearer(request) or "")
+    if not ((user and user["role"] == "admin") or is_legacy_admin or AUTH_DISABLED):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    to = ((req or {}).get("to") or (user or {}).get("email") or "")
+    if not to:
+        return JSONResponse({"error": "no_recipient", "message": "Pass {\"to\": \"...\"}"},
+                            status_code=400)
+    return otp_auth.ses_selftest(to)
 
 
 @app.get("/api/audit/shared-clients")

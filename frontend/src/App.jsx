@@ -28,6 +28,7 @@ export default function App() {
   // import.meta.env.DEV is replaced with the literal `false` by `vite build`,
   // so in production this is dead code and the password gate below is
   // untouched — a misconfigured prod server still shows the login screen.
+  const [currentUser, setCurrentUser] = useState(null);
   const [authed, setAuthed] = useState(
     getToken() || import.meta.env.DEV ? null : false
   );
@@ -45,12 +46,16 @@ export default function App() {
     // Strictly: only treat the user as authed if the server returns valid: true.
     // We deliberately do NOT honor d.authDisabled — that would let a misconfigured
     // server bypass the password gate entirely.
-    fetch(`${API_BASE}/api/auth/verify`, {
+    fetch(`${API_BASE}/api/auth/me`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
-      .then((r) => r.ok ? r.json() : null)
+      .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (d && d.valid === true) {
+        // /api/auth/me returns the identity AND what this role may reach, so a
+        // single call replaces the old boolean verify. Non-admins get exactly
+        // one team here and the guard below pins them to it.
+        if (d && !d.error) {
+          setCurrentUser(d);
           setAuthed(true);
         } else {
           clearToken();
@@ -78,6 +83,23 @@ export default function App() {
       current.period === period ? current : { ...current, period }
     );
   }, []);
+
+  // ── Team lock ────────────────────────────────────────────────────
+  // Non-admins may only ever see their own team. Enforced server-side too
+  // (require_auth + access_control.classify_path); this is the UI half so they
+  // land in the right place and never see a dead end.
+  const lockedTeam = currentUser && currentUser.role !== "admin" ? currentUser.team : null;
+
+  useEffect(() => {
+    if (!lockedTeam) return;
+    // A shared link or a stale URL pointing at another team, or the team grid
+    // on home, both resolve to their own team dashboard.
+    if (view.page === "home") {
+      setView({ page: "team", teamId: lockedTeam, teamName: lockedTeam.replace("team_", "Team ").toUpperCase() });
+    } else if (view.page === "team" && view.teamId !== lockedTeam) {
+      setView({ page: "team", teamId: lockedTeam, teamName: lockedTeam.replace("team_", "Team ").toUpperCase() });
+    }
+  }, [lockedTeam, view.page, view.teamId]);
 
   if (authed === null) {
     // Brief loading state while verifying the token
@@ -119,6 +141,10 @@ export default function App() {
     setRichContext("");
     setView({ page: "employee", teamId, employeeName, teamName, fromTeamId: teamId });
   };
+
+  if (lockedTeam && view.page === "team" && view.teamId !== lockedTeam) {
+    return null; // redirecting via the effect above
+  }
 
   // Each branch yields just the page; the shared chrome (roster banner +
   // chatbot) is mounted once in the single return below, so the banner's poll
