@@ -5660,7 +5660,11 @@ async def _team_response(
         "matchedRows":      matched_rows,
         "needsRosterSetup": False,
         "fetchError":       fetch_failed,
-        "staffFound":       sorted(staff_names_found)[:20],
+        # Current roster only — see the former-members note in _build_leaderboard.
+        "staffFound":       sorted(n for n in staff_names_found
+                                   if not roster or staff_in_team(n, roster))[:20],
+        "formerStaffFound": sorted(n for n in staff_names_found
+                                   if roster and not staff_in_team(n, roster))[:20],
         "clients":          clients_data,
         "organizations":    [{**c, "org": c["name"]} for c in clients_data],
         "summary": {
@@ -6976,6 +6980,23 @@ def _build_leaderboard(
             "activeNow":        active_now,
         })
 
+    # ── Former members ───────────────────────────────────────────────────
+    # `members` is built from timesheet ROWS, and assign_row_to_team falls back
+    # to TEAM_ROSTERS_HISTORICAL so a departed preparer's hours still credit the
+    # team they were on. That is right for TOTALS but wrong for a PEOPLE list —
+    # it left Aparna Subramanian (USERSTATUS=0, gone) listed as a Team I member
+    # off 18.08h logged after she left. Filter the roster-less out here; their
+    # hours remain in the team's client buckets, so nothing stops reconciling.
+    former_members: list[str] = []
+    if roster:
+        kept = []
+        for m in members:
+            if staff_in_team(m["name"], roster):
+                kept.append(m)
+            else:
+                former_members.append(m["name"])
+        members = kept
+
     # Tag everyone built from timesheet rows as active.
     for m in members:
         m["hasActivity"] = (m.get("totalHours") or 0) > 0 or (m.get("billable") or 0) > 0
@@ -7034,6 +7055,10 @@ def _build_leaderboard(
         "team_name": team_label,
         "period":   label,
         "members":  members,
+        # Departed staff whose hours still land on this team via
+        # TEAM_ROSTERS_HISTORICAL. Not shown as members; surfaced so a TL
+        # can see why member hours may sum to less than the team total.
+        "formerMembers": former_members,
         # Per-period committed target (same for every member) + human label, so
         # the Team Members table can show "vs 8h target" / "40h this week" etc.
         "committedPerPerson": round(committed, 2),
