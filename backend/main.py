@@ -643,6 +643,9 @@ FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
         {"name": "Neve",                 "tsMatch": ["Neve"],                                  "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
         {"name": "Sambrano Services",    "tsMatch": ["Sambrano"],                              "estHrs": 60,  "tz": "PST", "meeting": "No scheduled meeting"},
         {"name": "RDG Tax Group",        "tsMatch": ["RDG"],                                   "estHrs": 60,  "tz": "CST", "meeting": "No scheduled meeting"},
+        # Moved from team_m 2026-08-17 — Team C logs 87% of this client's hours
+        # (111.7h) and Team M logs none, so the curated owner was wrong.
+        {"name": "Radicle Science",      "tsMatch": ["Radicle"],                               "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
     ],
     "team_d": [
         {"name": "Financly",             "tsMatch": ["Financly"],                              "estHrs": 400, "tz": "EST", "meeting": "No scheduled meeting"},
@@ -707,16 +710,17 @@ FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
         {"name": "Web Books",            "tsMatch": ["Web Books"],                             "estHrs": 80,  "tz": "EST", "meeting": "No scheduled meeting"},
         {"name": "Baker Bookkeeps",      "tsMatch": ["Baker Bookkeeps", "Baker"],              "estHrs": 80,  "tz": "CST", "meeting": "No scheduled meeting"},
         {"name": "LAH",                  "tsMatch": ["LAH"],                                   "estHrs": 80,  "tz": "EST", "meeting": "No scheduled meeting"},
+        # Moved from team_m 2026-08-17 — Team L logs 100% of this client's hours
+        # (31.0h) and Team M logs none.
+        {"name": "SDC Group",            "tsMatch": ["SDC"],                                   "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
     ],
     "team_m": [
         {"name": "ABS",                  "tsMatch": ["ABS"],                                   "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
-        {"name": "Radicle Science",      "tsMatch": ["Radicle"],                               "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
         {"name": "Oh My ROI",            "tsMatch": ["Oh My ROI"],                             "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
         {"name": "Taxes with Jones",     "tsMatch": ["Taxes with Jones"],                      "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
         {"name": "Equity Champions",     "tsMatch": ["Equity Champ"],                          "estHrs": 0,   "tz": "EST", "meeting": "Every Thursday 4:30pm IST"},
         {"name": "DAA CPA",              "tsMatch": ["DAA CPA", "DAA"],                        "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
         {"name": "MC Tax",               "tsMatch": ["MC Tax"],                                "estHrs": 0,   "tz": "CST", "meeting": "No scheduled meeting"},
-        {"name": "SDC Group",            "tsMatch": ["SDC"],                                   "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
         {"name": "Helvetica",            "tsMatch": ["Helvetica"],                             "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
         {"name": "Shane Butler",         "tsMatch": ["Shane Butler"],                          "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
         {"name": "Sybilline Records",    "tsMatch": ["Sybilline", "Sybylline"],                "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
@@ -853,6 +857,18 @@ def is_hidden_client_for_team(team_id: str, customer: str) -> bool:
 # swept into the CROSS_TEAM_BUCKET so the hours are still counted and the team
 # total reconciles with the timesheet — never silently dropped.
 CROSS_TEAM_BUCKET = "Cross-Team Help"
+
+
+def _ensure_cross_team_bucket(orgs: dict) -> dict:
+    """Get-or-create the Cross-Team Help bucket in an orgs map."""
+    if CROSS_TEAM_BUCKET not in orgs:
+        orgs[CROSS_TEAM_BUCKET] = {
+            "billable": 0.0, "nonBillable": 0.0, "staff": set(),
+            "estHrs": 0, "tz": "", "meeting": "No scheduled meeting",
+            "tsMatch": [], "matchedCustomers": set(), "rowsMatched": 0,
+            "isConfig": False, "entries": [], "isCrossTeam": True,
+        }
+    return orgs[CROSS_TEAM_BUCKET]
 
 # Under this many hours in the period, a permanent client is labelled "Hardly"
 # rather than shown as ordinary activity. Every permanent client is listed
@@ -5273,17 +5289,25 @@ async def _team_response(
         if is_inactive_client(customer):
             continue
 
-        # Drop clients that belong to another team but were logged here (so they
-        # don't surface as a stray bucket on the wrong team's dashboard).
-        if is_hidden_client_for_team(team_id, customer):
-            continue
+        # Clients belonging to ANOTHER team that were logged here. They must not
+        # appear as a named org on this team's dashboard, but the hours are real:
+        # this used to `continue`, which dropped them from the team's totals
+        # outright — hiding SoCo cut Team A's billable by 22.8h. Bucketing them
+        # into Cross-Team Help keeps the team total reconciling with Timesheets
+        # while the client name stays off this team's list.
+        hidden_here = bool(customer) and is_hidden_client_for_team(team_id, customer)
 
         # INTERNAL_CODES short-circuit: SNMP / breaks / admin / training rows
         # never get matched against TEAM_CLIENTS — they bucket directly into
         # "Internal / Other" so the hours are preserved (not silently dropped)
         # but don't pollute any configured client.
-        is_internal_row = is_internal_code(customer)
-        if is_internal_row:
+        is_internal_row = (not hidden_here) and is_internal_code(customer)
+        if hidden_here:
+            bucket = _ensure_cross_team_bucket(orgs)
+            resolved = CROSS_TEAM_BUCKET
+            cross_team_hours += h
+            cross_team_clients.add(customer)
+        elif is_internal_row:
             bucket = orgs["Internal / Other"]
             resolved = None
             if billable:
@@ -5321,14 +5345,7 @@ async def _team_response(
                 # Not one of this team's assigned clients — cross-team help.
                 # Bucketed rather than skipped so the hours still count toward
                 # the team total and reconcile against the timesheet.
-                if CROSS_TEAM_BUCKET not in orgs:
-                    orgs[CROSS_TEAM_BUCKET] = {
-                        "billable": 0.0, "nonBillable": 0.0, "staff": set(),
-                        "estHrs": 0, "tz": "", "meeting": "No scheduled meeting",
-                        "tsMatch": [], "matchedCustomers": set(), "rowsMatched": 0,
-                        "isConfig": False, "entries": [], "isCrossTeam": True,
-                    }
-                bucket = orgs[CROSS_TEAM_BUCKET]
+                bucket = _ensure_cross_team_bucket(orgs)
                 resolved = CROSS_TEAM_BUCKET
                 cross_team_hours += h
                 cross_team_clients.add(customer)
