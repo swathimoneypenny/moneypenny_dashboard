@@ -196,6 +196,11 @@ ANY_USER_PREFIXES = (
     "/api/teams",          # filtered to the caller's own team for non-admins
     "/api/chat",           # chatbot; team context is scoped by the caller
     "/api/meeting-status",
+    # Client pickers. Both filter their OWN payload by role — a non-admin gets
+    # only their team's clients plus SHARED_CLIENTS. Note "/api/clients/..."
+    # does not collide with CLIENT_SCOPED_PATTERN, which needs "/api/client/".
+    "/api/clients/accessible",
+    "/api/active-clients",
 )
 
 # Paths carrying a team id, keyed by the regex that extracts it. Every prefix

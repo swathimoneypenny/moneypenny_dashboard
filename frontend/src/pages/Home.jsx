@@ -315,7 +315,7 @@ function TeamCard({ team, onClick }) {
   );
 }
 
-function ClientCard({ client, onClick }) {
+function ClientCard({ client, onClick, showTeamBadge }) {
   const [hovered, setHovered] = useState(false);
   const hoverTimer = useRef(null);
   const grad = gradientFor(client.name);
@@ -385,6 +385,18 @@ function ClientCard({ client, onClick }) {
           >
             {client.name}
           </div>
+          {/* Admins see every team's clients, so the owning team is the
+              disambiguator; a team member's list is all their own team. */}
+          {showTeamBadge && (client.teamLabel || client.shared) && (
+            <div
+              style={{
+                marginTop: 3, fontSize: 10, fontWeight: 600, letterSpacing: 0.3,
+                color: client.shared ? C.purple : C.muted,
+              }}
+            >
+              {client.shared ? "SHARED" : client.teamLabel}
+            </div>
+          )}
         </div>
         <span style={{ color: C.muted, fontSize: 16, opacity: hovered ? 1 : 0.5, transition: "opacity 0.18s" }}>→</span>
       </div>
@@ -532,20 +544,50 @@ function ClientTab({ onSelectClient }) {
   const [search, setSearch] = useState("");
   const [lastRefreshed, setLastRefreshed] = useState(null);
 
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [loadError, setLoadError] = useState("");
+
+  // Two sources, deliberately:
+  //   /api/clients/accessible — the CONFIGURED client list for this user, so
+  //     permanently-quiet clients still appear (Team M has 9 with no hours in
+  //     the last 30 days; /active-clients alone would omit them).
+  //   /api/active-clients     — recent hours, merged in for the card figure.
+  // Both are scoped server-side, so a non-admin only ever sees their own team's
+  // clients plus the shared ones.
   const fetchClients = (silent = false) => {
     if (!silent) setLoading(true);
-    return authFetch(`/api/active-clients`)
-      .then((r) => r.json())
-      .then((data) => {
-        const sorted = (data.clients ?? []).sort(
-          (a, b) => (b.totalHours ?? 0) - (a.totalHours ?? 0)
+    setLoadError("");
+    return Promise.all([
+      authFetch(`/api/clients/accessible`).then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
+      authFetch(`/api/active-clients`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    ])
+      .then(([accessible, active]) => {
+        const hours = new Map();
+        for (const c of active?.clients ?? []) {
+          const key = (c.name ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+          if (key) hours.set(key, c.totalHours ?? 0);
+        }
+        const merged = (accessible?.clients ?? []).map((c) => {
+          const key = (c.name ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+          return { ...c, totalHours: hours.get(key) ?? 0 };
+        });
+        merged.sort(
+          (a, b) => (b.totalHours ?? 0) - (a.totalHours ?? 0) || a.name.localeCompare(b.name)
         );
-        setClients(sorted);
+        setIsAdmin(!!accessible?.isAdmin);
+        setClients(merged);
         setLastRefreshed(new Date());
-        if (!silent) setLoading(false);
+        setLoading(false);
       })
-      .catch(() => {
-        // keep loading state on error — never show empty state
+      .catch((status) => {
+        // Previously this swallowed every error and left the tab spinning
+        // forever, which is exactly how the empty client picker presented.
+        setLoading(false);
+        setLoadError(
+          status === 403
+            ? "You don't have access to the client list."
+            : "Could not load clients. Try refreshing."
+        );
       });
   };
 
@@ -589,6 +631,23 @@ function ClientTab({ onSelectClient }) {
         </div>
       </div>
 
+      {!loading && loadError && (
+        <div
+          style={{
+            fontSize: 13, color: C.red, background: C.statusRed,
+            border: `1px solid ${C.red}`, borderRadius: 8,
+            padding: "12px 14px", marginBottom: 16,
+          }}
+        >
+          {loadError}
+        </div>
+      )}
+      {!loading && !loadError && filtered.length === 0 && (
+        <div style={{ fontSize: 13, color: C.muted, padding: "12px 2px" }}>
+          No clients configured for your team yet.
+        </div>
+      )}
+
       <div
         style={{
           display: "grid",
@@ -602,6 +661,7 @@ function ClientTab({ onSelectClient }) {
               <ClientCard
                 key={client.name}
                 client={client}
+                showTeamBadge={isAdmin}
                 onClick={() => onSelectClient(client)}
               />
             ))}

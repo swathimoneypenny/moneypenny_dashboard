@@ -4977,11 +4977,71 @@ def team_clients():
     }
 
 
+def _accessible_client_entries(user: dict | None) -> list[dict]:
+    """Clients this user may open, from CONFIGURED TEAM_CLIENTS (not activity).
+
+    Deliberately not derived from logged hours: /api/active-clients only covers
+    the last 30 days, so Team M's genuinely-quiet clients (MC Tax, SDC Group,
+    Helvetica, Shane Butler, Sybilline Records ...) would be missing from the
+    picker even though they are permanent clients.
+
+    Admins get every team's clients; everyone else gets their own team's plus
+    SHARED_CLIENTS. Deduped on the normalized name so a client configured under
+    two spellings shows once.
+    """
+    role = (user or {}).get("role")
+    team = (user or {}).get("team")
+    out: dict[str, dict] = {}
+
+    def add(name: str, team_id: str | None, shared: bool = False):
+        if not name:
+            return
+        key = _normalize_for_match(name)
+        if not key or key in out:
+            return
+        out[key] = {
+            "name": name,
+            "team": team_id,
+            "teamLabel": (TEAM_LETTER_MAP.get(team_id) or {}).get("label") if team_id else None,
+            "shared": shared,
+        }
+
+    if user is None or role == "admin":
+        for tid in TEAM_ORDER:
+            for entry in (TEAM_CLIENTS.get(tid) or []):
+                add(entry.get("name"), tid)
+    elif team:
+        for entry in (TEAM_CLIENTS.get(team) or []):
+            add(entry.get("name"), team)
+
+    # Shared/unowned clients are visible to everyone — same rule the middleware
+    # applies in _client_visible_to_team, so the picker and the detail view
+    # never disagree about what is clickable.
+    for canonical in SHARED_CLIENTS:
+        add(canonical, None, shared=True)
+
+    return sorted(out.values(), key=lambda c: (c["name"] or "").lower())
+
+
+@app.get("/api/clients/accessible")
+async def clients_accessible(request: Request):
+    """Client picker source, scoped to the caller."""
+    user = getattr(request.state, "user", None)
+    entries = _accessible_client_entries(user)
+    return {
+        "clients": entries,
+        "count": len(entries),
+        "scope": "all" if (user is None or user.get("role") == "admin") else (user or {}).get("team"),
+        "isAdmin": user is None or user.get("role") == "admin",
+    }
+
+
 @app.get("/api/active-clients")
-async def active_clients():
+async def active_clients(request: Request):
+    user = getattr(request.state, "user", None)
     cached = cache_get("active_clients")
     if cached:
-        return cached
+        return _scope_active_clients(cached, user)
     today = datetime.now()
     start = (today - timedelta(days=30)).strftime("%Y-%m-%d")
     end   = today.strftime("%Y-%m-%d")
@@ -4997,8 +5057,20 @@ async def active_clients():
         for name, hours in sorted(client_hours.items(), key=lambda x: -x[1])
     ]
     result = {"clients": clients, "count": len(clients)}
+    # Cache the UNFILTERED list, then scope per request. Caching a filtered view
+    # would let whoever warmed the cache first decide what everyone else sees.
     cache_set("active_clients", result)
-    return result
+    return _scope_active_clients(result, user)
+
+
+def _scope_active_clients(result: dict, user: dict | None) -> dict:
+    """Narrow the activity list to what `user` may open."""
+    if user is None or user.get("role") == "admin":
+        return result
+    team = user.get("team")
+    kept = [c for c in (result.get("clients") or [])
+            if _client_visible_to_team(c.get("name") or "", team)]
+    return {"clients": kept, "count": len(kept), "scope": team}
 
 
 async def _team_response(
