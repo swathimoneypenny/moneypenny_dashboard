@@ -84,7 +84,10 @@ USER_ACCESS: dict[str, dict] = {
     # === TEAM F ===
     "inbamozhi_n@moneypennyllc.com":         {"role": "team_lead",   "team": "team_f", "name": "Inbamozhi N"},
     "sarika_mani@moneypennyllc.com":         {"role": "team_member", "team": "team_f", "name": "Sarika Mani"},
-    "irfhana_fathima@moneypennyllc.com":     {"role": "team_member", "team": "team_f", "name": "Irfhana Fathima"},
+    # REVOKED 2026-08-17 — Irfhana Fathima left MPLLC. Removing the entry is
+    # the revocation: verify_session_token re-checks the whitelist on every
+    # request, so any 30-day token she still holds stops working immediately.
+    # "irfhana_fathima@moneypennyllc.com":     {"role": "team_member", "team": "team_f", "name": "Irfhana Fathima"},
 
     # === TEAM G ===
     "hema_n@moneypennyllc.com":              {"role": "team_lead",   "team": "team_g", "name": "Hema N"},

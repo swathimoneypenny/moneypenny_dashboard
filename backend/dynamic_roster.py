@@ -102,6 +102,30 @@ TEAM_MEMBER_OVERRIDES: dict[str, list[dict]] = {
 }
 
 
+# People to keep out of every roster regardless of what Timesheets says.
+# Use this ONLY as a stopgap for someone who has left but is still
+# USERSTATUS=1 upstream: the correct fix is for ops to set USERSTATUS=0, after
+# which the entry can be deleted. Matched on USERID (authoritative) or on the
+# normalized full name (fallback, in case the id changes).
+TEAM_MEMBER_EXCLUSIONS: dict[str, str] = {
+    # Left MPLLC 2026-08. Still USERSTATUS=1 under Inbamozhi (team_f) at the
+    # time of writing, so the roster would otherwise keep listing her.
+    # Timesheets spells it "Iirfhana Fathima" (double i).
+    "394462": "Iirfhana Fathima — left MPLLC 2026-08; ops to set USERSTATUS=0",
+}
+EXCLUDED_NAMES = {"iirfhanafathima", "irfhanafathima"}
+
+
+def is_excluded_member(u: dict) -> str | None:
+    """Reason string if this user must never appear in a roster, else None."""
+    uid = str(u.get("USERID") or "").strip()
+    if uid in TEAM_MEMBER_EXCLUSIONS:
+        return TEAM_MEMBER_EXCLUSIONS[uid]
+    if _normalize_name(u.get("FULLNAME", "")) in EXCLUDED_NAMES:
+        return "name-matched exclusion (left MPLLC)"
+    return None
+
+
 def _apply_member_overrides(teams: dict, users: list[dict]) -> list[dict]:
     """Force TEAM_MEMBER_OVERRIDES placements. Returns the applied entries.
 
@@ -354,6 +378,12 @@ def build_dynamic_roster(users: list[dict] | None = None) -> dict:
 
             if EXCLUDE_SERVICE_ACCOUNTS and is_service_account(full):
                 excluded.append({"name": full, "timesheet_id": uid, "reason": "service_account"})
+                continue
+            reason = is_excluded_member(u)
+            if reason:
+                excluded.append({"name": full, "timesheet_id": uid,
+                                 "reason": "excluded", "detail": reason,
+                                 "match_keyword": full.lower().strip()})
                 continue
             if not is_active_user(u):
                 # Kept out of the roster/count/display, but retained on the team

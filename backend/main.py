@@ -457,6 +457,8 @@ FALLBACK_TEAM_ROSTERS: dict[str, list[str]] = {
     "team_d": ["chandra", "yamini", "krithiga", "dharani s", "sandhiya", "sirisha",
                "gunasekaran sharmila", "sagada swetha"],
     "team_e": ["shaalini", "kaviya", "preethi"],
+    # Irfhana Fathima removed 2026-08-17 — left MPLLC. She was never in this
+    # fallback list (she sat in team_a's), but the expected count is set below.
     "team_f": ["inbamozhi", "sarika"],
     # "indra" and "vijayababu" are the SAME PERSON — Indra Vijayababu, USERID
     # 372101, JOBTITLE "Team Lead". Both keywords are listed only because the
@@ -527,13 +529,20 @@ TEAM_EXPECTED_COUNTS: dict[str, int] = {
     "team_h": 3,  # TL — confirmed 3 executives (2026-06-17)
     "team_d": 8,  # 6 + Gunasekaran Sharmila + Sagada Swetha (2026-06-17)
     "team_a": 5,  # 4 + Fathima Irfhana added 2026-06-19
+    "team_f": 2,  # Inbamozhi + Sarika — Irfhana Fathima left MPLLC 2026-08-17
 }
 
 # Recurring team-meeting schedule — drives the /meeting-status endpoint + the
 # dashboard meeting banner. `day` is a weekday name; `time` is a display string
 # (IST). Add teams as TLs confirm their cadence.
 TEAM_MEETINGS: dict[str, dict] = {
-    "team_g": {"day": "Friday", "time": "8:30 AM EST", "description": "EZ Ledger Weekly Meeting", "client": "EZ Ledger"},
+    # Corrected 2026-08-17: the meeting is 8:30 AM IST, not EST. NB the "EST"
+    # label is the business wording; 8:30 IST Friday is 11:00 PM EDT Thursday
+    # during US daylight time and 10:00 PM EST Thursday in winter.
+    "team_g": {"day": "Friday", "time": "8:30 AM IST",
+               "timezone_display": "IST (11:00 PM EST Thursday)",
+               "display": "Every Friday 8:30 AM IST (11:00 PM EST Thursday)",
+               "description": "EZ Ledger Weekly Meeting", "client": "EZ Ledger"},
 }
 
 _WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -672,7 +681,7 @@ FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
         {"name": "Inspire Advisors & CPA", "tsMatch": ["Inspire Advisors & CPA", "Inspire Advisors", "Inspire"], "estHrs": 0, "tz": "EST", "meeting": "No scheduled meeting"},
     ],
     "team_g": [
-        {"name": "Ez Ledger",            "tsMatch": ["Ez Ledger", "EZ Ledger", "EzLedger"],    "estHrs": 320, "tz": "EST", "meeting": "Every Friday 8:30 AM EST (7:00 PM IST)"},
+        {"name": "Ez Ledger",            "tsMatch": ["Ez Ledger", "EZ Ledger", "EzLedger"],    "estHrs": 320, "tz": "EST", "meeting": "Every Friday 8:30 AM IST (11:00 PM EST Thursday)"},
         # Mintage + Artesani split out into their own entries 2026-08-10 — they are
         # separate clients with their own BOD/EOD and Delays tabs, and folding them
         # into Proper Trust's tsMatch merged three clients' hours into one row.
@@ -685,6 +694,12 @@ FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
         # so those rows failed the forward match and the org under-counted hours
         # (reported 43.49h vs 47h actual). "Manzelli" forward-matches every variant.
         {"name": "Manzelli Consulting",  "tsMatch": ["Manzelli"],                              "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
+        # Moved from team_m 2026-08-17 — Hema handles it, and team_g already had
+        # its BOD/EOD + Delays tabs. Billed hourly, so there is no monthly
+        # commitment: estHrs stays the NUMBER 0 and "billing" carries the label.
+        # estHrs must never be a string — _team_response does `(estHrs or 0) > 0`
+        # and `estHrs / 160`, so "Hr" would raise TypeError and break the report.
+        {"name": "Oh My ROI",            "tsMatch": ["Oh My ROI", "OhMyROI"],                  "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting", "billing": "hourly"},
     ],
     "team_h": [
         {"name": "JB Advisory",          "tsMatch": ["JB Advisory"],                           "estHrs": 176, "tz": "MST", "meeting": "Every Tuesday and Thursday 5:30pm IST"},
@@ -713,10 +728,13 @@ FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
         # Moved from team_m 2026-08-17 — Team L logs 100% of this client's hours
         # (31.0h) and Team M logs none.
         {"name": "SDC Group",            "tsMatch": ["SDC"],                                   "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
+        # Added 2026-08-17 — real client, 12.2h logged in the last 90 days.
+        # TODO(ops): supply BOD/EOD + Delays tab gids so committed resolves from
+        # the sheet instead of the member x per-preparer fallback.
+        {"name": "Debra Angiletti",      "tsMatch": ["Debra Angiletti", "Angiletti", "Debra"],  "estHrs": 0,   "tz": "CST", "meeting": "No scheduled meeting", "billing": "hourly"},
     ],
     "team_m": [
         {"name": "ABS",                  "tsMatch": ["ABS"],                                   "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
-        {"name": "Oh My ROI",            "tsMatch": ["Oh My ROI"],                             "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
         {"name": "Taxes with Jones",     "tsMatch": ["Taxes with Jones"],                      "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
         {"name": "Equity Champions",     "tsMatch": ["Equity Champ"],                          "estHrs": 0,   "tz": "EST", "meeting": "Every Thursday 4:30pm IST"},
         {"name": "DAA CPA",              "tsMatch": ["DAA CPA", "DAA"],                        "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
@@ -818,6 +836,13 @@ TEAM_HIDDEN_CLIENTS: dict[str, set[str]] = {
     "team_a": {"Stay by Rafa", "SoCo"},               # both belong to other teams
     "team_d": {"LAH", "LAH CPA", "LAH CPAs", "L A H"}, # LAH belongs to Team L / Team T
     "team_f": {"SoCo", "Empower Accounting"},          # SoCo→Team I, Empower→Team K
+    # Oh My ROI moved to Team G 2026-08-17; hidden here so activity discovery
+    # cannot re-add it to Team M on the next roster sync.
+    "team_m": {"Oh My ROI"},
+    # Fit Profit belongs to Team N. Team I logs ~18% of its hours, which the
+    # earlier review left as shared work; the TL has since confirmed it should
+    # not appear on Team I. Those hours now land in Cross-Team Help.
+    "team_i": {"Fit Profit", "FitProfit"},
 }
 
 
