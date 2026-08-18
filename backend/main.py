@@ -131,7 +131,7 @@ async def require_auth(request: Request, call_next):
 
     if not otp_auth.enabled():
         # ── Legacy mode ──────────────────────────────────────────
-        if AUTH_DISABLED:
+        if NO_AUTH_CONFIGURED:
             return await call_next(request)
         if any(path.startswith(p) for p in AUTH_EXEMPT_PREFIXES):
             return await call_next(request)
@@ -254,7 +254,7 @@ async def auth_me(request: Request):
     # Legacy password session: full access, no identity. Lets the UI keep
     # working during rollout instead of bouncing everyone to the login screen.
     if not otp_auth.enabled():
-        if AUTH_DISABLED:
+        if NO_AUTH_CONFIGURED:
             return {"email": None, "name": "Local dev", "role": "admin", "team": None,
                     "authMode": "disabled", "allTeams": True, "teams": TEAM_ORDER}
         if verify_token(extract_bearer(request) or ""):
@@ -270,7 +270,7 @@ async def auth_verify(request: Request):
         return {"valid": bool(user), "authMode": "otp",
                 "role": user["role"] if user else None,
                 "team": user["team"] if user else None}
-    if AUTH_DISABLED:
+    if NO_AUTH_CONFIGURED:
         return {"valid": True, "authDisabled": True}
     token = extract_bearer(request)
     payload = verify_token(token or "") if token else None
@@ -319,6 +319,14 @@ DASHBOARD_PASSWORD       = os.getenv("DASHBOARD_PASSWORD", "")
 DASHBOARD_SESSION_SECRET = os.getenv("DASHBOARD_SESSION_SECRET", "")
 TOKEN_TTL_SECS           = 30 * 24 * 3600  # 30 days
 AUTH_DISABLED            = not DASHBOARD_PASSWORD or not DASHBOARD_SESSION_SECRET
+# Auth is only genuinely OFF when there is no session secret at all — without
+# one, no token of any kind can be verified. AUTH_DISABLED must NOT gate the
+# middleware bypass: it flips true the moment DASHBOARD_PASSWORD is removed,
+# which is exactly what the OTP cutover does, and would then have made every
+# endpoint public the first time OTP_AUTH_ENABLED was flipped back off.
+# Removing the password must mean "password login unavailable", never
+# "no authentication".
+NO_AUTH_CONFIGURED       = not DASHBOARD_SESSION_SECRET
 
 # Paths that DO NOT require auth.
 AUTH_EXEMPT_PREFIXES = (
@@ -10229,7 +10237,7 @@ async def auth_ses_test(request: Request, req: dict = None):
     cannot rely on the default-deny classifier."""
     user = otp_auth.verify_session_token(extract_bearer(request) or "")
     is_legacy_admin = not otp_auth.enabled() and verify_token(extract_bearer(request) or "")
-    if not ((user and user["role"] == "admin") or is_legacy_admin or AUTH_DISABLED):
+    if not ((user and user["role"] == "admin") or is_legacy_admin or NO_AUTH_CONFIGURED):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     to = ((req or {}).get("to") or (user or {}).get("email") or "")
     if not to:

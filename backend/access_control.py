@@ -102,11 +102,9 @@ USER_ACCESS: dict[str, dict] = {
     "radhika_s@moneypennyllc.com":           {"role": "team_lead",   "team": "team_i", "name": "Radhika S"},
     "jayashree_boopathy@moneypennyllc.com":  {"role": "team_member", "team": "team_i", "name": "Jayashree Boopathy"},
     "jeevitha_elumalai@moneypennyllc.com":   {"role": "team_member", "team": "team_i", "name": "Jeevitha Elumalai"},
-    # NOT GRANTED, flagged for a decision: Shivani Mohan
-    # (shivani_mohan@moneypennyllc.com) is an ACTIVE Team I member in the live
-    # roster but was absent from the supplied whitelist, so she cannot log in.
-    # Granting access is your call, not something to infer — uncomment to allow.
-    # "shivani_mohan@moneypennyllc.com":     {"role": "team_member", "team": "team_i", "name": "Shivani Mohan"},
+    # Granted 2026-08-17 — active Team I member, was missing from the original
+    # whitelist and so could not log in.
+    "shivani_mohan@moneypennyllc.com":       {"role": "team_member", "team": "team_i", "name": "Shivani Mohan"},
 
     # === TEAM J ===
     "logeshwari_b@moneypennyllc.com":        {"role": "team_lead",   "team": "team_j", "name": "Logeshwari B"},
