@@ -59,6 +59,12 @@ def _client_visible_to_team(client_slug: str, team_id: str | None) -> bool:
     name = unquote(client_slug or "").replace("-", " ").strip()
     if not name:
         return False
+    # TEAM_HIDDEN_CLIENTS wins over everything below: a client suppressed for
+    # this team must 403 on a hand-typed URL, not just vanish from the picker.
+    # Checked before the shared-client shortcut so a team could suppress even a
+    # shared client if that were ever configured.
+    if is_hidden_client_for_team(team_id, name):
+        return False
     if resolve_shared_client(name):
         return True
     if _resolve_client_for_team(team_id, name, ""):
@@ -802,7 +808,10 @@ def is_inactive_client(customer: str) -> bool:
 # team — the client still shows on its real team(s). Exact normalized match so
 # a short token like "lah" can't accidentally hide other customers.
 TEAM_HIDDEN_CLIENTS: dict[str, set[str]] = {
-    "team_a": {"Stay by Rafa"},                       # Stay by Rafa belongs to Team C
+    # "SoCo" is >=4 normalized chars so the substring rule catches the full
+    # "SoCo Business Solutions, Inc"; verified it matches nothing else in the
+    # config. Kokila's hours on it were cross-team help for Team I.
+    "team_a": {"Stay by Rafa", "SoCo"},               # both belong to other teams
     "team_d": {"LAH", "LAH CPA", "LAH CPAs", "L A H"}, # LAH belongs to Team L / Team T
     "team_f": {"SoCo", "Empower Accounting"},          # SoCo→Team I, Empower→Team K
 }
@@ -5009,9 +5018,15 @@ def _accessible_client_entries(user: dict | None) -> list[dict]:
     if user is None or role == "admin":
         for tid in TEAM_ORDER:
             for entry in (TEAM_CLIENTS.get(tid) or []):
+                # Admins see every client, but not a duplicate of one that is
+                # suppressed on the team that merely helped out.
+                if is_hidden_client_for_team(tid, entry.get("name") or ""):
+                    continue
                 add(entry.get("name"), tid)
     elif team:
         for entry in (TEAM_CLIENTS.get(team) or []):
+            if is_hidden_client_for_team(team, entry.get("name") or ""):
+                continue
             add(entry.get("name"), team)
 
     # Shared/unowned clients are visible to everyone — same rule the middleware
