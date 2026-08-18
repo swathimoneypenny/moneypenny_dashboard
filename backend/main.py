@@ -771,12 +771,20 @@ FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
         {"name": "Joe Manzelli",         "tsMatch": ["Joe Manzelli"],                          "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
         {"name": "Business Fitness",     "tsMatch": ["Business Fitness"],                      "estHrs": 0,   "tz": "AEST","meeting": "No scheduled meeting"},
         {"name": "David Beck",           "tsMatch": ["David Beck"],                            "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
-        # Added 2026-08-18. Deliberately NOT matching a bare "Officeheads":
-        # that is Team L's client ("Officeheads, Inc", 194.45h all on Team L),
-        # and a loose keyword here would capture it for any Team T member.
-        {"name": "Officeheads Tax",      "tsMatch": ["Officeheads Tax", "Office Heads Tax", "Officeheads-Tax"], "estHrs": 0, "tz": "CST", "meeting": "No scheduled meeting"},
-        # Moved off Team M 2026-08-17; Team T now owns it.
-        {"name": "MC Tax",               "tsMatch": ["MC Tax", "MCTax", "MC Modern Tax"],      "estHrs": 0,   "tz": "CST", "meeting": "No scheduled meeting"},
+        # Named to match Team T's own BOD/EOD tabs ("OfficeHeads" and
+        # "M CTax Advisors"), which is what makes committed hours resolve from
+        # the sheet: _resolve_bod_eod_gid normalizes both sides, so
+        # "MC Tax Advisors" == "M CTax Advisors" and "Officeheads" is a
+        # substring of "Officeheads, Inc".
+        #
+        # "Officeheads, Inc" is the same customer record Team L logs against
+        # (194h in 90 days). Both teams are configured for it, and client
+        # resolution is per-team, so it correctly shows on both dashboards —
+        # the same arrangement as Neve Group across teams C and T.
+        {"name": "Officeheads, Inc.",    "tsMatch": ["Officeheads, Inc", "Officeheads Inc", "Officeheads"], "estHrs": 0, "tz": "CST", "meeting": "No scheduled meeting"},
+        # Moved off Team M 2026-08-17. No timesheet rows under any spelling yet,
+        # so it will read "No activity" until work is logged.
+        {"name": "MC Tax Advisors",      "tsMatch": ["MC Tax Advisors", "MCTax Advisors", "MC Tax"], "estHrs": 0, "tz": "CST", "meeting": "No scheduled meeting"},
     ],
 }
 
