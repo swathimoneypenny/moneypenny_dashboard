@@ -766,13 +766,17 @@ FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
     ],
     "team_t": [
         {"name": "Wiebe Hinton Hambalek","tsMatch": ["Wiebe", "Hinton Hambalek"],              "estHrs": 960, "tz": "PST", "meeting": "No scheduled meeting"},
-        {"name": "We Add Value",         "tsMatch": ["We Add Value"],                          "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
-        {"name": "Financial Synergy TX", "tsMatch": ["Financial Synergy TX"],                  "estHrs": 0,   "tz": "CST", "meeting": "Last day of month 5pm IST"},
         {"name": "Jim Baltimore",        "tsMatch": ["Jim Baltimore"],                         "estHrs": 0,   "tz": "MST", "meeting": "No scheduled meeting"},
         {"name": "Tim Thompson TX",      "tsMatch": ["Tim Thompson TX"],                       "estHrs": 0,   "tz": "CST", "meeting": "No scheduled meeting"},
         {"name": "Joe Manzelli",         "tsMatch": ["Joe Manzelli"],                          "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
         {"name": "Business Fitness",     "tsMatch": ["Business Fitness"],                      "estHrs": 0,   "tz": "AEST","meeting": "No scheduled meeting"},
         {"name": "David Beck",           "tsMatch": ["David Beck"],                            "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
+        # Added 2026-08-18. Deliberately NOT matching a bare "Officeheads":
+        # that is Team L's client ("Officeheads, Inc", 194.45h all on Team L),
+        # and a loose keyword here would capture it for any Team T member.
+        {"name": "Officeheads Tax",      "tsMatch": ["Officeheads Tax", "Office Heads Tax", "Officeheads-Tax"], "estHrs": 0, "tz": "CST", "meeting": "No scheduled meeting"},
+        # Moved off Team M 2026-08-17; Team T now owns it.
+        {"name": "MC Tax",               "tsMatch": ["MC Tax", "MCTax", "MC Modern Tax"],      "estHrs": 0,   "tz": "CST", "meeting": "No scheduled meeting"},
     ],
 }
 
@@ -5042,6 +5046,42 @@ def team_clients():
     }
 
 
+_SHARED_HOURS_TTL = 300
+_shared_hours_cache: dict = {"at": None, "map": {}}
+
+
+def _teams_working_on_shared_clients() -> dict[str, set[str]]:
+    """{canonical shared client -> {team_id, ...}} for the current period.
+
+    SHARED_CLIENTS are unowned, so they render on every team that logs them —
+    but they were also being offered to teams that log NONE (Team D was shown
+    PREFLIGHT despite zero hours on it). The org table already behaves this way
+    because it is built from rows; this brings the picker in line.
+    """
+    now = datetime.now()
+    at = _shared_hours_cache["at"]
+    if at and (now - at).total_seconds() < _SHARED_HOURS_TTL:
+        return _shared_hours_cache["map"]
+    out: dict[str, set[str]] = {}
+    try:
+        start, end, _ = date_range_for_period("monthly")
+        for r in get_cached_rows(start, end):
+            if float(r.get("hours") or 0) <= 0:
+                continue
+            canonical = resolve_shared_client((r.get("customer") or "").strip())
+            if not canonical:
+                continue
+            tid = assign_row_to_team(r)
+            if tid:
+                out.setdefault(canonical, set()).add(tid)
+    except Exception as e:
+        print(f"[shared-clients] hours lookup failed, showing to all teams: {e}")
+        return {}
+    _shared_hours_cache["at"] = now
+    _shared_hours_cache["map"] = out
+    return out
+
+
 def _accessible_client_entries(user: dict | None) -> list[dict]:
     """Clients this user may open, from CONFIGURED TEAM_CLIENTS (not activity).
 
@@ -5085,11 +5125,16 @@ def _accessible_client_entries(user: dict | None) -> list[dict]:
                 continue
             add(entry.get("name"), team)
 
-    # Shared/unowned clients are visible to everyone — same rule the middleware
-    # applies in _client_visible_to_team, so the picker and the detail view
-    # never disagree about what is clickable.
+    # Shared/unowned clients, but only for teams that actually work on them.
+    # Admins still see every shared client. On a lookup failure the map is empty
+    # and we fall back to showing them (fail open on visibility, not on access —
+    # _client_visible_to_team still governs whether the page opens).
+    working = _teams_working_on_shared_clients()
     for canonical in SHARED_CLIENTS:
-        add(canonical, None, shared=True)
+        if user is None or role == "admin" or not working:
+            add(canonical, None, shared=True)
+        elif team and team in working.get(canonical, set()):
+            add(canonical, None, shared=True)
 
     return sorted(out.values(), key=lambda c: (c["name"] or "").lower())
 
@@ -5465,10 +5510,16 @@ async def _team_response(
         eod_committed_val = _eod_committed_for_org(
             team_id, org_name, full_start, min(today_iso, full_end)
         )
-        if eod_committed_val is not None:
+        # A 0 is treated as "no data for this period", not as a real target: a
+        # tab that stopped being updated (Smith Bookkeeping's last row is
+        # 2026-06-30) would otherwise pin committed to 0 and render the row as a
+        # useless PLACEHOLDER. Falling back keeps a sensible pro-rated target.
+        if eod_committed_val:
             committed = eod_committed_val
+            committed_source = "bod_eod_sheet"
         else:
             committed = round(org_member_count * org_per_preparer, 2) if org_member_count > 0 else 0
+            committed_source = "prorated_members" if committed else "none"
             if h["isConfig"] and org_name != "Internal / Other":
                 print(f"[eodCommitted] team={team_id} org={org_name!r} no BOD/EOD committed "
                       f"— fell back to member×per-preparer = {committed}")
@@ -5498,6 +5549,9 @@ async def _team_response(
             "memberCount": org_member_count,
             "perPreparerTarget": org_per_preparer,
             "monthlyEstHrs":     h["estHrs"] or 0,
+            # Full-month figure for context; `committed` above is to-date.
+            "monthlyCommitted":  h["estHrs"] or 0,
+            "committedSource":   committed_source,
             "rowsMatched":     h["rowsMatched"],
             "matchedCustomers": sorted(h["matchedCustomers"]),
             "delays":      0,
@@ -10114,7 +10168,19 @@ def _eod_committed_for_org(team_id: str, org_name: str, win_start: str, win_end:
     end_cap = min(win_end, series[-1][0])
     cum_at_end = next((c for d, c in reversed(series) if d <= end_cap), 0.0)
     cum_before_start = next((c for d, c in reversed(series) if d < win_start), 0.0)
-    return round(max(0.0, cum_at_end - cum_before_start), 2)
+    delta = cum_at_end - cum_before_start
+    if delta < 0:
+        # The docstring above assumed one continuous running total with
+        # "nothing logged before month start". The sheets actually RESET the
+        # Committed Hours column each month, so the previous month's closing
+        # figure is not a baseline — subtracting it went negative and the
+        # max(0.0, ...) clamp turned it into 0. That is why every client whose
+        # tab had prior-month rows reported committed=0 and status PLACEHOLDER
+        # (AIS Solutions read 280.0 cumulative on 2026-08-18 yet showed 0).
+        # A decrease across the window boundary means a reset, so the
+        # month-to-date figure is simply the latest cumulative value.
+        delta = cum_at_end
+    return round(max(0.0, delta), 2)
 
 
 # Canonical row ordering for the heatmap so BOD/EOD/Diff line up regardless
