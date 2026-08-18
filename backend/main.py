@@ -738,10 +738,25 @@ FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
         {"name": "Taxes with Jones",     "tsMatch": ["Taxes with Jones"],                      "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
         {"name": "Equity Champions",     "tsMatch": ["Equity Champ"],                          "estHrs": 0,   "tz": "EST", "meeting": "Every Thursday 4:30pm IST"},
         {"name": "DAA CPA",              "tsMatch": ["DAA CPA", "DAA"],                        "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
-        {"name": "MC Tax",               "tsMatch": ["MC Tax"],                                "estHrs": 0,   "tz": "CST", "meeting": "No scheduled meeting"},
         {"name": "Helvetica",            "tsMatch": ["Helvetica"],                             "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
-        {"name": "Shane Butler",         "tsMatch": ["Shane Butler"],                          "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
+        # One client, two names. Timesheet rows come in as "Portrai Me" (22.2h in
+        # the last 90 days); "Shane Butler" is the BOD/EOD + Delays tab naming and
+        # has no rows of its own. Both aliases resolve to this single bucket, so
+        # deduping does not orphan the hours.
+        {"name": "Shane Butler",         "tsMatch": ["Shane Butler", "Portrai Me", "Portrai"],  "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
         {"name": "Sybilline Records",    "tsMatch": ["Sybilline", "Sybylline"],                "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
+        # Added 2026-08-17 per the TL's client list. Kacey already had BOD/EOD
+        # ("Kacey Fitz") and Delays ("kacey") tabs on Team M's sheet.
+        {"name": "Kacey Fitzpatrick",    "tsMatch": ["Kacey Fitzpatrick", "Kacey"],            "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting", "billing": "hourly"},
+        # NB the only Malmi hours in the last 90 days (0.5h) were logged by a
+        # Team L member, not Team M. Added here per the TL; that stray 0.5h now
+        # reads as cross-team help on Team L.
+        {"name": "Malmi",                "tsMatch": ["Malmi"],                                 "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting", "billing": "hourly"},
+        # Curated 2026-08-17 — previously only activity-discovered, so they would
+        # have dropped off the list if their hours ever fell under the 20h
+        # discovery floor. The TL confirms both are permanent.
+        {"name": "Pokorny CPAs",         "tsMatch": ["Pokorny"],                               "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "Happy Soul",           "tsMatch": ["Happy Soul"],                            "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
     ],
     "team_n": [
         # BKP Repair / Bookkeeping Repair LLC removed — inactive client (see INACTIVE_CLIENTS).
