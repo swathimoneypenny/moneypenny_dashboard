@@ -4350,7 +4350,7 @@ def _get_users_cached(max_age: float | None = None):
             USERS_CACHE["data"] = users
             USERS_CACHE["at"]   = now
             USERS_CACHE["last_error"] = None
-            print(f"[PERF] users fetch {time.perf_counter()-t0:.2f}s (cached for 1h)")
+            print(f"[PERF] users fetch {time.perf_counter()-t0:.2f}s (fresh for {int(ttl)}s)")
             return users
         except Exception as e:
             print(f"[fetch_timesheet] users error attempt {attempt}: {e}")

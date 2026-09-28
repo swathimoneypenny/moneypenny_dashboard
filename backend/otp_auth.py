@@ -225,7 +225,27 @@ def _send_otp_email(email: str, name: str, code: str) -> tuple[bool, str]:
 
 
 # ── OTP verify + session tokens ───────────────────────────────────
+_VERIFY_OUTCOMES = {
+    "Invalid or expired code.": "NO_PENDING_CODE",   # unknown email, or none issued
+    "Code expired. Request a new one.": "EXPIRED",
+    "Too many attempts. Request a new code.": "TOO_MANY_ATTEMPTS",
+    "Invalid code.": "WRONG_CODE",
+    "Login is misconfigured on the server.": "MISCONFIGURED",
+}
+
+
 def verify_otp_and_issue_token(email: str, code: str) -> tuple[dict, str | None]:
+    """Verify, and log the outcome — the access log only shows 200/401, not
+    whose login it was or why it failed. Never logs the code."""
+    result, token = _verify_otp(email, code)
+    outcome = "SUCCESS" if token else _VERIFY_OUTCOMES.get(result.get("message"), "FAILED")
+    extra = ({"attemptsRemaining": result["attemptsRemaining"]}
+             if "attemptsRemaining" in result else {})
+    _record(normalize_email(email), f"VERIFY_{outcome}", **extra)
+    return result, token
+
+
+def _verify_otp(email: str, code: str) -> tuple[dict, str | None]:
     email = normalize_email(email)
     code = (code or "").strip()
     generic = {"status": "error", "message": "Invalid or expired code."}
