@@ -10489,6 +10489,21 @@ async def auth_ses_test(request: Request, req: dict = None):
     return otp_auth.ses_selftest(to)
 
 
+@app.get("/api/debug/otp-status")
+async def debug_otp_status(request: Request):
+    """Outcome of recent OTP requests (whitelisted? throttled? SES MessageId?).
+    The login screen shows the same message in every case, so this is where to
+    look when someone says the code never arrived. Emails only, never codes.
+    /api/debug/* is admin-only in the classifier; checked again here so it
+    stays closed in legacy auth mode too."""
+    user = getattr(request.state, "user", None)
+    is_legacy_admin = not otp_auth.enabled() and verify_token(extract_bearer(request) or "")
+    if not ((user and user["role"] == "admin") or is_legacy_admin or NO_AUTH_CONFIGURED):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    return {**otp_auth.otp_status(),
+            "whitelist_size": access_control.summarize()["total_users"]}
+
+
 @app.get("/api/audit/shared-clients")
 def audit_shared_clients(period: str = "monthly", days: int = 0):
     """Per SHARED_CLIENTS entry: hours by team and by preparer.

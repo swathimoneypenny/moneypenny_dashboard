@@ -37,6 +37,7 @@ import os
 import secrets
 import threading
 import time
+from collections import deque
 from datetime import datetime, timedelta
 
 from access_control import get_user_access, is_authorized, normalize_email
@@ -57,6 +58,8 @@ _lock = threading.Lock()
 _otp_store: dict[str, dict] = {}
 # {email: last_request_epoch} — populated for EVERY address, authorized or not.
 _otp_rate_limit: dict[str, float] = {}
+# Last N request outcomes, for /api/debug/otp-status. Never holds codes.
+_recent_attempts: deque = deque(maxlen=50)
 
 _ses_client = None
 
@@ -107,12 +110,30 @@ def _sweep(now_epoch: float) -> None:
         _otp_rate_limit.pop(e, None)
 
 
+def _debug_codes() -> bool:
+    """DEBUG_OTP=1 prints issued codes to the backend log. Troubleshooting only
+    — anyone with log access can then log in as any user. Leave unset."""
+    return os.getenv("DEBUG_OTP", "").strip() == "1"
+
+
+def _record(email: str, outcome: str, **extra) -> None:
+    """Log one request outcome and keep it for /api/debug/otp-status. The user
+    always sees the same reply, so this log is the only place the real outcome
+    (unauthorized / throttled / SES accepted / SES failed) is visible."""
+    detail = " ".join(f"{k}={v}" for k, v in extra.items())
+    print(f"[OTP-REQUEST] {outcome} email={email!r} {detail}".rstrip())
+    with _lock:
+        _recent_attempts.append({"at": datetime.now().isoformat(timespec="seconds"),
+                                 "email": email, "outcome": outcome, **extra})
+
+
 def request_otp(email: str) -> dict:
     """Generate + email an OTP. The reply is identical for every address."""
     email = normalize_email(email)
     now = time.time()
 
     if not email or "@" not in email:
+        _record(email, "INVALID_EMAIL")
         return {"status": "sent", "message": _GENERIC_SENT, "retryAfter": OTP_RATE_LIMIT_SECONDS}
 
     with _lock:
@@ -127,7 +148,11 @@ def request_otp(email: str) -> dict:
     # was throttled — only the countdown differs.
     reply = {"status": "sent", "message": _GENERIC_SENT, "retryAfter": retry_after}
 
-    if throttled or not is_authorized(email):
+    if throttled:
+        _record(email, "RATE_LIMITED", wait=f"{retry_after}s")
+        return reply
+    if not is_authorized(email):
+        _record(email, "NOT_WHITELISTED")
         return reply
 
     access = get_user_access(email)
@@ -135,7 +160,7 @@ def request_otp(email: str) -> dict:
     try:
         code_hash = _hash_otp(code, email)
     except RuntimeError as e:
-        print(f"[OTP] refusing to issue: {e}")
+        _record(email, "MISCONFIGURED", error=str(e)[:80])
         return {"status": "error", "message": "Login is misconfigured on the server."}
 
     with _lock:
@@ -145,15 +170,22 @@ def request_otp(email: str) -> dict:
             "attempts": 0,
         }
 
-    if not _send_otp_email(email, access["name"], code):
+    if _debug_codes():
+        print(f"[OTP-DEBUG] email={email} code={code}")
+
+    ok, info = _send_otp_email(email, access["name"], code)
+    if not ok:
+        _record(email, "SES_FAILED", error=info)
         with _lock:
             _otp_store.pop(email, None)
             _otp_rate_limit.pop(email, None)
         return {"status": "error", "message": "Could not send the code. Please contact an admin."}
+    _record(email, "SES_ACCEPTED", messageId=info)
     return reply
 
 
-def _send_otp_email(email: str, name: str, code: str) -> bool:
+def _send_otp_email(email: str, name: str, code: str) -> tuple[bool, str]:
+    """Returns (True, SES MessageId) or (False, error summary)."""
     subject = "MoneyPenny Dashboard — Your Login Code"
     body_text = (
         f"Hi {name},\n\n"
@@ -177,7 +209,7 @@ def _send_otp_email(email: str, name: str, code: str) -> bool:
     </div>
     """
     try:
-        _ses().send_email(
+        resp = _ses().send_email(
             Source=SES_FROM_EMAIL,
             Destination={"ToAddresses": [email]},
             Message={
@@ -185,11 +217,11 @@ def _send_otp_email(email: str, name: str, code: str) -> bool:
                 "Body": {"Text": {"Data": body_text}, "Html": {"Data": body_html}},
             },
         )
-        return True
+        return True, resp.get("MessageId", "")
     except Exception as e:
         # Never log the code itself.
-        print(f"[OTP] SES send failed for {email}: {type(e).__name__}: {e}")
-        return False
+        code_name = getattr(e, "response", {}).get("Error", {}).get("Code") or type(e).__name__
+        return False, f"{code_name}: {e}"[:200]
 
 
 # ── OTP verify + session tokens ───────────────────────────────────
@@ -291,6 +323,18 @@ def ses_selftest(to_email: str) -> dict:
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}",
                 "from": SES_FROM_EMAIL, "region": SES_REGION}
+
+
+def otp_status() -> dict:
+    """Admin diagnostic: what happened to recent OTP requests. Emails only."""
+    with _lock:
+        _sweep(time.time())
+        return {
+            "pending_otps": sorted(_otp_store),
+            "rate_limited_emails": sorted(_otp_rate_limit),
+            "recent_attempts": list(reversed(_recent_attempts)),
+            "debug_codes_enabled": _debug_codes(),
+        }
 
 
 def health() -> dict:
