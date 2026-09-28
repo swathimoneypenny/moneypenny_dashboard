@@ -101,6 +101,33 @@ TEAM_MEMBER_OVERRIDES: dict[str, list[dict]] = {
                        "ADMINUSERID is repointed to 372164."),
         },
     ],
+    # Team I restructure 2026-09-28: Radhika Sasikumar (372171) left and Krishna
+    # Narayanan (372179) is the new TL. Jayashree Boopathy already reports to
+    # Krishna, so she needs no override. These two still report elsewhere.
+    # TODO: once ops fixes ADMINUSERID in Timesheets.com for Shivani and Jeevitha
+    # (repoint to Krishna 372179), remove these overrides.
+    "team_i": [
+        {
+            "userid": "387214",
+            "display_name": "Shivani Mohan",
+            "match_keyword": "shivani mohan",
+            "is_tl": False,
+            "role": "preparer",
+            "reason": ("Timesheets ADMINUSERID is 372156 (Vinodhini Balaji, team_n), but "
+                       "she works Team I's Core 4 under Krishna (372179). Delete once "
+                       "ADMINUSERID is repointed to 372179."),
+        },
+        {
+            "userid": "372174",
+            "display_name": "Jeevitha Elumalai",
+            "match_keyword": "jeevitha elumalai",
+            "is_tl": False,
+            "role": "preparer",
+            "reason": ("Timesheets ADMINUSERID is 372158 (Inbamozhi Nithyanandham, "
+                       "team_f), but she works Team I's SoCo under Krishna (372179). "
+                       "Delete once ADMINUSERID is repointed to 372179."),
+        },
+    ],
 }
 
 
@@ -114,6 +141,8 @@ TEAM_MEMBER_EXCLUSIONS: dict[str, str] = {
     # time of writing, so the roster would otherwise keep listing her.
     # Timesheets spells it "Iirfhana Fathima" (double i).
     "394462": "Iirfhana Fathima — left MPLLC 2026-08; ops to set USERSTATUS=0",
+    # Former Team I TL, still USERSTATUS=1 upstream at the time of writing.
+    "372171": "Radhika Sasikumar — left MPLLC 2026-09; ops to set USERSTATUS=0",
 }
 EXCLUDED_NAMES = {"iirfhanafathima", "irfhanafathima"}
 
@@ -451,10 +480,14 @@ def build_dynamic_roster(users: list[dict] | None = None) -> dict:
     unmapped_teams = []
     for u in users:
         uid = str(u.get("USERID", ""))
-        if uid in claimed_lead_ids or not is_lead_title(u) or not is_active_user(u):
+        if (uid in claimed_lead_ids or not is_lead_title(u) or not is_active_user(u)
+                or is_excluded_member(u)):
             continue
+        # Service accounts and excluded leavers aren't a team's worth of people.
         reports = [r for r in by_admin.get(uid, [])
-                   if is_active_user(r) and str(r.get("USERID", "")) not in lead_ids]
+                   if is_active_user(r) and str(r.get("USERID", "")) not in lead_ids
+                   and not is_service_account(r.get("FULLNAME", ""))
+                   and not is_excluded_member(r)]
         if reports:
             unmapped_teams.append({
                 "lead_name": (u.get("FULLNAME") or "").strip(),

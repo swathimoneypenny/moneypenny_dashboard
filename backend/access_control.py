@@ -102,7 +102,8 @@ USER_ACCESS: dict[str, dict] = {
     "yashika_bhaskar@moneypennyllc.com":     {"role": "team_member", "team": "team_h", "name": "Yashika Bhaskar"},
 
     # === TEAM I ===
-    "radhika_s@moneypennyllc.com":           {"role": "team_lead",   "team": "team_i", "name": "Radhika S"},
+    # radhika_s@ removed 2026-09-28 — left MPLLC. Krishna Narayanan is the new Team I TL.
+    "krishna_narayanan@moneypennyllc.com":   {"role": "team_lead",   "team": "team_i", "name": "Krishna Narayanan"},
     "jayashree_boopathy@moneypennyllc.com":  {"role": "team_member", "team": "team_i", "name": "Jayashree Boopathy"},
     "jeevitha_elumalai@moneypennyllc.com":   {"role": "team_member", "team": "team_i", "name": "Jeevitha Elumalai"},
     # Granted 2026-08-17 — active Team I member, was missing from the original
@@ -127,7 +128,6 @@ USER_ACCESS: dict[str, dict] = {
     # === TEAM L ===
     "nasreen_f@moneypennyllc.com":           {"role": "team_lead",   "team": "team_l", "name": "Nasreen F"},
     "swathi_yogeswaran@moneypennyllc.com":   {"role": "team_member", "team": "team_l", "name": "Swathi Yogeswaran"},
-    "krishna_narayanan@moneypennyllc.com":   {"role": "team_member", "team": "team_l", "name": "Krishna Narayanan"},
     "razia_hussain@moneypennyllc.com":       {"role": "team_member", "team": "team_l", "name": "Razia Hussain"},
 
     # === TEAM M ===

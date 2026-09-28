@@ -404,7 +404,7 @@ TEAM_LETTER_MAP: dict[str, dict] = {
     "team_f": {"label": "Team F", "leadName": "Inbamozhi",    "sheetId": "1KaYjE6vHZJBfrOUBBLZuGExKGOVWWELngDfzXDbv_a4", "gid": "1280455358"},
     "team_g": {"label": "Team G", "leadName": "Hema",         "sheetId": "1rjOjxuIHESYrqCmc0fQhtK7YSQsF_CsqlqbB0LPh5cQ", "gid": "132754161"},
     "team_h": {"label": "Team H", "leadName": "Deepali",      "sheetId": "1FPyae90xO8phccxB3DnQUWyF5Gz6qA9bGl4YY_awS94", "gid": "1490637527"},
-    "team_i": {"label": "Team I", "leadName": "Radhika",      "sheetId": "18Ekx8uNL8r9gvKB4hwoOdv-yC05DvqS2a4hwlwltRBI", "gid": "641800524"},
+    "team_i": {"label": "Team I", "leadName": "Krishna",      "sheetId": "18Ekx8uNL8r9gvKB4hwoOdv-yC05DvqS2a4hwlwltRBI", "gid": "641800524"},
     "team_j": {"label": "Team J", "leadName": "Logeshwari",   "sheetId": "19hygU7Txm5As_vPVI9xOuMRz7XXsyudxMAtGr3kHVqU", "gid": "132754161"},
     "team_k": {"label": "Team K", "leadName": "Karthika",     "sheetId": "1zb3sQ7Qgr3G8P3CoyFEbekzNmoB6WjELizXV0l0U7WQ", "gid": "0"},
     "team_l": {"label": "Team L", "leadName": "Nasreen",      "sheetId": "1XOh8DTk6K6EP2lm0BzylHS--cxiNUsSCB2AXXRVH4p4", "gid": "1374236313"},
@@ -469,7 +469,7 @@ FALLBACK_TEAM_ROSTERS: dict[str, list[str]] = {
         "yamini sathishkumar",
     ],
     "team_e": ["shaalini selvam", "preethi vkumar"],
-    "team_f": ["inbamozhi nithyanandham", "jeevitha elumalai", "sarika mani", "sharumathi jawahar"],
+    "team_f": ["inbamozhi nithyanandham", "sarika mani", "sharumathi jawahar"],
     "team_t": [
         "pragathi selvaraj",
         "akshaya manojkumar",
@@ -490,7 +490,8 @@ FALLBACK_TEAM_ROSTERS: dict[str, list[str]] = {
         "pechiammal selvam",
     ],
     "team_h": ["deepali vimalchand jain", "madumitha loganadin", "yashika bhaskar"],
-    "team_i": ["radhika sasikumar"],
+    # Shivani / Jeevitha are forced here by TEAM_MEMBER_OVERRIDES (dynamic_roster.py).
+    "team_i": ["krishna narayanan", "jayashree boopathy", "shivani mohan", "jeevitha elumalai"],
     "team_j": [
         "logeshwari balaji",
         "dhanalakshmi rukmangathan",
@@ -508,7 +509,7 @@ FALLBACK_TEAM_ROSTERS: dict[str, list[str]] = {
     ],
     "team_l": ["nasreen fayashussain", "afrin begum", "razia hussain", "swathi yogeswaran"],
     "team_m": ["pavithira vinayaga moorthy", "bhuvaneswari balaji", "reshma lakshmanaboopathi"],
-    "team_n": ["vinodhini balaji", "saniya fathima", "shivani mohan", "snega murali"],
+    "team_n": ["vinodhini balaji", "saniya fathima", "snega murali"],
 }
 # ACTIVE roster. Seeded from the fallback, then replaced in place by
 # _apply_dynamic_roster() once Timesheets.com data is available. Mutated rather
@@ -541,16 +542,16 @@ TEAM_EXPECTED_COUNTS: dict[str, int] = {
     "team_c": 4,
     "team_d": 10,
     "team_e": 2,
-    "team_f": 4,
+    "team_f": 3,
     "team_t": 8,
     "team_g": 5,
     "team_h": 3,
-    "team_i": 1,
+    "team_i": 4,
     "team_j": 5,
     "team_k": 6,
     "team_l": 4,
     "team_m": 3,
-    "team_n": 4,
+    "team_n": 3,
 }
 
 # Recurring team-meeting schedule — drives the /meeting-status endpoint + the
@@ -1122,7 +1123,7 @@ TEAM_ADMIN_MAP: dict[str, str] = {
     "team_f": "372158",  # Inbamozhi Nithyanandham (7 members)
     "team_g": "372164",  # Hema Narashiman        (3 members)
     "team_h": "372150",  # Deepali Vimalchand Jain (11 members)
-    "team_i": "372171",  # Radhika Sasikumar      (6 members)
+    "team_i": "372179",  # Krishna Narayanan — TL from 2026-09-28 (Radhika Sasikumar 372171 left)
     "team_j": "372159",  # Logeshwari Balaji      (6 members)
     "team_k": "372190",  # Karthika Rajasekaran   (9 members)
     "team_l": "372170",  # Nasreen Fayashussain   (6 members)
@@ -4794,7 +4795,7 @@ FALLBACK_TEAM_MEMBERS: dict[str, list[str]] = {
         "Yamini Sathishkumar",
     ],
     "team_e": ["Shaalini Selvam (TL)", "Preethi Vkumar"],
-    "team_f": ["Inbamozhi Nithyanandham (TL)", "Jeevitha Elumalai", "Sarika Mani", "Sharumathi Jawahar"],
+    "team_f": ["Inbamozhi Nithyanandham (TL)", "Sarika Mani", "Sharumathi Jawahar"],
     "team_t": [
         "Pragathi Selvaraj (TL)",
         "Akshaya Manojkumar",
@@ -4813,7 +4814,7 @@ FALLBACK_TEAM_MEMBERS: dict[str, list[str]] = {
         "Pechiammal Selvam",
     ],
     "team_h": ["Deepali Vimalchand Jain (TL)", "Madumitha Loganadin", "Yashika Bhaskar"],
-    "team_i": ["Radhika Sasikumar (TL)"],
+    "team_i": ["Krishna Narayanan (TL)", "Jayashree Boopathy", "Jeevitha Elumalai", "Shivani Mohan"],
     "team_j": [
         "Logeshwari Balaji (TL)",
         "Dhanalakshmi Rukmangathan",
@@ -4831,7 +4832,7 @@ FALLBACK_TEAM_MEMBERS: dict[str, list[str]] = {
     ],
     "team_l": ["Nasreen Fayashussain (TL)", "Afrin Begum", "Razia Hussain", "Swathi Yogeswaran"],
     "team_m": ["Pavithira Vinayaga Moorthy (TL)", "Bhuvaneswari Balaji", "Reshma Lakshmanaboopathi"],
-    "team_n": ["Vinodhini Balaji (TL)", "Saniya Fathima", "Shivani Mohan", "Snega Murali"],
+    "team_n": ["Vinodhini Balaji (TL)", "Saniya Fathima", "Snega Murali"],
 }
 
 # ACTIVE display roster — replaced for ALL teams by _apply_dynamic_roster().
