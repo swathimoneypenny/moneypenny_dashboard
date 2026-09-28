@@ -196,10 +196,12 @@ def _apply_member_overrides(teams: dict, users: list[dict]) -> list[dict]:
 RETRY_FIRST_SECONDS  = 60
 RETRY_STEADY_SECONDS = 300
 
-# Only alert once per day so an extended outage doesn't spam the channel.
-ALERT_COOLDOWN_SECONDS   = 24 * 3600
-# Don't cry wolf on a single blip — only alert once we've been degraded this long.
-ALERT_AFTER_DEGRADED_SECS = 15 * 60
+# Outage alerts (ROSTER_ALERT_WEBHOOK_URL). Don't cry wolf on a single blip:
+# "sync down" fires after this many consecutive failures (~6 min on the retry
+# ladder), then at most once a day while the outage lasts. "Fallback activated"
+# and "partial response rejected" fire once per outage, immediately.
+ALERT_AFTER_FAILURES   = 3
+ALERT_COOLDOWN_SECONDS = 24 * 3600
 
 # Reject a fetch whose active headcount falls below this fraction of the last
 # good one. A truncated /users response (upstream hiccup, maxrows change) would
@@ -260,6 +262,7 @@ _health: dict = {
     "next_retry":             None,
     "degraded_since":         None,
     "last_alert_at":          None,
+    "alerted":                set(),   # alert kinds sent during this outage
 }
 
 
@@ -670,50 +673,80 @@ def _fallback_payload() -> dict:
 
 
 # ── Alerting ──────────────────────────────────────────────────────
-def _post_slack(webhook: str, text: str) -> bool:
+def _post_slack(webhook: str, text: str) -> tuple[bool, str]:
     try:
-        requests.post(webhook, json={"text": text}, timeout=10)
-        return True
+        r = requests.post(webhook, json={"text": text}, timeout=10)
+        if r.ok:
+            return True, f"HTTP {r.status_code}"
+        print(f"[DYNAMIC_ROSTER] Slack POST rejected: HTTP {r.status_code} {r.text[:100]}")
+        return False, f"HTTP {r.status_code}: {r.text[:100]}"
     except Exception as e:
         print(f"[DYNAMIC_ROSTER] Slack POST failed: {e}")
-        return False
+        return False, f"{type(e).__name__}: {e}"
 
 
-def _maybe_alert(source: str) -> None:
-    """Slack alert once we've been degraded for a while. Covers stale_cache as
-    well as fallback: a long stale spell means ops changes in Timesheets.com are
-    silently not reaching the dashboard. Silent no-op unless
-    ROSTER_ALERT_WEBHOOK_URL is set."""
+def _alert(kind: str, text: str, now: datetime, cooldown: float | None = None) -> None:
+    """Outage alert, at most once per `kind` per outage (or per `cooldown`).
+    Called under _lock, so the POST runs on a thread — a slow webhook must not
+    stall every roster read. Silent no-op unless ROSTER_ALERT_WEBHOOK_URL is set."""
     webhook = os.getenv("ROSTER_ALERT_WEBHOOK_URL", "").strip()
-    if not webhook or source not in ("stale_cache", "fallback"):
-        return
-    now = _now()
-    since = _health.get("degraded_since")
-    if not since or (now - since).total_seconds() < ALERT_AFTER_DEGRADED_SECS:
+    if not webhook:
         return
     last = _health.get("last_alert_at")
-    if last and (now - last).total_seconds() < ALERT_COOLDOWN_SECONDS:
+    if kind in _health["alerted"] and not (
+            cooldown and last and (now - last).total_seconds() >= cooldown):
         return
+    _health["alerted"].add(kind)
+    _health["last_alert_at"] = now
+    print(f"[DYNAMIC_ROSTER] alert ({kind}) → Slack")
+    threading.Thread(target=_post_slack, args=(webhook, text), daemon=True).start()
+
+
+def _outage_alerts(source: str, err: Exception | None, now: datetime) -> None:
+    fails = _health.get("consecutive_failures", 0)
+    since = _health.get("degraded_since") or now
     mins = int((now - since).total_seconds() // 60)
-    what = ("switched to the *hardcoded fallback roster*" if source == "fallback"
-            else "serving a *stale cached roster* (roster changes are not syncing)")
-    text = (f":rotating_light: MoneyPenny Dashboard: {what}. "
-            f"Timesheets.com sync failing for {mins} minutes "
-            f"({_health.get('consecutive_failures', 0)} consecutive failures). "
-            f"Last error: {_health.get('last_error') or 'unknown'}")
-    if _post_slack(webhook, text):
-        _health["last_alert_at"] = now
+    last_error = _health.get("last_error") or "unknown"
+    if isinstance(err, ImplausibleRoster):
+        _alert("implausible", f":warning: MoneyPenny Dashboard: rejected a partial "
+               f"Timesheets.com response — {err} Still serving the last good roster.", now)
+    if source == "fallback":
+        _alert("fallback", ":rotating_light: MoneyPenny Dashboard: *fallback mode "
+               "activated* — Timesheets.com unreachable with no cached roster, serving "
+               f"the hardcoded fallback. Last error: {last_error}", now)
+    if fails >= ALERT_AFTER_FAILURES:
+        what = ("hardcoded fallback roster" if source == "fallback"
+                else "last cached roster — roster changes are not syncing")
+        _alert("down", f":rotating_light: MoneyPenny Dashboard: Timesheets.com sync "
+               f"*down* — {fails} consecutive failures over {mins} min. Serving the "
+               f"{what}. Last error: {last_error}", now, cooldown=ALERT_COOLDOWN_SECONDS)
 
 
 def _maybe_alert_recovered(now: datetime) -> None:
     """Close the loop on an outage we alerted about."""
     webhook = os.getenv("ROSTER_ALERT_WEBHOOK_URL", "").strip()
-    since, alerted = _health.get("degraded_since"), _health.get("last_alert_at")
-    if not webhook or not since or not alerted or alerted < since:
+    since = _health.get("degraded_since")
+    if not webhook or not since or not _health["alerted"]:
         return
     mins = int((now - since).total_seconds() // 60)
-    _post_slack(webhook, f":white_check_mark: MoneyPenny Dashboard: Timesheets.com roster "
-                         f"sync recovered after {mins} minutes.")
+    threading.Thread(target=_post_slack, daemon=True, args=(
+        webhook, f":white_check_mark: MoneyPenny Dashboard: Timesheets.com roster sync "
+                 f"recovered after {mins} min.")).start()
+
+
+def send_test_alert() -> dict:
+    """Admin-triggered check that the outage webhook works. Never echoes the URL."""
+    webhook = os.getenv("ROSTER_ALERT_WEBHOOK_URL", "").strip()
+    if not webhook:
+        return {"ok": False, "webhook_configured": False,
+                "error": "ROSTER_ALERT_WEBHOOK_URL is not set in backend/.env"}
+    ok, detail = _post_slack(webhook, ":test_tube: MoneyPenny Dashboard: test roster "
+                                      "outage alert. If you can read this, alerts work.")
+    return {"ok": ok, "webhook_configured": True, "detail": detail}
+
+
+class ImplausibleRoster(RuntimeError):
+    """A fetch that succeeded but can't be right (e.g. truncated user list)."""
 
 
 def _record_success(now: datetime) -> None:
@@ -727,6 +760,7 @@ def _record_success(now: datetime) -> None:
         "next_retry": None,
         "degraded_since": None,
     })
+    _health["alerted"] = set()
 
 
 def _record_failure(now: datetime, err: Exception) -> None:
@@ -769,6 +803,7 @@ def get_dynamic_roster(force_refresh: bool = False) -> dict:
 
         # Respect the retry ladder — don't hammer a down API on every request.
         nxt = _health.get("next_retry")
+        err = None
         may_attempt = force_refresh or not nxt or now >= nxt
 
         if may_attempt:
@@ -777,7 +812,7 @@ def get_dynamic_roster(force_refresh: bool = False) -> dict:
                 payload = _build_payload(users)
                 problem = _implausible(payload, cached)
                 if problem:
-                    raise RuntimeError(problem)
+                    raise ImplausibleRoster(problem)
                 _roster_cache["data"] = payload
                 _roster_cache["timestamp"] = now
                 _roster_cache["users"] = users
@@ -786,6 +821,7 @@ def get_dynamic_roster(force_refresh: bool = False) -> dict:
                 return _envelope(payload, "live", now, 0.0)
             except Exception as e:
                 _record_failure(now, e)
+                err = e
         else:
             print(f"[DYNAMIC_ROSTER] holding off until {nxt:%H:%M:%S} "
                   f"({_health.get('consecutive_failures')} failures so far)")
@@ -794,12 +830,12 @@ def get_dynamic_roster(force_refresh: bool = False) -> dict:
         if cached and cached_at:
             age = (now - cached_at).total_seconds()
             _health["current_source"] = "stale_cache"
-            _maybe_alert("stale_cache")
+            _outage_alerts("stale_cache", err, now)
             return _envelope(cached, "stale_cache", cached_at, age)
 
         # Tier 3 — cold failure, nothing cached.
         _health["current_source"] = "fallback"
-        _maybe_alert("fallback")
+        _outage_alerts("fallback", err, now)
         return _envelope(_fallback_payload(), "fallback", None, None)
 
 
@@ -1179,10 +1215,10 @@ def _write_change_log(changes: list[dict], now: datetime) -> None:
 
 
 def _notify_changes(changes: list[dict]) -> None:
-    """Slack summary of one batch. ROSTER_CHANGE_WEBHOOK_URL, else the outage
-    webhook; silent no-op if neither is set."""
-    webhook = (os.getenv("ROSTER_CHANGE_WEBHOOK_URL", "").strip()
-               or os.getenv("ROSTER_ALERT_WEBHOOK_URL", "").strip())
+    """Slack summary of one batch. Only ROSTER_CHANGE_WEBHOOK_URL — deliberately
+    NOT the outage webhook, which is kept for outages so daily roster shuffles
+    don't drown it out. Silent no-op when unset."""
+    webhook = os.getenv("ROSTER_CHANGE_WEBHOOK_URL", "").strip()
     if not webhook:
         return
     lines = [f"• {c['message']}" for c in changes[:20]]

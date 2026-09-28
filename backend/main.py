@@ -440,64 +440,76 @@ for _tid in list(TEAM_LETTER_MAP.keys()):
 # hand-maintained copy is used only when that API is unreachable with no warm
 # cache, or when DYNAMIC_ROSTER_ENABLED is off. See _apply_dynamic_roster().
 #
-# Each entry is a list of partial name keywords (token-prefix match against the
+# Each entry is a list of name keywords (token-prefix match against the
 # timesheet FULLNAME). If a team's roster is empty, all rows pass through.
+#
+# Regenerated from the live roster on 2026-09-28 (GET /api/roster/fallback-drift →
+# recommended_python). Full names, so each keyword matches exactly one person.
+# Refresh the same way monthly, or whenever /api/roster/health reports the
+# fallback as significantly behind.
 FALLBACK_TEAM_ROSTERS: dict[str, list[str]] = {
-    # "fathima irfhana" — two-token keyword (both must prefix-match a name token),
-    # so it matches "Irfhana Fathima" / "Fathima Irfhana" but NOT Team T's
-    # "Fathima Saleem" or a bare "Irfhana". Replaced the looser single-token "irfhana".
-    "team_a": ["kokila", "uma", "jayashree r", "jayashree b", "fathima irfhana"],
-    "team_b": ["buela", "ivanjalin", "varshini", "pavithra s"],
-    "team_c": ["grace", "mahalakshmi", "jeevtha s", "keerthana"],
-    # Removed "sharmila" (Sharmila Rajkumar — Director) and "swetha s" (Swetha
-    # Kadari — Training Mgmt) 2026-06-17. Added Gunasekaran Sharmila + Sagada
-    # Swetha (DIFFERENT people) as MULTI-WORD keywords — both tokens must
-    # prefix-match, so "gunasekaran sharmila" matches her but NOT "Sharmila
-    # Rajkumar", and "sagada swetha" matches her but NOT "Swetha Kadari".
-    "team_d": ["chandra", "yamini", "krithiga", "dharani s", "sandhiya", "sirisha",
-               "gunasekaran sharmila", "sagada swetha"],
-    "team_e": ["shaalini", "kaviya", "preethi"],
-    # Irfhana Fathima removed 2026-08-17 — left MPLLC. She was never in this
-    # fallback list (she sat in team_a's), but the expected count is set below.
-    "team_f": ["inbamozhi", "sarika"],
-    # "indra" and "vijayababu" are the SAME PERSON — Indra Vijayababu, USERID
-    # 372101, JOBTITLE "Team Lead". Both keywords are listed only because the
-    # timesheet FULLNAME is "Indra Vijayababu" and either token identifies her;
-    # she counts once. NOTE this fallback list is inert while
-    # DYNAMIC_ROSTER_ENABLED=1: the live roster comes from ADMINUSERID, and
-    # Timesheets.com has her reporting to Vidya Laksmi Prakash (Manager, 372099),
-    # NOT to Hema (372164). Hema's actual direct reports are Amala Bharathi
-    # Bernard, Nidishablessy Biju and Pechiammal Selvam. To put her on Team G for
-    # real, ops must repoint her ADMINUSERID to 372164 in Timesheets.com.
-    "team_g": ["hema", "indra", "vijayababu", "amala", "nidisha", "pechi"],
-    "team_h": ["deepali", "yashika", "madu"],
-    "team_i": ["radhika", "aparna s", "jeevitha", "sakthi s"],
-    # TL-confirmed roster = 4 (2026-06-17). Dropped "monikaa" to match the count
-    # the TL gave. If Monika is still on the team, re-add her and update the TL count.
-    "team_j": ["logeswari", "nisha m", "dhana", "sindhu"],
-    # TL-confirmed roster = 5 (2026-06-17). Dropped "abinaya" and the redundant
-    # "jani priya" spelling. NOTE: Janipriya's timesheet FULLNAME is one word
-    # ("Janipriya Saravanan"), so the working keyword is "janipriya" — the
-    # two-token "jani priya" never actually matched her and was the safe one to cut.
-    "team_k": ["karthika", "akshaya devi", "keerthana", "janipriya", "rohitha", "abinaya sureshbabu"],
-    # "sarika" removed 2026-06-18 — Sarika Mani is a Team F member (Inbamozhi's
-    # team), not Team L. She remains in team_f's roster below.
-    "team_l": ["nasreen", "krishna", "swathi", "razia"],
-    # TL is "Vinayaga Moorthy, Pavithira" (first name Pavithira). Matching by the
-    # distinctive surname "vinayaga moorthy" — works for both "Vinayaga Moorthy,
-    # Pavithira" and "Pavithira Vinayaga Moorthy" orderings. NB the old "pavithra"
-    # keyword never matched her (her name is "Pavithira", not "Pavithra").
-    "team_m": ["vinayaga moorthy", "bhuva", "Reshma Lakshmanaboopathi"],
-    "team_n": ["vino", "shivani", "snega"],
-    # TL update 2026-06-17: removed Irfhana Fathima ("fathima"); added Swetha
-    # Subramaniyan + Shiyamala Saravanan. "shiyamala saravanan" replaces the
-    # prior "shiyamala devi" (same person, corrected surname). "swetha sub" is
-    # specific enough to win the longest-keyword tiebreak over Team D's "swetha s".
-    "team_t": ["pragathi", "reshma hameeth", "prithvi b", "akshaya manojkumar",
-               "naveena", "dharani p", "shiyamala saravanan", "swetha sub",
-               "fathima saleem"],
+    "team_a": ["kokila ramachandran", "uma maheshwari elumalai"],
+    "team_b": ["buelaangel t", "ivanjalin sofia irudhayaraj", "pavithra srinivasan", "varshini natarajan"],
+    "team_c": [
+        "grace god's",
+        "jeevtha santhira",
+        "keerthana loganathan",
+        "mahalakshmi thiruthanidiraviam",
+    ],
+    "team_d": [
+        "chandralekha vijay anand",
+        "abirami radha",
+        "dharani sekar",
+        "keethika prakash",
+        "krithiga dhandapani",
+        "sandhiya jothi",
+        "sharmila gunasekaran",
+        "sirisha mallireddy",
+        "swetha sagada",
+        "yamini sathishkumar",
+    ],
+    "team_e": ["shaalini selvam", "preethi vkumar"],
+    "team_f": ["inbamozhi nithyanandham", "jeevitha elumalai", "sarika mani", "sharumathi jawahar"],
+    "team_t": [
+        "pragathi selvaraj",
+        "akshaya manojkumar",
+        "dharani parthiban",
+        "fathima saleem",
+        "prithvi balu",
+        "reshma hameeth",
+        "shiyamala saravanan",
+        "swetha subramaniyan",
+    ],
+    # Indra Vijayababu is placed on Team G by TEAM_MEMBER_OVERRIDES in
+    # dynamic_roster.py — Timesheets.com still has her ADMINUSERID under Vidya.
+    "team_g": [
+        "hema narashiman",
+        "amala bharathi bernard",
+        "indra vijayababu",
+        "nidishablessy biju",
+        "pechiammal selvam",
+    ],
+    "team_h": ["deepali vimalchand jain", "madumitha loganadin", "yashika bhaskar"],
+    "team_i": ["radhika sasikumar"],
+    "team_j": [
+        "logeshwari balaji",
+        "dhanalakshmi rukmangathan",
+        "monikaa balaji",
+        "nisha manikandan",
+        "sindhu selvaraj",
+    ],
+    "team_k": [
+        "karthika rajasekaran",
+        "abinaya sureshbabu",
+        "janipriya saravanan",
+        "kalpithaa janarthanan",
+        "keerthana sathiyaseelan",
+        "rohitha pacharu",
+    ],
+    "team_l": ["nasreen fayashussain", "afrin begum", "razia hussain", "swathi yogeswaran"],
+    "team_m": ["pavithira vinayaga moorthy", "bhuvaneswari balaji", "reshma lakshmanaboopathi"],
+    "team_n": ["vinodhini balaji", "saniya fathima", "shivani mohan", "snega murali"],
 }
-
 # ACTIVE roster. Seeded from the fallback, then replaced in place by
 # _apply_dynamic_roster() once Timesheets.com data is available. Mutated rather
 # than rebound so the ~30 modules-level readers of TEAM_ROSTERS (and the
@@ -520,16 +532,25 @@ if len(TEAM_ROSTERS.get("team_t", [])) <= 1:
           f"to TEAM_ROSTERS when available.")
 
 
-# Expected roster sizes per TL feedback — startup self-check. Since the roster
-# is now the authoritative member count (see _team_member_count / list_teams),
-# any mismatch here means TEAM_ROSTERS drifted from what the TL confirmed.
+# Expected roster sizes — startup self-check, and the headcount served while on
+# the fallback roster. Replaced by live counts once the dynamic roster loads.
+# Matches FALLBACK_TEAM_ROSTERS as regenerated on 2026-09-28.
 TEAM_EXPECTED_COUNTS: dict[str, int] = {
-    "team_k": 6,  # TL Karthika 5 + Abinaya Sureshbabu added 2026-06-19
-    "team_j": 4,  # TL — confirmed 4 (2026-06-17)
-    "team_h": 3,  # TL — confirmed 3 executives (2026-06-17)
-    "team_d": 8,  # 6 + Gunasekaran Sharmila + Sagada Swetha (2026-06-17)
-    "team_a": 5,  # 4 + Fathima Irfhana added 2026-06-19
-    "team_f": 2,  # Inbamozhi + Sarika — Irfhana Fathima left MPLLC 2026-08-17
+    "team_a": 2,
+    "team_b": 4,
+    "team_c": 4,
+    "team_d": 10,
+    "team_e": 2,
+    "team_f": 4,
+    "team_t": 8,
+    "team_g": 5,
+    "team_h": 3,
+    "team_i": 1,
+    "team_j": 5,
+    "team_k": 6,
+    "team_l": 4,
+    "team_m": 3,
+    "team_n": 4,
 }
 
 # Recurring team-meeting schedule — drives the /meeting-status endpoint + the
@@ -4744,17 +4765,76 @@ def iter_rows(data) -> list[dict]:
 
 
 # ── Team membership / department mapping ─────────────────────────
-# Legacy hardcoded data — kept only for the chatbot context strings, and as the
-# emergency fallback for the display roster.
+# Display roster (TL marked "(TL)") — chatbot context strings, and the emergency
+# fallback for the display roster. Regenerated from live data on 2026-09-28.
 FALLBACK_TEAM_MEMBERS: dict[str, list[str]] = {
-    # "Vinayaga Moorthy, Pavithira" is the TL — listed first. Roster matching for
-    # the UI/API uses TEAM_ROSTERS (keyword "vinayaga moorthy"); this dict only
-    # feeds chatbot context strings.
-    "team_m": ["Vinayaga Moorthy, Pavithira", "Reshma Lakshmanaboopathi", "Bhuvaneswari Balaji"],
+    "team_a": ["Kokila Ramachandran (TL)", "Uma Maheshwari Elumalai"],
+    "team_b": [
+        "Buelaangel T (TL)",
+        "Ivanjalin Sofia Irudhayaraj",
+        "Pavithra Srinivasan",
+        "Varshini Natarajan",
+    ],
+    "team_c": [
+        "Grace God's (TL)",
+        "Jeevtha Santhira",
+        "Keerthana Loganathan",
+        "Mahalakshmi Thiruthanidiraviam",
+    ],
+    "team_d": [
+        "Chandralekha Vijay Anand (TL)",
+        "Abirami Radha",
+        "Dharani Sekar",
+        "Keethika Prakash",
+        "Krithiga Dhandapani",
+        "Sandhiya Jothi",
+        "Sharmila Gunasekaran",
+        "Sirisha Mallireddy",
+        "Swetha Sagada",
+        "Yamini Sathishkumar",
+    ],
+    "team_e": ["Shaalini Selvam (TL)", "Preethi Vkumar"],
+    "team_f": ["Inbamozhi Nithyanandham (TL)", "Jeevitha Elumalai", "Sarika Mani", "Sharumathi Jawahar"],
+    "team_t": [
+        "Pragathi Selvaraj (TL)",
+        "Akshaya Manojkumar",
+        "Dharani Parthiban",
+        "Fathima Saleem",
+        "Prithvi Balu",
+        "Reshma Hameeth",
+        "Shiyamala Saravanan",
+        "Swetha Subramaniyan",
+    ],
+    "team_g": [
+        "Hema Narashiman (TL)",
+        "Amala Bharathi Bernard",
+        "Indra Vijayababu",
+        "Nidishablessy Biju",
+        "Pechiammal Selvam",
+    ],
+    "team_h": ["Deepali Vimalchand Jain (TL)", "Madumitha Loganadin", "Yashika Bhaskar"],
+    "team_i": ["Radhika Sasikumar (TL)"],
+    "team_j": [
+        "Logeshwari Balaji (TL)",
+        "Dhanalakshmi Rukmangathan",
+        "Monikaa Balaji",
+        "Nisha Manikandan",
+        "Sindhu Selvaraj",
+    ],
+    "team_k": [
+        "Karthika Rajasekaran (TL)",
+        "Abinaya Sureshbabu",
+        "Janipriya Saravanan",
+        "Kalpithaa Janarthanan",
+        "Keerthana Sathiyaseelan",
+        "Rohitha Pacharu",
+    ],
+    "team_l": ["Nasreen Fayashussain (TL)", "Afrin Begum", "Razia Hussain", "Swathi Yogeswaran"],
+    "team_m": ["Pavithira Vinayaga Moorthy (TL)", "Bhuvaneswari Balaji", "Reshma Lakshmanaboopathi"],
+    "team_n": ["Vinodhini Balaji (TL)", "Saniya Fathima", "Shivani Mohan", "Snega Murali"],
 }
 
-# ACTIVE display roster — populated for ALL teams by _apply_dynamic_roster()
-# (the fallback only ever covered team_m).
+# ACTIVE display roster — replaced for ALL teams by _apply_dynamic_roster().
 TEAM_MEMBERS: dict[str, list[str]] = {k: list(v) for k, v in FALLBACK_TEAM_MEMBERS.items()}
 
 TEAM_DEPT_MAP: dict[str, str] = {
@@ -10758,6 +10838,12 @@ def roster_recent_changes(limit: int = 100):
 def roster_fallback_drift():
     """How far FALLBACK_TEAM_ROSTERS lags live data, with a replacement to paste."""
     return dynamic_roster.build_fallback_drift()
+
+
+@app.post("/api/roster/test-alert")
+def roster_test_alert():
+    """Post a test message to ROSTER_ALERT_WEBHOOK_URL (admin-only by default)."""
+    return dynamic_roster.send_test_alert()
 
 
 @app.post("/api/roster/refresh")
