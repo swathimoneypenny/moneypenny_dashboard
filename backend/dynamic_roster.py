@@ -32,10 +32,12 @@ through `configure()` so there is no circular import.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import threading
 import traceback
+from collections import deque
 from datetime import datetime, timedelta
 
 import requests
@@ -199,6 +201,21 @@ ALERT_COOLDOWN_SECONDS   = 24 * 3600
 # Don't cry wolf on a single blip — only alert once we've been degraded this long.
 ALERT_AFTER_DEGRADED_SECS = 15 * 60
 
+# Reject a fetch whose active headcount falls below this fraction of the last
+# good one. A truncated /users response (upstream hiccup, maxrows change) would
+# otherwise empty every team at once and log it as mass departures. A real
+# reorg that big is accepted with POST /api/roster/refresh, which clears the
+# cache this check compares against.
+MIN_HEADCOUNT_RATIO = 0.5
+MIN_HEADCOUNT_BASE  = 10
+
+# /api/roster/fallback-drift calls the hardcoded fallback "significantly
+# behind" once live and fallback differ by more than this many members.
+FALLBACK_DRIFT_THRESHOLD = 10
+
+CHANGE_HISTORY_MAX = 100
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
 
 # ── Injected configuration (set by main.py at import time) ────────
 _cfg: dict = {
@@ -231,6 +248,7 @@ _lock = threading.Lock()
 _roster_cache: dict = {
     "data":       None,      # last SUCCESSFUL payload
     "timestamp":  None,      # when it was fetched
+    "users":      None,      # the /users list that payload was built from
 }
 
 _health: dict = {
@@ -586,8 +604,9 @@ def build_dynamic_team_clients(teams: dict, rows: list[dict] | None = None,
 
 
 # ── Payload assembly ──────────────────────────────────────────────
-def _build_payload() -> dict:
-    users = _fetch_users()
+def _build_payload(users: list[dict] | None = None) -> dict:
+    if users is None:
+        users = _fetch_users()
     built = build_dynamic_roster(users)
     teams = built["teams"]
 
@@ -651,11 +670,22 @@ def _fallback_payload() -> dict:
 
 
 # ── Alerting ──────────────────────────────────────────────────────
+def _post_slack(webhook: str, text: str) -> bool:
+    try:
+        requests.post(webhook, json={"text": text}, timeout=10)
+        return True
+    except Exception as e:
+        print(f"[DYNAMIC_ROSTER] Slack POST failed: {e}")
+        return False
+
+
 def _maybe_alert(source: str) -> None:
-    """Slack alert when we've been on the emergency fallback for a while.
-    Silent no-op unless ROSTER_ALERT_WEBHOOK_URL is set."""
+    """Slack alert once we've been degraded for a while. Covers stale_cache as
+    well as fallback: a long stale spell means ops changes in Timesheets.com are
+    silently not reaching the dashboard. Silent no-op unless
+    ROSTER_ALERT_WEBHOOK_URL is set."""
     webhook = os.getenv("ROSTER_ALERT_WEBHOOK_URL", "").strip()
-    if not webhook or source != "fallback":
+    if not webhook or source not in ("stale_cache", "fallback"):
         return
     now = _now()
     since = _health.get("degraded_since")
@@ -665,23 +695,29 @@ def _maybe_alert(source: str) -> None:
     if last and (now - last).total_seconds() < ALERT_COOLDOWN_SECONDS:
         return
     mins = int((now - since).total_seconds() // 60)
-    try:
-        requests.post(
-            webhook,
-            json={"text": (
-                f":rotating_light: MoneyPenny Dashboard: switched to *fallback roster*. "
-                f"Timesheets.com API unreachable for {mins} minutes "
-                f"({_health.get('consecutive_failures', 0)} consecutive failures). "
-                f"Last error: {_health.get('last_error') or 'unknown'}"
-            )},
-            timeout=10,
-        )
+    what = ("switched to the *hardcoded fallback roster*" if source == "fallback"
+            else "serving a *stale cached roster* (roster changes are not syncing)")
+    text = (f":rotating_light: MoneyPenny Dashboard: {what}. "
+            f"Timesheets.com sync failing for {mins} minutes "
+            f"({_health.get('consecutive_failures', 0)} consecutive failures). "
+            f"Last error: {_health.get('last_error') or 'unknown'}")
+    if _post_slack(webhook, text):
         _health["last_alert_at"] = now
-    except Exception as e:
-        print(f"[DYNAMIC_ROSTER] alert POST failed: {e}")
+
+
+def _maybe_alert_recovered(now: datetime) -> None:
+    """Close the loop on an outage we alerted about."""
+    webhook = os.getenv("ROSTER_ALERT_WEBHOOK_URL", "").strip()
+    since, alerted = _health.get("degraded_since"), _health.get("last_alert_at")
+    if not webhook or not since or not alerted or alerted < since:
+        return
+    mins = int((now - since).total_seconds() // 60)
+    _post_slack(webhook, f":white_check_mark: MoneyPenny Dashboard: Timesheets.com roster "
+                         f"sync recovered after {mins} minutes.")
 
 
 def _record_success(now: datetime) -> None:
+    _maybe_alert_recovered(now)
     _health.update({
         "current_source": "live",
         "last_successful_fetch": now,
@@ -737,10 +773,16 @@ def get_dynamic_roster(force_refresh: bool = False) -> dict:
 
         if may_attempt:
             try:
-                payload = _build_payload()
+                users = _fetch_users()
+                payload = _build_payload(users)
+                problem = _implausible(payload, cached)
+                if problem:
+                    raise RuntimeError(problem)
                 _roster_cache["data"] = payload
                 _roster_cache["timestamp"] = now
+                _roster_cache["users"] = users
                 _record_success(now)
+                _detect_changes(payload, now)
                 return _envelope(payload, "live", now, 0.0)
             except Exception as e:
                 _record_failure(now, e)
@@ -794,7 +836,22 @@ def clear_roster_cache() -> None:
     with _lock:
         _roster_cache["data"] = None
         _roster_cache["timestamp"] = None
+        _roster_cache["users"] = None
         _health["next_retry"] = None
+
+
+def _active_headcount(payload: dict | None) -> int:
+    return sum(len(v) for v in ((payload or {}).get("TEAM_ROSTERS") or {}).values())
+
+
+def _implausible(payload: dict, previous: dict | None) -> str | None:
+    """Reason to distrust a freshly built payload, else None."""
+    before, after = _active_headcount(previous), _active_headcount(payload)
+    if before >= MIN_HEADCOUNT_BASE and after < before * MIN_HEADCOUNT_RATIO:
+        return (f"implausible roster: active members fell {before} -> {after} "
+                f"(below {int(MIN_HEADCOUNT_RATIO * 100)}%); keeping last good data. "
+                f"If this is a real reorg, POST /api/roster/refresh to accept it.")
+    return None
 
 
 def is_enabled() -> bool:
@@ -822,52 +879,17 @@ def build_diff() -> dict:
         return {"error": "no live data available", "source": source,
                 "status": get_roster_status()}
 
-    try:
-        users = _fetch_users()
-    except Exception as e:
-        return {"error": f"users fetch failed: {e}", "source": source}
-
+    users = _roster_cache.get("users")
+    if not users:
+        try:
+            users = _fetch_users()
+        except Exception as e:
+            return {"error": f"users fetch failed: {e}", "source": source}
+    all_names = [(u.get("FULLNAME") or "").strip() for u in users]
     active_names = [(u.get("FULLNAME") or "").strip()
                     for u in users if is_active_user(u)]
-    all_names = [(u.get("FULLNAME") or "").strip() for u in users]
-
-    def kw_matches(kw: str, fullname: str) -> bool:
-        k, n = (kw or "").lower().strip(), (fullname or "").lower().strip()
-        if not k or not n:
-            return False
-        nt = [t for t in re.split(r"[\s\-\.,]+", n) if t]
-        kt = [t for t in re.split(r"[\s\-\.,]+", k) if t]
-        if not nt or not kt:
-            return False
-        return all(any(x.startswith(y) for x in nt) for y in kt)
-
     fallback_rosters = _cfg["fallback_rosters"] or {}
-    teams_diff = {}
-    for tid in sorted(set(list(fallback_rosters.keys()) + list(payload["TEAM_ROSTERS"].keys()))):
-        old_kws = fallback_rosters.get(tid, [])
-        old_resolved, unresolved = set(), []
-        for kw in old_kws:
-            hits = [n for n in all_names if kw_matches(kw, n)]
-            if hits:
-                old_resolved.update(hits)
-            else:
-                unresolved.append(kw)
-
-        tdata = payload["raw_teams"].get(tid, {})
-        new_names = {m["name"] for m in tdata.get("members", [])}
-
-        teams_diff[tid] = {
-            "label":            tdata.get("name", tid),
-            "lead":             tdata.get("lead_name", ""),
-            "old_count":        len(old_kws),
-            "new_count":        len(new_names),
-            "added":            sorted(new_names - old_resolved),
-            "removed":          sorted(old_resolved - new_names),
-            "unchanged":        sorted(new_names & old_resolved),
-            "unresolved_keywords": unresolved,
-            "excluded":         tdata.get("excluded", []),
-            "clients_added":    payload["client_additions"].get(tid, []),
-        }
+    teams_diff = _fallback_team_diff(payload, users)
 
     # ── Derived cross-team views (consumed by scripts/review_roster.py) ──
     dynamic_teams = {
@@ -968,4 +990,356 @@ def build_diff() -> dict:
         "unmapped_teams": payload["unmapped_teams"],
         "member_overrides": payload.get("member_overrides") or [],
         "client_note": payload.get("client_note"),
+    }
+
+
+def _kw_matches(kw: str, fullname: str) -> bool:
+    """main._kw_matches_name: every keyword token prefix-matches a name token."""
+    k, n = (kw or "").lower().strip(), (fullname or "").lower().strip()
+    if not k or not n:
+        return False
+    nt = [t for t in re.split(r"[\s\-\.,]+", n) if t]
+    kt = [t for t in re.split(r"[\s\-\.,]+", k) if t]
+    if not nt or not kt:
+        return False
+    return all(any(x.startswith(y) for x in nt) for y in kt)
+
+
+def _fallback_team_diff(payload: dict, users: list[dict]) -> dict:
+    """Per team: hardcoded fallback vs live members.
+
+    Roster keywords aren't directly comparable (hardcoded uses partial
+    keywords like "jayashree b", dynamic uses full names), so each hardcoded
+    keyword is resolved against the full user list with the same token-prefix
+    rule main.py uses.
+    """
+    all_names = [(u.get("FULLNAME") or "").strip() for u in users or []]
+    fallback_rosters = _cfg["fallback_rosters"] or {}
+    teams_diff = {}
+    for tid in sorted(set(list(fallback_rosters.keys()) + list(payload["TEAM_ROSTERS"].keys()))):
+        old_kws = fallback_rosters.get(tid, [])
+        old_resolved, unresolved = set(), []
+        for kw in old_kws:
+            hits = [n for n in all_names if _kw_matches(kw, n)]
+            if hits:
+                old_resolved.update(hits)
+            else:
+                unresolved.append(kw)
+
+        tdata = payload["raw_teams"].get(tid, {})
+        new_names = {m["name"] for m in tdata.get("members", [])}
+
+        teams_diff[tid] = {
+            "label":            tdata.get("name", tid),
+            "lead":             tdata.get("lead_name", ""),
+            "old_count":        len(old_kws),
+            "new_count":        len(new_names),
+            "added":            sorted(new_names - old_resolved),
+            "removed":          sorted(old_resolved - new_names),
+            "unchanged":        sorted(new_names & old_resolved),
+            "unresolved_keywords": unresolved,
+            "excluded":         tdata.get("excluded", []),
+            "clients_added":    payload["client_additions"].get(tid, []),
+        }
+    return teams_diff
+
+
+# ── Roster change detection ───────────────────────────────────────
+# Each successful fetch is compared, by Timesheets USERID, with the previous
+# one. The previous snapshot and the change history are persisted so a
+# backend restart neither loses the feed nor misses a change made while the
+# process was down. Both files hold staff names, so they default to the
+# gitignored backend/logs/ — this repo is public.
+_changes: deque = deque(maxlen=CHANGE_HISTORY_MAX)
+_change_state: dict = {"loaded": False, "snapshot": None, "last_change_at": None}
+
+
+def _state_path() -> str:
+    return os.getenv("ROSTER_STATE_FILE") or os.path.join(_HERE, "logs", "roster_state.json")
+
+
+def _change_log_path() -> str:
+    return os.getenv("ROSTER_CHANGE_LOG") or os.path.join(_HERE, "logs", "roster_changes.log")
+
+
+def _load_change_state() -> None:
+    _change_state["loaded"] = True
+    try:
+        with open(_state_path(), encoding="utf-8") as f:
+            st = json.load(f)
+        _change_state["snapshot"] = st.get("snapshot")
+        _change_state["last_change_at"] = st.get("last_change_at")
+        _changes.clear()
+        _changes.extend(st.get("changes") or [])
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"[ROSTER_CHANGES] could not load {_state_path()}: {e} — starting fresh")
+
+
+def _save_change_state() -> None:
+    path = _state_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"snapshot": _change_state["snapshot"],
+                       "last_change_at": _change_state["last_change_at"],
+                       "changes": list(_changes)}, f)
+        os.replace(tmp, path)
+    except Exception as e:
+        print(f"[ROSTER_CHANGES] could not save {path}: {e}")
+
+
+def _snapshot(payload: dict) -> dict:
+    """{team_id: {lead_id, lead_name, members: {userid: name}}}"""
+    snap = {}
+    for tid, t in (payload.get("raw_teams") or {}).items():
+        snap[tid] = {
+            "lead_id": t.get("lead_user_id"),
+            "lead_name": t.get("lead_name") or "",
+            "members": {m["timesheet_id"]: m["name"] for m in t.get("members", [])},
+        }
+    return snap
+
+
+def diff_snapshots(old: dict, new: dict) -> list[dict]:
+    """Member adds / removals / moves and lead changes between two snapshots."""
+    def where(snap):
+        out = {}
+        for tid, t in snap.items():
+            for uid, name in t["members"].items():
+                out.setdefault(uid, (tid, name))
+        return out
+
+    before, after = where(old), where(new)
+    changes = []
+    for uid, (tid, name) in after.items():
+        if uid not in before:
+            changes.append({"type": "added", "name": name, "timesheet_id": uid,
+                            "from_team": None, "to_team": tid,
+                            "message": f"{name} added to {tid}"})
+        elif before[uid][0] != tid:
+            changes.append({"type": "moved", "name": name, "timesheet_id": uid,
+                            "from_team": before[uid][0], "to_team": tid,
+                            "message": f"{name} moved from {before[uid][0]} to {tid}"})
+    for uid, (tid, name) in before.items():
+        if uid not in after:
+            changes.append({"type": "removed", "name": name, "timesheet_id": uid,
+                            "from_team": tid, "to_team": None,
+                            "message": f"{name} removed from {tid} "
+                                       f"(inactive or no longer under a mapped team lead)"})
+    for tid in sorted(set(old) & set(new)):
+        o, n = old[tid], new[tid]
+        if (o.get("lead_id") or None) != (n.get("lead_id") or None):
+            changes.append({"type": "lead_changed", "name": n.get("lead_name") or "",
+                            "timesheet_id": n.get("lead_id"),
+                            "from_team": tid, "to_team": tid,
+                            "previous_lead": o.get("lead_name") or "",
+                            "message": f"{tid} lead changed from "
+                                       f"{o.get('lead_name') or 'none'} to "
+                                       f"{n.get('lead_name') or 'none'}"})
+    order = {"lead_changed": 0, "moved": 1, "added": 2, "removed": 3}
+    changes.sort(key=lambda c: (order[c["type"]], c["name"]))
+    return changes
+
+
+def _detect_changes(payload: dict, now: datetime) -> list[dict]:
+    """Record what changed since the last successful fetch. Called under _lock.
+    The first fetch with no saved snapshot only establishes a baseline."""
+    if not _change_state["loaded"]:
+        _load_change_state()
+    new = _snapshot(payload)
+    old = _change_state["snapshot"]
+    _change_state["snapshot"] = new
+    changes = diff_snapshots(old, new) if old else []
+    if changes:
+        at = now.isoformat(timespec="seconds")
+        for c in changes:
+            c["at"] = at
+            _changes.append(c)
+            print(f"[ROSTER_CHANGE] {c['message']}")
+        _change_state["last_change_at"] = at
+        _write_change_log(changes, now)
+        threading.Thread(target=_notify_changes, args=(changes,), daemon=True).start()
+    if old != new:
+        _save_change_state()
+    return changes
+
+
+def _write_change_log(changes: list[dict], now: datetime) -> None:
+    path = _change_log_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            for c in changes:
+                f.write(f"{now:%Y-%m-%d %H:%M} - {c['message']}\n")
+    except Exception as e:
+        print(f"[ROSTER_CHANGES] could not write {path}: {e}")
+
+
+def _notify_changes(changes: list[dict]) -> None:
+    """Slack summary of one batch. ROSTER_CHANGE_WEBHOOK_URL, else the outage
+    webhook; silent no-op if neither is set."""
+    webhook = (os.getenv("ROSTER_CHANGE_WEBHOOK_URL", "").strip()
+               or os.getenv("ROSTER_ALERT_WEBHOOK_URL", "").strip())
+    if not webhook:
+        return
+    lines = [f"• {c['message']}" for c in changes[:20]]
+    if len(changes) > 20:
+        lines.append(f"• …and {len(changes) - 20} more (GET /api/roster/recent-changes)")
+    _post_slack(webhook, ":busts_in_silhouette: MoneyPenny Dashboard: roster changes "
+                         "detected in Timesheets.com\n" + "\n".join(lines))
+
+
+def get_recent_changes(limit: int = CHANGE_HISTORY_MAX) -> dict:
+    with _lock:
+        if not _change_state["loaded"]:
+            _load_change_state()
+        items = list(reversed(_changes))[:max(0, limit)]
+        return {"count": len(items), "last_change_at": _change_state["last_change_at"],
+                "baseline_established": _change_state["snapshot"] is not None,
+                "changes": items}
+
+
+# ── Health + fallback drift ───────────────────────────────────────
+def _drift_summary(teams_diff: dict) -> tuple[dict, int]:
+    per_team, total = {}, 0
+    for tid, d in teams_diff.items():
+        n = len(d["added"]) + len(d["removed"]) + len(d["unresolved_keywords"])
+        total += n
+        per_team[tid] = n
+    return per_team, total
+
+
+def get_roster_health() -> dict:
+    """One call for the admin health widget: sync state, per-team live vs
+    fallback counts, recent changes and anything an admin should act on."""
+    status = get_roster_status()
+    now = _now()
+    with _lock:
+        payload, users = _roster_cache["data"], _roster_cache["users"]
+        last_ok = _health.get("last_successful_fetch")
+        nxt = _health.get("next_retry")
+        if not _change_state["loaded"]:
+            _load_change_state()
+        changes = list(_changes)
+        last_change_at = _change_state["last_change_at"]
+
+    source = status["current_source"]
+    age = status["cache_age_seconds"]
+    # The loop ticks every TTL and a rebuild (90 days of rows) takes a while,
+    # so allow two intervals before calling the cache stalled.
+    fresh = age is not None and age <= 2 * CACHE_TTL_SECONDS + 60
+    healthy = source == "live" and status["consecutive_failures"] == 0 and fresh
+
+    if nxt:
+        next_sync = nxt
+    elif last_ok:
+        next_sync = max(now, last_ok + timedelta(seconds=CACHE_TTL_SECONDS))
+    else:
+        next_sync = None
+
+    team_counts, drift_total = {}, None
+    if payload and users:
+        teams_diff = _fallback_team_diff(payload, users)
+        per_team, drift_total = _drift_summary(teams_diff)
+        for tid, d in teams_diff.items():
+            team_counts[tid] = {"live": d["new_count"], "fallback": d["old_count"],
+                                "differs": per_team[tid] > 0}
+
+    warnings: list[str] = []
+    if not status["enabled"]:
+        warnings.append("DYNAMIC_ROSTER_ENABLED is off — the dashboard uses the "
+                        "hardcoded roster, not Timesheets.com.")
+    if source == "fallback":
+        warnings.append("Timesheets.com unreachable and nothing cached — using the "
+                        "hardcoded fallback roster.")
+    elif source == "stale_cache":
+        warnings.append(f"Timesheets.com sync failing — serving the roster cached "
+                        f"{(age or 0) // 60} min ago.")
+    elif source == "live" and not fresh:
+        warnings.append(f"Roster cache is {(age or 0) // 60} min old — the background "
+                        f"sync may have stalled.")
+    if status["consecutive_failures"]:
+        warnings.append(f"{status['consecutive_failures']} consecutive sync failures; "
+                        f"last error: {status['last_error']}")
+    if drift_total is not None and drift_total > FALLBACK_DRIFT_THRESHOLD:
+        warnings.append(f"Hardcoded fallback roster is {drift_total} member differences "
+                        f"behind live data — see /api/roster/fallback-drift.")
+    for tid, t in ((payload or {}).get("raw_teams") or {}).items():
+        if t.get("missing_lead"):
+            warnings.append(f"{tid}: team lead not found in Timesheets.com.")
+        elif not t.get("members"):
+            warnings.append(f"{tid}: no active members.")
+    for t in (payload or {}).get("unmapped_teams") or []:
+        warnings.append(f"Unmapped team: {t['lead_name']} has {t['member_count']} active "
+                        f"report(s) but no dashboard team.")
+
+    week_ago = (now - timedelta(days=7)).isoformat(timespec="seconds")
+    return {
+        "sync_healthy": healthy,
+        "current_source": source,
+        "enabled": status["enabled"],
+        "last_sync": status["last_successful_fetch"],
+        "next_sync": next_sync.isoformat() if isinstance(next_sync, datetime) else None,
+        "sync_interval_seconds": CACHE_TTL_SECONDS,
+        "cache_age_seconds": age,
+        "consecutive_failures": status["consecutive_failures"],
+        "last_error": status["last_error"],
+        "degraded_since": status["degraded_since"],
+        "warnings": warnings,
+        "team_counts": team_counts,
+        "fallback_drift_total": drift_total,
+        "fallback_significantly_behind": (drift_total or 0) > FALLBACK_DRIFT_THRESHOLD,
+        "recent_changes_count": sum(1 for c in changes if c.get("at", "") >= week_ago),
+        "recent_changes_window_days": 7,
+        "last_change_at": last_change_at,
+    }
+
+
+def build_fallback_drift() -> dict:
+    """How far the hardcoded FALLBACK_TEAM_ROSTERS has fallen behind live data,
+    with a ready-to-paste replacement generated from the live roster."""
+    env = get_dynamic_roster()
+    if env["source"] == "fallback":
+        return {"error": "no live data available — cannot measure drift",
+                "status": get_roster_status()}
+    payload = env["data"]
+    users = _roster_cache.get("users") or _fetch_users()
+    teams_diff = _fallback_team_diff(payload, users)
+    per_team, total = _drift_summary(teams_diff)
+
+    out_of_date = {
+        tid: {"differences": per_team[tid], "fallback_count": d["old_count"],
+              "live_count": d["new_count"], "missing_from_fallback": d["added"],
+              "no_longer_live": d["removed"],
+              "keywords_matching_nobody": d["unresolved_keywords"]}
+        for tid, d in teams_diff.items() if per_team[tid]
+    }
+    order = _cfg["team_order"] or sorted(payload["TEAM_ROSTERS"])
+    rec_rosters = {t: payload["TEAM_ROSTERS"][t] for t in order if t in payload["TEAM_ROSTERS"]}
+    rec_members = {t: payload["TEAM_MEMBERS"][t] for t in order if t in payload["TEAM_MEMBERS"]}
+
+    def as_python(name: str, d: dict) -> str:
+        lines = [f"{name}: dict[str, list[str]] = {{"]
+        lines += [f"    {k!r}: {v!r}," for k, v in d.items()]
+        return "\n".join(lines + ["}"])
+
+    return {
+        "source": env["source"],
+        "live_as_of": env["last_updated"],
+        "total_differences": total,
+        "threshold": FALLBACK_DRIFT_THRESHOLD,
+        "significantly_behind": total > FALLBACK_DRIFT_THRESHOLD,
+        "teams_out_of_date": out_of_date,
+        "teams_up_to_date": sorted(t for t in teams_diff if not per_team[t]),
+        "recommended": {"FALLBACK_TEAM_ROSTERS": rec_rosters,
+                        "FALLBACK_TEAM_MEMBERS": rec_members},
+        "recommended_python": as_python("FALLBACK_TEAM_ROSTERS", rec_rosters),
+        "notice": ("The fallback is only served when Timesheets.com is down with no "
+                   "warm cache, so drift is harmless day to day — but during an outage "
+                   "it IS the roster. Refresh FALLBACK_TEAM_ROSTERS in backend/main.py "
+                   "from `recommended_python` monthly, or whenever this reports "
+                   "significantly_behind."),
     }

@@ -47,3 +47,6 @@ Thumbs.db
 deploy/aws/*.pem
 deploy/aws/.env
 deploy/aws/instance-info.txt
+
+# Roster change history + snapshot (staff names) — runtime state, repo is public.
+backend/logs/

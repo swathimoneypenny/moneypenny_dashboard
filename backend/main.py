@@ -4295,11 +4295,15 @@ def ts_headers() -> dict:
     }
 
 
-def _get_users_cached():
-    """Return cached users list; fetch once per USERS_TTL_SECS."""
+def _get_users_cached(max_age: float | None = None):
+    """Return cached users list; fetch once per USERS_TTL_SECS (or max_age).
+
+    On failure returns None and leaves the previous list in USERS_CACHE, with
+    the reason in USERS_CACHE["last_error"]."""
     now = datetime.now()
+    ttl = USERS_TTL_SECS if max_age is None else max_age
     if USERS_CACHE["data"] is not None and USERS_CACHE["at"] \
-            and (now - USERS_CACHE["at"]).total_seconds() < USERS_TTL_SECS:
+            and (now - USERS_CACHE["at"]).total_seconds() < ttl:
         return USERS_CACHE["data"]
     t0 = time.perf_counter()
     for attempt in range(2):
@@ -4314,17 +4318,21 @@ def _get_users_cached():
                     print("[fetch_timesheet] users rate limited, waiting 60s...")
                     time.sleep(60)
                     continue
+                USERS_CACHE["last_error"] = "HTTP 420 (rate limited)"
                 return None
             if resp.status_code != 200:
                 print(f"[fetch_timesheet] users API status={resp.status_code} body={resp.text[:200]}")
+                USERS_CACHE["last_error"] = f"HTTP {resp.status_code}"
                 return None
             users = resp.json()["data"]["users"]["Data"]
             USERS_CACHE["data"] = users
             USERS_CACHE["at"]   = now
+            USERS_CACHE["last_error"] = None
             print(f"[PERF] users fetch {time.perf_counter()-t0:.2f}s (cached for 1h)")
             return users
         except Exception as e:
             print(f"[fetch_timesheet] users error attempt {attempt}: {e}")
+            USERS_CACHE["last_error"] = f"{type(e).__name__}: {e}"
             if attempt == 0:
                 time.sleep(5)
     return None
@@ -4762,7 +4770,7 @@ TEAM_DEPT_MAP: dict[str, str] = {
 # Each user has ADMINUSERID pointing at their manager. For each team letter
 # (A..N, T) we look up the lead by first-name in the live user list, then take
 # their direct reports as the team roster.
-USERS_CACHE: dict = {"data": None, "at": None}
+USERS_CACHE: dict = {"data": None, "at": None, "last_error": None}
 USERS_TTL_SECS = 3600  # 1 hour — users change rarely
 
 TEAMS_CACHE: dict = {"data": None, "at": None}
@@ -10318,6 +10326,17 @@ def _log_auth_mode() -> None:
     print("=" * 70)
 
 
+def _roster_users_fetcher():
+    """Users for the roster sync. Capped at the roster's own 5-minute TTL: going
+    through the 1-hour USERS_TTL_SECS meant a team move in Timesheets.com took
+    up to an hour to reach the dashboard despite the 5-minute sync loop."""
+    users = _get_users_cached(max_age=dynamic_roster.CACHE_TTL_SECONDS)
+    if not users:
+        raise RuntimeError(f"Timesheets.com /users failed: "
+                           f"{USERS_CACHE.get('last_error') or 'no users returned'}")
+    return users
+
+
 def _configure_dynamic_roster() -> None:
     dynamic_roster.configure(
         team_letter_map=TEAM_LETTER_MAP,
@@ -10328,7 +10347,7 @@ def _configure_dynamic_roster() -> None:
         fallback_clients=FALLBACK_TEAM_CLIENTS,
         # Reuse the existing cached fetcher — it already handles the 420
         # rate-limit backoff and shares USERS_CACHE with discover_teams().
-        users_fetcher=_get_users_cached,
+        users_fetcher=_roster_users_fetcher,
         rows_fetcher=get_cached_rows,
         is_internal_code=is_internal_code,
         is_inactive_client=is_inactive_client,
@@ -10720,6 +10739,25 @@ def roster_status():
 def roster_diff():
     """Preview: what changes if the dynamic roster replaces the hardcoded one."""
     return dynamic_roster.build_diff()
+
+
+@app.get("/api/roster/health")
+def roster_health():
+    """Sync health, per-team live vs fallback counts, recent-change summary."""
+    return dynamic_roster.get_roster_health()
+
+
+@app.get("/api/roster/recent-changes")
+def roster_recent_changes(limit: int = 100):
+    """Member adds / removals / moves and lead changes, newest first."""
+    return dynamic_roster.get_recent_changes(
+        min(max(limit, 1), dynamic_roster.CHANGE_HISTORY_MAX))
+
+
+@app.get("/api/roster/fallback-drift")
+def roster_fallback_drift():
+    """How far FALLBACK_TEAM_ROSTERS lags live data, with a replacement to paste."""
+    return dynamic_roster.build_fallback_drift()
 
 
 @app.post("/api/roster/refresh")
