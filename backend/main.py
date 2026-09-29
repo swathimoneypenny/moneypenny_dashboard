@@ -448,7 +448,8 @@ for _tid in list(TEAM_LETTER_MAP.keys()):
 # Refresh the same way monthly, or whenever /api/roster/health reports the
 # fallback as significantly behind.
 FALLBACK_TEAM_ROSTERS: dict[str, list[str]] = {
-    "team_a": ["kokila ramachandran", "uma maheshwari elumalai"],
+    # Team A is on leave (TEAM_ON_LEAVE); Kokila returns. Uma moved to Team G.
+    "team_a": ["kokila ramachandran"],
     "team_b": ["buelaangel t", "ivanjalin sofia irudhayaraj", "pavithra srinivasan", "varshini natarajan"],
     "team_c": [
         "grace god's",
@@ -459,17 +460,15 @@ FALLBACK_TEAM_ROSTERS: dict[str, list[str]] = {
     "team_d": [
         "chandralekha vijay anand",
         "abirami radha",
-        "dharani sekar",
         "keethika prakash",
         "krithiga dhandapani",
         "sandhiya jothi",
-        "sharmila gunasekaran",
         "sirisha mallireddy",
         "swetha sagada",
         "yamini sathishkumar",
     ],
     "team_e": ["shaalini selvam", "preethi vkumar"],
-    "team_f": ["inbamozhi nithyanandham", "sarika mani", "sharumathi jawahar"],
+    "team_f": ["inbamozhi nithyanandham", "jeevitha elumalai", "sarika mani", "sharumathi jawahar"],
     "team_t": [
         "pragathi selvaraj",
         "akshaya manojkumar",
@@ -488,10 +487,10 @@ FALLBACK_TEAM_ROSTERS: dict[str, list[str]] = {
         "indra vijayababu",
         "nidishablessy biju",
         "pechiammal selvam",
+        "uma maheshwari elumalai",
     ],
     "team_h": ["deepali vimalchand jain", "madumitha loganadin", "yashika bhaskar"],
-    # Shivani / Jeevitha are forced here by TEAM_MEMBER_OVERRIDES (dynamic_roster.py).
-    "team_i": ["krishna narayanan", "jayashree boopathy", "shivani mohan", "jeevitha elumalai"],
+    "team_i": ["krishna narayanan", "jayashree boopathy"],
     "team_j": [
         "logeshwari balaji",
         "dhanalakshmi rukmangathan",
@@ -509,7 +508,7 @@ FALLBACK_TEAM_ROSTERS: dict[str, list[str]] = {
     ],
     "team_l": ["nasreen fayashussain", "afrin begum", "razia hussain", "swathi yogeswaran"],
     "team_m": ["pavithira vinayaga moorthy", "bhuvaneswari balaji", "reshma lakshmanaboopathi"],
-    "team_n": ["vinodhini balaji", "saniya fathima", "snega murali"],
+    "team_n": ["vinodhini balaji", "saniya fathima", "shivani mohan", "snega murali"],
 }
 # ACTIVE roster. Seeded from the fallback, then replaced in place by
 # _apply_dynamic_roster() once Timesheets.com data is available. Mutated rather
@@ -537,22 +536,66 @@ if len(TEAM_ROSTERS.get("team_t", [])) <= 1:
 # the fallback roster. Replaced by live counts once the dynamic roster loads.
 # Matches FALLBACK_TEAM_ROSTERS as regenerated on 2026-09-28.
 TEAM_EXPECTED_COUNTS: dict[str, int] = {
-    "team_a": 2,
+    "team_a": 1,
     "team_b": 4,
     "team_c": 4,
-    "team_d": 10,
+    "team_d": 8,
     "team_e": 2,
-    "team_f": 3,
+    "team_f": 4,
     "team_t": 8,
-    "team_g": 5,
+    "team_g": 6,
     "team_h": 3,
-    "team_i": 4,
+    "team_i": 2,
     "team_j": 5,
     "team_k": 6,
     "team_l": 4,
     "team_m": 3,
-    "team_n": 3,
+    "team_n": 4,
 }
+
+# Teams temporarily without anyone working. The team card stays on the Home page
+# with an "On Leave" badge, and every team data view returns an empty on-leave
+# payload instead of members / clients. Delete the entry when the team is back;
+# the roster repopulates from Timesheets.com on its own. Logins are untouched.
+TEAM_ON_LEAVE: dict[str, dict] = {
+    "team_a": {
+        "reason": "Team on leave - Kokila returning soon",
+        "since": "2026-09-29",
+    },
+}
+
+
+def _on_leave_response(team_id: str, cfg: dict, label: str, leave: dict) -> dict:
+    """Team payload for a team in TEAM_ON_LEAVE: no roster, no clients, no error."""
+    team_label = cfg.get("label", team_id)
+    return {
+        "team":             team_label,
+        "teamId":           team_id,
+        "teamLabel":        team_label,
+        "lead":             "",
+        "leadName":         "",
+        "period":           label,
+        "status":           "on_leave",
+        "onLeave":          True,
+        "leaveReason":      leave.get("reason", "Team on leave"),
+        "leaveSince":       leave.get("since"),
+        "roster":           [],
+        "rosterCount":      0,
+        "totalRows":        0,
+        "matchedRows":      0,
+        "needsRosterSetup": False,
+        "fetchError":       False,
+        "staffFound":       [],
+        "formerStaffFound": [],
+        "clients":          [],
+        "organizations":    [],
+        "summary": {
+            "totalCommitted": 0, "totalCommittedFull": 0, "totalBillable": 0,
+            "totalNonBillable": 0, "totalInternal": 0, "totalUtilized": 0,
+            "memberCount": 0, "totalDelays": 0,
+        },
+    }
+
 
 # Recurring team-meeting schedule — drives the /meeting-status endpoint + the
 # dashboard meeting banner. `day` is a weekday name; `time` is a display string
@@ -638,16 +681,35 @@ UNCATEGORIZED_CLIENTS = [
 ]
 
 
-# Committed hours now come from each client's BOD/EOD "Committed Hours" column
-# (cumulative running total) — see _eod_committed_for_org. The old hardcoded
-# CLIENT_MONTHLY_COMMITTED override was removed 2026-06-17 in favour of that
-# authoritative per-client source.
+# Committed hours come from each client's estHrs below, taken from the Whale
+# "Organization Structure" PDF (2026-09-29). The full figure is displayed as
+# Committed; efficiency and status use it pro-rated by working days elapsed
+# (committedToDate). The BOD/EOD "Committed Hours" column is no longer
+# consulted — see _fixed_committed_for_client.
 
 
 # ── Curated team → client mapping ────────────────────────────────
 # Per-team list of clients. tsMatch = case-insensitive substring keywords
-# against CUSTOMERNAME (or WORKDESCRIPTION as fallback). estHrs = monthly
-# commitment.
+# against CUSTOMERNAME (or WORKDESCRIPTION as fallback). estHrs = the monthly
+# commitment from the PDF's "EST Hrs" column.
+#
+# Source of truth: Whale "Organization Structure" PDF, applied 2026-09-29 with
+# the user's decisions on the conflicts it raised. Names are kept where the PDF
+# only spells a client differently (e.g. "Equity Champions" vs "Equity Champs"),
+# because the BOD/EOD and Delays tab lookups resolve by these names.
+#
+# billing: "hourly" = PDF "Hr" (billed by the hour, no monthly commitment);
+#          "tax"    = PDF "TX" (tax-season work, no monthly commitment).
+# Both carry estHrs = 0 — estHrs must always be a NUMBER, because committed
+# hours, efficiency and the client dashboard target all do arithmetic on it.
+#
+# Clients on two teams (bookkeeping + tax): Officeheads, Tim Thompson, Manzelli,
+# Neve, Financial Synergy. Hours are assigned to a team by WHO logged them
+# (assign_row_to_team) before any client matching, so the same row can never
+# count on both teams. Team T's entries deliberately use the SAME keywords as
+# the bookkeeping team's: find_team_for_client breaks ties in team order, so the
+# client's owner (used for the client dashboard target) stays the bookkeeping
+# team. Don't give Team T a longer alias for these.
 #
 # This stays hand-curated: estHrs / tz / meeting / tsMatch have NO equivalent
 # in the Timesheets.com API (there is no customer endpoint at all — it 404s).
@@ -656,82 +718,60 @@ UNCATEGORIZED_CLIENTS = [
 # and never removes or rewrites a curated entry.
 FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
     "team_a": [
-        # Bookkeeping Doctor removed 2026-09-29 — client left MPLLC (see INACTIVE_CLIENTS).
-        {"name": "Ollin Balance",        "tsMatch": ["Ollin Balance", "Ollinbalance", "Ollin"],                  "estHrs": 160, "tz": "EST", "meeting": "4th week Tuesday 4:30pm IST"},
-        # 24hr Bookkeeper removed 2026-08-10 — the client left MPLLC. Also added
-        # to INACTIVE_CLIENTS so lingering historical rows stop counting, and its
-        # BOD/EOD + Delays tab gids were dropped below.
+        # Team A is on leave (TEAM_ON_LEAVE) and has no clients.
+        # Ollin Balance moved to Team G 2026-09-29 — Team G does ~90% of the work.
+        # Bookkeeping Doctor and 24hr Bookkeeper left MPLLC (see INACTIVE_CLIENTS).
     ],
     "team_b": [
-        {"name": "NisiVoccia",           "tsMatch": ["NisiVoccia"],                            "estHrs": 120, "tz": "EST", "meeting": "3rd week Thursday 6:30pm IST"},
+        {"name": "NisiVoccia",           "tsMatch": ["NisiVoccia"],                            "estHrs": 100, "tz": "EST", "meeting": "3rd week Thursday 6:30pm IST"},
         {"name": "Katy Advisors",        "tsMatch": ["Katy Advisors"],                         "estHrs": 80,  "tz": "CST", "meeting": "Every Wednesday 5pm IST"},
-        {"name": "CBMS",                 "tsMatch": ["CBMS", "MyProsperityTree"],              "estHrs": 120, "tz": "EST", "meeting": "No scheduled meeting"},
-        {"name": "Back Office People",   "tsMatch": ["Back Office People"],                    "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "CBMS",                 "tsMatch": ["CBMS", "MyProsperityTree"],              "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "Back Office People",   "tsMatch": ["Back Office People"],                    "estHrs": 120, "tz": "PST", "meeting": "No scheduled meeting"},
     ],
     "team_c": [
         {"name": "Stay by Rafa",         "tsMatch": ["Stay by Rafa"],                          "estHrs": 80,  "tz": "EST", "meeting": "No scheduled meeting"},
         {"name": "Financial Synergy",    "tsMatch": ["Financial Synergy"],                     "estHrs": 120, "tz": "CST", "meeting": "No scheduled meeting"},
-        {"name": "Neve",                 "tsMatch": ["Neve"],                                  "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "Neve",                 "tsMatch": ["Neve"],                                  "estHrs": 40,  "tz": "EST", "meeting": "No scheduled meeting"},
         {"name": "Sambrano Services",    "tsMatch": ["Sambrano"],                              "estHrs": 60,  "tz": "PST", "meeting": "No scheduled meeting"},
         {"name": "RDG Tax Group",        "tsMatch": ["RDG"],                                   "estHrs": 60,  "tz": "CST", "meeting": "No scheduled meeting"},
-        # Moved from team_m 2026-08-17 — Team C logs 87% of this client's hours
-        # (111.7h) and Team M logs none, so the curated owner was wrong.
-        {"name": "Radicle Science",      "tsMatch": ["Radicle"],                               "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "Radicle Science",      "tsMatch": ["Radicle"],                               "estHrs": 60,  "tz": "PST", "meeting": "No scheduled meeting"},
     ],
     "team_d": [
-        {"name": "Financly",             "tsMatch": ["Financly"],                              "estHrs": 400, "tz": "EST", "meeting": "No scheduled meeting"},
-        {"name": "AIS Solutions",        "tsMatch": ["AIS Solutions", "AIS"],                  "estHrs": 480, "tz": "PST", "meeting": "No scheduled meeting"},
-        {"name": "Smith Bookkeeping",    "tsMatch": ["Smith Bookkeeping"],                     "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
+        # Smith Bookkeeping dropped 2026-09-29 — not in the PDF.
+        {"name": "Financly",             "tsMatch": ["Financly"],                              "estHrs": 320, "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "AIS Solutions",        "tsMatch": ["AIS Solutions", "AIS"],                  "estHrs": 560, "tz": "PST", "meeting": "Bi-weekly every Thursday"},
     ],
     "team_e": [
-        {"name": "ACS",                  "tsMatch": ["ACS"],                                   "estHrs": 320, "tz": "PST", "meeting": "No scheduled meeting"},
+        # Was named "ACS" with tsMatch ["ACS"], which never matched the real
+        # customer "ASC Custom Books" (letters transposed).
+        {"name": "ASC Custom Books",     "tsMatch": ["ASC Custom Books", "ASC"],               "estHrs": 320, "tz": "PST", "meeting": "No scheduled meeting"},
     ],
     "team_f": [
-        # Thrive removed 2026-06-19 — inactive (also in INACTIVE_CLIENTS).
-        # Scotts Laws + Pereira Azevedo are Team F's real clients; configured so
-        # they always show with committed from their BOD/EOD tabs (estHrs=0 →
-        # committed resolves from the sheet, not the member×preparer fallback).
-        {"name": "Scotts Laws",          "tsMatch": ["Scotts Laws", "Scotts"],                 "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
-        {"name": "Pereira Azevedo",       "tsMatch": ["Pereira Azevedo", "Pereira", "Azevedo"], "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
-        # Added 2026-08-10 — Team F's permanent client, previously unconfigured.
-        # Until now find_team_for_client("Inspire Advisors & CPA") returned None,
-        # so its hours were unowned: 6.3h on Team F plus 5.2h logged by Team A.
-        # With Team F as owner, Team A's share is correctly cross-team help.
-        # TODO(ops): supply the BOD/EOD + Delays tab gids for this client so
-        # committed hours resolve from the sheet instead of the member×preparer
-        # fallback — see BOD_EOD_TAB_GIDS["team_f"] / DELAYS_TAB_GIDS["team_f"].
-        {"name": "Inspire Advisors & CPA", "tsMatch": ["Inspire Advisors & CPA", "Inspire Advisors", "Inspire"], "estHrs": 0, "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "Pereira Azevedo",      "tsMatch": ["Pereira Azevedo", "Pereira", "Azevedo"], "estHrs": 80,  "tz": "PST", "meeting": "First and Third Wednesday of month"},
+        {"name": "Scotts Laws",          "tsMatch": ["Scotts Laws", "Scotts"],                 "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting", "billing": "hourly"},
+        {"name": "Inspire Advisors & CPA", "tsMatch": ["Inspire Advisors & CPA", "Inspire Advisors", "Inspire"], "estHrs": 80, "tz": "EST", "meeting": "No scheduled meeting"},
+        # Moved from Team I 2026-09-29 per the PDF.
+        {"name": "SoCo",                 "tsMatch": ["SoCo", "SoCo Business"],                 "estHrs": 200, "tz": "CST", "meeting": "No scheduled meeting"},
     ],
     "team_g": [
-        {"name": "Ez Ledger",            "tsMatch": ["Ez Ledger", "EZ Ledger", "EzLedger"],    "estHrs": 320, "tz": "EST", "meeting": "Every Friday 8:30 AM IST (11:00 PM EST Thursday)"},
-        # Mintage + Artesani split out into their own entries 2026-08-10 — they are
-        # separate clients with their own BOD/EOD and Delays tabs, and folding them
-        # into Proper Trust's tsMatch merged three clients' hours into one row.
-        {"name": "Proper Trust",         "tsMatch": ["Proper Trust", "ProperTrust"],           "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
-        {"name": "Mintage",              "tsMatch": ["Mintage"],                               "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
-        {"name": "Artesani",             "tsMatch": ["Artesani"],                              "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
-        {"name": "Putman Accountancy",   "tsMatch": ["Putman"],                                "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
-        # Keyword broadened to "Manzelli" 2026-06-19 — the old "Manzelli Consulting"
-        # keyword is LONGER than the timesheet customer (e.g. "Jeo Manzelli"/"Manzelli"),
-        # so those rows failed the forward match and the org under-counted hours
-        # (reported 43.49h vs 47h actual). "Manzelli" forward-matches every variant.
-        {"name": "Manzelli Consulting",  "tsMatch": ["Manzelli"],                              "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
-        # Moved from team_m 2026-08-17 — Hema handles it, and team_g already had
-        # its BOD/EOD + Delays tabs. Billed hourly, so there is no monthly
-        # commitment: estHrs stays the NUMBER 0 and "billing" carries the label.
-        # estHrs must never be a string — _team_response does `(estHrs or 0) > 0`
-        # and `estHrs / 160`, so "Hr" would raise TypeError and break the report.
+        {"name": "Ez Ledger",            "tsMatch": ["Ez Ledger", "EZ Ledger", "EzLedger"],    "estHrs": 240, "tz": "EST", "meeting": "Every Friday 8:30 AM IST (11:00 PM EST Thursday)"},
+        # Proper Trust, Mintage and Artesani are all billed under Proper Trust
+        # (PDF), so they share one row and one 160h commitment.
+        {"name": "Proper Trust",         "tsMatch": ["Proper Trust", "ProperTrust", "Mintage", "Artesani"], "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "Putman Accountancy",   "tsMatch": ["Putman"],                                "estHrs": 40,  "tz": "PST", "meeting": "No scheduled meeting"},
+        # Moved from Team A 2026-09-29 — Team G does ~90% of the work.
+        {"name": "Ollin Balance",        "tsMatch": ["Ollin Balance", "Ollinbalance", "Ollin"], "estHrs": 160, "tz": "EST", "meeting": "4th week Tuesday 4:30pm IST"},
+        # Bookkeeping side of Manzelli; Team T holds the tax side ("Joe Manzelli").
+        # "Manzelli" forward-matches every customer spelling seen so far.
+        {"name": "Manzelli Consulting",  "tsMatch": ["Manzelli"],                              "estHrs": 120, "tz": "EST", "meeting": "No scheduled meeting"},
         {"name": "Oh My ROI",            "tsMatch": ["Oh My ROI", "OhMyROI"],                  "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting", "billing": "hourly"},
     ],
     "team_h": [
-        {"name": "JB Advisory",          "tsMatch": ["JB Advisory"],                           "estHrs": 176, "tz": "MST", "meeting": "Every Tuesday and Thursday 5:30pm IST"},
+        {"name": "JB Advisory",          "tsMatch": ["JB Advisory"],                           "estHrs": 320, "tz": "MST", "meeting": "Every Tuesday and Thursday 9:00 AM IST"},
     ],
     "team_i": [
-        # Beacon Advisors (Team N) and Pokorny (Team M) removed 2026-06-18 — they
-        # don't belong to Team I and were showing as 0-hour clutter rows.
-        {"name": "Core 4",               "tsMatch": ["Core 4"],                                "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
-        {"name": "SoCo",                 "tsMatch": ["SoCo", "SoCo Business"],                 "estHrs": 160, "tz": "CST", "meeting": "No scheduled meeting"},
-        {"name": "Redmond",              "tsMatch": ["Redmond"],                               "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
+        # Core 4 moved to Team N and SoCo to Team F 2026-09-29 per the PDF.
+        {"name": "Redmond",              "tsMatch": ["Redmond"],                               "estHrs": 160, "tz": "PST", "meeting": "No scheduled meeting"},
     ],
     "team_j": [
         {"name": "GFA",                  "tsMatch": ["GFA", "Go Figure", "Go Figure Accounting"], "estHrs": 640, "tz": "EST", "meeting": "Monthly 3rd week Thursday 5:30pm IST"},
@@ -743,70 +783,58 @@ FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
     ],
     "team_l": [
         {"name": "Taxsense",             "tsMatch": ["Taxsense"],                              "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
+        # Officeheads: Team L bookkeeping, Team T tax filing.
         {"name": "Officeheads",          "tsMatch": ["Officeheads"],                           "estHrs": 80,  "tz": "CST", "meeting": "No scheduled meeting"},
         {"name": "Web Books",            "tsMatch": ["Web Books"],                             "estHrs": 80,  "tz": "EST", "meeting": "No scheduled meeting"},
         {"name": "Baker Bookkeeps",      "tsMatch": ["Baker Bookkeeps", "Baker"],              "estHrs": 80,  "tz": "CST", "meeting": "No scheduled meeting"},
-        {"name": "LAH",                  "tsMatch": ["LAH"],                                   "estHrs": 80,  "tz": "EST", "meeting": "No scheduled meeting"},
-        # Moved from team_m 2026-08-17 — Team L logs 100% of this client's hours
-        # (31.0h) and Team M logs none.
-        {"name": "SDC Group",            "tsMatch": ["SDC"],                                   "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
-        # Added 2026-08-17 — real client, 12.2h logged in the last 90 days.
-        # TODO(ops): supply BOD/EOD + Delays tab gids so committed resolves from
-        # the sheet instead of the member x per-preparer fallback.
         {"name": "Debra Angiletti",      "tsMatch": ["Debra Angiletti", "Angiletti", "Debra"],  "estHrs": 0,   "tz": "CST", "meeting": "No scheduled meeting", "billing": "hourly"},
+        {"name": "LAH",                  "tsMatch": ["LAH"],                                   "estHrs": 80,  "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "SDC Group",            "tsMatch": ["SDC"],                                   "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting", "billing": "hourly"},
     ],
     "team_m": [
-        {"name": "ABS",                  "tsMatch": ["ABS"],                                   "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
-        {"name": "Taxes with Jones",     "tsMatch": ["Taxes with Jones"],                      "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
-        {"name": "Equity Champions",     "tsMatch": ["Equity Champ"],                          "estHrs": 0,   "tz": "EST", "meeting": "Every Thursday 4:30pm IST"},
-        {"name": "DAA CPA",              "tsMatch": ["DAA CPA", "DAA"],                        "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
-        {"name": "Helvetica",            "tsMatch": ["Helvetica"],                             "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
-        # One client, two names. Timesheet rows come in as "Portrai Me" (22.2h in
-        # the last 90 days); "Shane Butler" is the BOD/EOD + Delays tab naming and
-        # has no rows of its own. Both aliases resolve to this single bucket, so
-        # deduping does not orphan the hours.
-        {"name": "Shane Butler",         "tsMatch": ["Shane Butler", "Portrai Me", "Portrai"],  "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
-        {"name": "Sybilline Records",    "tsMatch": ["Sybilline", "Sybylline"],                "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
-        # Added 2026-08-17 per the TL's client list. Kacey already had BOD/EOD
-        # ("Kacey Fitz") and Delays ("kacey") tabs on Team M's sheet.
+        # "ABS" alone also matched "Mintage Labs" (l-ABS); the customer is
+        # "ABS-Accounting Benefit Solutions (ABS)".
+        {"name": "ABS",                  "tsMatch": ["Accounting Benefit"],                    "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "Pokorny CPAs",         "tsMatch": ["Pokorny"],                               "estHrs": 60,  "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "Taxes with Jones",     "tsMatch": ["Taxes with Jones"],                      "estHrs": 80,  "tz": "PST", "meeting": "No scheduled meeting"},
+        {"name": "Equity Champions",     "tsMatch": ["Equity Champ"],                          "estHrs": 0,   "tz": "EST", "meeting": "Every Thursday 4:30pm IST", "billing": "hourly"},
+        # "DAA" alone also matched Team L's "DAA-Debra Angiletti"; this client's
+        # customer is "DAC-DAA CPA".
+        {"name": "DAA CPA",              "tsMatch": ["DAA CPA"],                               "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting", "billing": "hourly"},
+        {"name": "Helvetica",            "tsMatch": ["Helvetica"],                             "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting", "billing": "hourly"},
+        # One client, two names: timesheet rows come in as "Portrai Me"; "Shane
+        # Butler" is the BOD/EOD + Delays tab naming.
+        {"name": "Shane Butler",         "tsMatch": ["Shane Butler", "Portrai Me", "Portrai"],  "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting", "billing": "hourly"},
+        {"name": "Sybilline Records",    "tsMatch": ["Sybilline", "Sybylline"],                "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting", "billing": "hourly"},
+        # Not in the PDF, kept per the user 2026-09-29 (TL's list, 2026-08-17).
         {"name": "Kacey Fitzpatrick",    "tsMatch": ["Kacey Fitzpatrick", "Kacey"],            "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting", "billing": "hourly"},
-        # NB the only Malmi hours in the last 90 days (0.5h) were logged by a
-        # Team L member, not Team M. Added here per the TL; that stray 0.5h now
-        # reads as cross-team help on Team L.
         {"name": "Malmi",                "tsMatch": ["Malmi"],                                 "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting", "billing": "hourly"},
-        # Curated 2026-08-17 — previously only activity-discovered, so they would
-        # have dropped off the list if their hours ever fell under the 20h
-        # discovery floor. The TL confirms both are permanent.
-        {"name": "Pokorny CPAs",         "tsMatch": ["Pokorny"],                               "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
         {"name": "Happy Soul",           "tsMatch": ["Happy Soul"],                            "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting"},
     ],
     "team_n": [
-        # BKP Repair / Bookkeeping Repair LLC removed — inactive client (see INACTIVE_CLIENTS).
+        # Bookkeeping side of Tim Thompson; Team T holds the tax side.
         {"name": "Tim Thompson",         "tsMatch": ["Tim Thompson"],                          "estHrs": 40,  "tz": "CST", "meeting": "No scheduled meeting"},
-        {"name": "Beacon Advisors",      "tsMatch": ["Beacon Advisor", "Beacon"],              "estHrs": 0,   "tz": "CST", "meeting": "No scheduled meeting"},
-        {"name": "FitProfit Solutions",  "tsMatch": ["FitProfit"],                             "estHrs": 0,   "tz": "CST", "meeting": "No scheduled meeting"},
+        {"name": "Beacon Advisors",      "tsMatch": ["Beacon Advisor", "Beacon"],              "estHrs": 120, "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "FitProfit Solutions",  "tsMatch": ["FitProfit"],                             "estHrs": 80,  "tz": "CST", "meeting": "No scheduled meeting"},
+        # Moved from Team I 2026-09-29 per the PDF.
+        {"name": "Core 4",               "tsMatch": ["Core 4"],                                "estHrs": 100, "tz": "PST", "meeting": "No scheduled meeting"},
     ],
     "team_t": [
         {"name": "Wiebe Hinton Hambalek","tsMatch": ["Wiebe", "Hinton Hambalek"],              "estHrs": 960, "tz": "PST", "meeting": "No scheduled meeting"},
-        {"name": "Jim Baltimore",        "tsMatch": ["Jim Baltimore"],                         "estHrs": 0,   "tz": "MST", "meeting": "No scheduled meeting"},
-        {"name": "Tim Thompson TX",      "tsMatch": ["Tim Thompson TX"],                       "estHrs": 0,   "tz": "CST", "meeting": "No scheduled meeting"},
-        {"name": "Joe Manzelli",         "tsMatch": ["Joe Manzelli"],                          "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
-        {"name": "Business Fitness",     "tsMatch": ["Business Fitness"],                      "estHrs": 0,   "tz": "AEST","meeting": "No scheduled meeting"},
-        {"name": "David Beck",           "tsMatch": ["David Beck"],                            "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting"},
-        # Named to match Team T's own BOD/EOD tabs ("OfficeHeads" and
-        # "M CTax Advisors"), which is what makes committed hours resolve from
-        # the sheet: _resolve_bod_eod_gid normalizes both sides, so
-        # "MC Tax Advisors" == "M CTax Advisors" and "Officeheads" is a
-        # substring of "Officeheads, Inc".
-        #
-        # "Officeheads, Inc" is the same customer record Team L logs against
-        # (194h in 90 days). Both teams are configured for it, and client
-        # resolution is per-team, so it correctly shows on both dashboards —
-        # the same arrangement as Neve Group across teams C and T.
-        {"name": "Officeheads, Inc.",    "tsMatch": ["Officeheads, Inc", "Officeheads Inc", "Officeheads"], "estHrs": 0, "tz": "CST", "meeting": "No scheduled meeting"},
-        # Moved off Team M 2026-08-17. No timesheet rows under any spelling yet,
-        # so it will read "No activity" until work is logged.
-        {"name": "MC Tax Advisors",      "tsMatch": ["MC Tax Advisors", "MCTax Advisors", "MC Tax"], "estHrs": 0, "tz": "CST", "meeting": "No scheduled meeting"},
+        # Tax side of clients another team keeps for bookkeeping. Same keywords as
+        # the bookkeeping team on purpose — see the header note.
+        {"name": "Neve",                 "tsMatch": ["Neve"],                                  "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting", "billing": "tax"},
+        {"name": "Financial Synergy",    "tsMatch": ["Financial Synergy"],                     "estHrs": 0,   "tz": "CST", "meeting": "Last day of the month 5pm IST", "billing": "tax"},
+        {"name": "Tim Thompson",         "tsMatch": ["Tim Thompson"],                          "estHrs": 0,   "tz": "CST", "meeting": "No scheduled meeting", "billing": "tax"},
+        {"name": "Joe Manzelli",         "tsMatch": ["Manzelli"],                              "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting", "billing": "tax"},
+        # Officeheads: Team L bookkeeping, Team T tax filing. Named to match Team
+        # T's own BOD/EOD tab ("OfficeHeads").
+        {"name": "Officeheads, Inc.",    "tsMatch": ["Officeheads"],                           "estHrs": 0,   "tz": "CST", "meeting": "No scheduled meeting", "billing": "tax"},
+        {"name": "MC Tax Advisors",      "tsMatch": ["MC Tax Advisors", "MCTax Advisors", "MC Tax"], "estHrs": 0, "tz": "CST", "meeting": "No scheduled meeting", "billing": "tax"},
+        {"name": "We Add Value",         "tsMatch": ["We Add Value"],                          "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting", "billing": "hourly"},
+        {"name": "Jim Baltimore",        "tsMatch": ["Jim Baltimore"],                         "estHrs": 0,   "tz": "MST", "meeting": "No scheduled meeting", "billing": "tax"},
+        {"name": "Business Fitness",     "tsMatch": ["Business Fitness"],                      "estHrs": 0,   "tz": "AEST","meeting": "No scheduled meeting", "billing": "tax"},
+        {"name": "David Beck",           "tsMatch": ["David Beck"],                            "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting", "billing": "tax"},
     ],
 }
 
@@ -885,11 +913,12 @@ TEAM_HIDDEN_CLIENTS: dict[str, set[str]] = {
     # "SoCo" is >=4 normalized chars so the substring rule catches the full
     # "SoCo Business Solutions, Inc"; verified it matches nothing else in the
     # config. Kokila's hours on it were cross-team help for Team I.
-    # Bookkeeping Doctor left MPLLC 2026-09-29 — hidden too, so activity
-    # discovery can never re-add it even if a stray row is logged.
-    "team_a": {"Stay by Rafa", "SoCo", "Bookkeeping Doctor"},
+    # Bookkeeping Doctor left MPLLC 2026-09-29 and Ollin Balance moved to Team G
+    # the same day — both hidden so activity discovery can never re-add them.
+    "team_a": {"Stay by Rafa", "SoCo", "Bookkeeping Doctor", "Ollin Balance"},
     "team_d": {"LAH", "LAH CPA", "LAH CPAs", "L A H"}, # LAH belongs to Team L / Team T
-    "team_f": {"SoCo", "Empower Accounting"},          # SoCo→Team I, Empower→Team K
+    # SoCo is no longer hidden here: it moved to Team F per the PDF (2026-09-29).
+    "team_f": {"Empower Accounting"},                  # Empower→Team K
     # Oh My ROI moved to Team G 2026-08-17; hidden here so activity discovery
     # cannot re-add it to Team M on the next roster sync.
     "team_m": {"Oh My ROI"},
@@ -966,12 +995,9 @@ def _permanent_clients_only() -> bool:
 # fixed without touching tsMatch. Matching is the same normalized-substring rule
 # used by TEAM_HIDDEN_CLIENTS.
 TEAM_CLIENT_OVERRIDES: dict[str, set[str]] = {
-    # Team E's curated entry is {"name": "ACS", "tsMatch": ["ACS"]}, but the real
-    # customer is "ASC Custom Books" — the letters are transposed, so "acs" is
-    # NOT a substring of "asccustombooks" and it has never matched. It shows up
-    # today only because unresolved customers get an ad-hoc bucket. Without this
-    # override, PERMANENT_CLIENTS_ONLY would file Team E's single biggest client
-    # (~890h, most of their work) under Cross-Team Help.
+    # Belt and braces: Team E's entry was misnamed "ACS" (tsMatch ["ACS"]) until
+    # 2026-09-29 and never matched "ASC Custom Books". The entry is fixed now;
+    # this keeps Team E's biggest client pinned regardless.
     "team_e": {"ASC Custom Books"},
 }
 
@@ -4774,7 +4800,7 @@ def iter_rows(data) -> list[dict]:
 # Display roster (TL marked "(TL)") — chatbot context strings, and the emergency
 # fallback for the display roster. Regenerated from live data on 2026-09-28.
 FALLBACK_TEAM_MEMBERS: dict[str, list[str]] = {
-    "team_a": ["Kokila Ramachandran (TL)", "Uma Maheshwari Elumalai"],
+    "team_a": ["Kokila Ramachandran (TL)"],
     "team_b": [
         "Buelaangel T (TL)",
         "Ivanjalin Sofia Irudhayaraj",
@@ -4790,17 +4816,15 @@ FALLBACK_TEAM_MEMBERS: dict[str, list[str]] = {
     "team_d": [
         "Chandralekha Vijay Anand (TL)",
         "Abirami Radha",
-        "Dharani Sekar",
         "Keethika Prakash",
         "Krithiga Dhandapani",
         "Sandhiya Jothi",
-        "Sharmila Gunasekaran",
         "Sirisha Mallireddy",
         "Swetha Sagada",
         "Yamini Sathishkumar",
     ],
     "team_e": ["Shaalini Selvam (TL)", "Preethi Vkumar"],
-    "team_f": ["Inbamozhi Nithyanandham (TL)", "Sarika Mani", "Sharumathi Jawahar"],
+    "team_f": ["Inbamozhi Nithyanandham (TL)", "Jeevitha Elumalai", "Sarika Mani", "Sharumathi Jawahar"],
     "team_t": [
         "Pragathi Selvaraj (TL)",
         "Akshaya Manojkumar",
@@ -4817,9 +4841,10 @@ FALLBACK_TEAM_MEMBERS: dict[str, list[str]] = {
         "Indra Vijayababu",
         "Nidishablessy Biju",
         "Pechiammal Selvam",
+        "Uma Maheshwari Elumalai",
     ],
     "team_h": ["Deepali Vimalchand Jain (TL)", "Madumitha Loganadin", "Yashika Bhaskar"],
-    "team_i": ["Krishna Narayanan (TL)", "Jayashree Boopathy", "Jeevitha Elumalai", "Shivani Mohan"],
+    "team_i": ["Krishna Narayanan (TL)", "Jayashree Boopathy"],
     "team_j": [
         "Logeshwari Balaji (TL)",
         "Dhanalakshmi Rukmangathan",
@@ -4837,7 +4862,7 @@ FALLBACK_TEAM_MEMBERS: dict[str, list[str]] = {
     ],
     "team_l": ["Nasreen Fayashussain (TL)", "Afrin Begum", "Razia Hussain", "Swathi Yogeswaran"],
     "team_m": ["Pavithira Vinayaga Moorthy (TL)", "Bhuvaneswari Balaji", "Reshma Lakshmanaboopathi"],
-    "team_n": ["Vinodhini Balaji (TL)", "Saniya Fathima", "Snega Murali"],
+    "team_n": ["Vinodhini Balaji (TL)", "Saniya Fathima", "Shivani Mohan", "Snega Murali"],
 }
 
 # ACTIVE display roster — replaced for ALL teams by _apply_dynamic_roster().
@@ -5103,6 +5128,17 @@ def list_teams(request: Request):
         member_count = roster_count if roster_count else t.get("memberCount", 0)
         lead_count = 1 if (t.get("leadUserId") or roster_count) else 0
         exec_count = max(member_count - lead_count, 0)
+        leave = TEAM_ON_LEAVE.get(t["id"])
+        if leave:
+            # Card only: no lead, no members until the team is back.
+            out.append({
+                "id": t["id"], "label": t["label"], "leadName": None, "leadFullName": None,
+                "memberCount": 0, "leadCount": 0, "execCount": 0, "executiveCount": 0,
+                "tlCount": 0, "hasSheet": bool(t.get("sheetId")), "missingLead": False,
+                "onLeave": True, "leaveReason": leave.get("reason", "Team on leave"),
+                "leaveSince": leave.get("since"),
+            })
+            continue
         out.append({
             "id":           t["id"],
             "label":        t["label"],
@@ -5309,6 +5345,9 @@ async def _team_response(
     cfg = TEAM_LETTER_MAP.get(team_id)
     if not cfg:
         return {"error": "Team not found", "teamId": team_id}
+    if team_id in TEAM_ON_LEAVE:
+        label = custom_window[2] if custom_window else date_range_for_period(period)[2]
+        return _on_leave_response(team_id, cfg, label, TEAM_ON_LEAVE[team_id])
 
     roster    = TEAM_ROSTERS.get(team_id, [])
     admin_id  = TEAM_ADMIN_MAP.get(team_id)
@@ -5412,6 +5451,7 @@ async def _team_response(
             "nonBillable": 0.0,
             "staff":       set(),
             "estHrs":      cfg_entry.get("estHrs", 0),
+            "billing":     cfg_entry.get("billing"),
             "tz":          cfg_entry.get("tz", ""),
             "meeting":     cfg_entry.get("meeting", "No scheduled meeting"),
             "tsMatch":     list(cfg_entry.get("tsMatch") or []),
@@ -5573,10 +5613,9 @@ async def _team_response(
             "desc":        (row.get("desc") or "").strip(),
         })
 
-    # Pro-rated per-preparer target. On day 7 of a 22-day month, this is
-    # 320 × 7/22 ≈ 101.8 instead of the static 320 — so a preparer who's
-    # booked 30h doesn't read "BELOW TARGET" when they're actually on pace.
-    # See _pro_rate_committed_hours / Penny's 2026-06-10 feedback.
+    # Per-preparer STAFF-CAPACITY target (8h/day, pro-rated by days elapsed).
+    # Drives only the team-level totalTarget / targetUtilPct — client committed
+    # hours come from _fixed_committed_for_client.
     org_per_preparer_full = (
         _PER_PREPARER_DAILY * _working_days_between(full_start, full_end)
         if period == "custom"
@@ -5586,60 +5625,45 @@ async def _team_response(
         team_id, period,
         period_start=full_start, period_end=full_end, as_of=today_iso,
     )
-    # Pre-warm every org's BOD/EOD CSV concurrently so the per-org
-    # _eod_committed_for_org calls below hit warm cache instead of N sequential
-    # network round-trips — the main cold-load cost on the team dashboard.
-    _prewarm_bod_eod_for_orgs(team_id, list(orgs.keys()))
     clients_data = []
     for org_name, h in orgs.items():
         actual = h["billable"] + h["nonBillable"]
-        # Period-aware committed: org_committed = (preparers on this org) ×
-        # per-preparer target for the period. Falls back to the implied count
-        # from the configured monthly estHrs (estHrs / 160, min 1) when no one
-        # has logged hours yet — otherwise day-0 of a period would show 0h
-        # committed and make the row useless. The divisor matches the new
-        # per-preparer monthly target (8h × 20 working days = 160h).
         staff_count = len(h["staff"])
-        if staff_count == 0 and h["isConfig"] and (h["estHrs"] or 0) > 0:
-            implied_members = max(1, int(round((h["estHrs"] or 0) / 160)))
-            org_member_count = implied_members
-        else:
-            org_member_count = staff_count
-        # Committed hours come from the client's BOD/EOD "Committed Hours" column
-        # (authoritative, cumulative) when a BOD/EOD tab is configured + parseable.
-        # Falls back to the members × per-preparer formula otherwise (logged so
-        # missing BOD/EOD tabs can be added). Internal/Other never has a tab.
-        eod_committed_val = _eod_committed_for_org(
-            team_id, org_name, full_start, min(today_iso, full_end)
-        )
-        # A 0 is treated as "no data for this period", not as a real target: a
-        # tab that stopped being updated (Smith Bookkeeping's last row is
-        # 2026-06-30) would otherwise pin committed to 0 and render the row as a
-        # useless PLACEHOLDER. Falling back keeps a sensible pro-rated target.
-        if eod_committed_val:
-            committed = eod_committed_val
-            committed_source = "bod_eod_sheet"
-        else:
-            committed = round(org_member_count * org_per_preparer, 2) if org_member_count > 0 else 0
-            committed_source = "prorated_members" if committed else "none"
-            if h["isConfig"] and org_name != "Internal / Other":
-                print(f"[eodCommitted] team={team_id} org={org_name!r} no BOD/EOD committed "
-                      f"— fell back to member×per-preparer = {committed}")
+        org_member_count = staff_count
+        # Hybrid (user decision 2026-09-29):
+        #   committed         = FIXED full-period figure from the PDF's EST Hrs —
+        #                       the reference number shown in the Committed column.
+        #   committed_to_date = the same figure pro-rated by working days elapsed;
+        #                       efficiency, gap and status colour use this, so a
+        #                       client isn't CRITICAL on day 2 of the month.
+        # Hourly / tax-season clients and unconfigured buckets carry estHrs 0 and
+        # so have no commitment. Replaces the BOD/EOD "Committed Hours" column
+        # and the members × per-preparer fallback.
+        committed = _fixed_committed_for_client(h.get("estHrs"), period, full_start, full_end)
+        committed_to_date = (committed if period == "today" else
+                             _pro_rate_committed_hours(committed, full_start, full_end, today_iso))
+        committed_source = "config_fixed" if committed else "none"
         # Performance (efficiency / gap / status) is measured against BILLABLE
         # hours only — non-billable time does not count toward a client's
         # committed target. `actual`/`total` still carry billable+non-billable
         # for the stacked bar + "total booked" reference displays.
         billable_h = round(h["billable"], 2)
-        util = round(billable_h / committed * 100, 1) if committed > 0 else 0
-        gap  = round(billable_h - committed, 2) if committed > 0 else 0.0
-        if committed > 0:
+        util = round(billable_h / committed_to_date * 100, 1) if committed_to_date > 0 else 0
+        gap  = round(billable_h - committed_to_date, 2) if committed_to_date > 0 else 0.0
+        billing = h.get("billing")
+        if committed_to_date > 0:
             status = target_status_label(util)
+        elif billing == "hourly":
+            status = "HOURLY"
+        elif billing == "tax":
+            status = "TAX_SEASON"
         else:
             status = "PLACEHOLDER" if h["isConfig"] else "OTHER"
         clients_data.append({
             "name":        org_name,
             "org":         org_name,
-            "committed":   round(committed, 2),
+            "committed":   round(committed, 2),          # full PDF figure (reference)
+            "committedToDate": round(committed_to_date, 2),  # pro-rated; drives efficiency/status
             "actual":      round(actual, 2),
             "billable":    round(h["billable"], 2),
             "nonBillable": round(h["nonBillable"], 2),
@@ -5651,16 +5675,16 @@ async def _team_response(
             "memberCount": org_member_count,
             "perPreparerTarget": org_per_preparer,
             "monthlyEstHrs":     h["estHrs"] or 0,
-            # Full-month figure for context; `committed` above is to-date.
             "monthlyCommitted":  h["estHrs"] or 0,
             "committedSource":   committed_source,
+            "billing":           billing,
             "rowsMatched":     h["rowsMatched"],
             "matchedCustomers": sorted(h["matchedCustomers"]),
             "delays":      0,
             "status":      status,
             "timezone":    h["tz"],
             "meeting":     h["meeting"],
-            "isPlaceholder": h["isConfig"] and committed == 0 and actual == 0,
+            "isPlaceholder": h["isConfig"] and committed == 0 and actual == 0 and not billing,
             # Needed by the activity-label + keep/sort pass below.
             "isConfig":      bool(h["isConfig"]),
             "isCrossTeam":   bool(h.get("isCrossTeam")),
@@ -5800,6 +5824,7 @@ async def _team_response(
     team_target_full = round(per_preparer_target_full * team_member_count, 2)
     target_util_pct = round(total_b / team_target * 100, 1) if team_target > 0 else 0.0
     team_target_status = target_status_label(target_util_pct)
+    total_fixed_committed = round(sum(c["committed"] or 0 for c in clients_data), 2)
 
     # Period-window metadata — drives the "Day 7/22 working" subhead in the
     # dashboard header and the side-by-side "pro-rated vs full" stat card.
@@ -5839,8 +5864,12 @@ async def _team_response(
         "clients":          clients_data,
         "organizations":    [{**c, "org": c["name"]} for c in clients_data],
         "summary": {
-            "totalCommitted":        team_target,           # pro-rated
-            "totalCommittedFull":    team_target_full,      # full period target
+            # Sum of the clients' fixed PDF commitments — matches the total row
+            # of the client table — and the same pro-rated to date. The
+            # staff-capacity target (members × 8h/day) is totalTarget.
+            "totalCommitted":        total_fixed_committed,
+            "totalCommittedFull":    total_fixed_committed,
+            "totalCommittedToDate":  round(sum(c["committedToDate"] or 0 for c in clients_data), 2),
             "eodCommitted":          round(eod_committed, 2),
             "totalBillable":         total_b,         # excludes Internal categories
             "totalNonBillable":      total_nb,        # excludes Internal categories
@@ -6545,6 +6574,31 @@ def is_internal_customer(customer_name) -> bool:
         if kw in n or kw.replace(" ", "") in n_compact:
             return True
     return False
+
+
+# Working days in the month an estHrs figure covers (8h × 20 = 160h / preparer).
+_COMMITTED_WORKING_DAYS_PER_MONTH = 20
+
+
+def _fixed_committed_for_client(est_hrs, period: str, full_start: str, full_end: str) -> float:
+    """A client's FIXED committed hours for the whole period (user decision
+    2026-09-29). Callers pro-rate this separately for status; the fixed figure
+    is what's displayed as Committed.
+
+    monthly  → estHrs exactly (the PDF's "EST Hrs").
+    weekly / today / custom → that period's fixed share of the month:
+               estHrs × working days in the whole period / 20.
+    """
+    try:
+        est = float(est_hrs or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if est <= 0:
+        return 0.0
+    if period == "monthly":
+        return round(est, 2)
+    days = _working_days_between(full_start, full_end) if period != "today" else 1
+    return round(est * days / _COMMITTED_WORKING_DAYS_PER_MONTH, 2)
 
 
 def get_employee_committed_hours(
@@ -9089,12 +9143,12 @@ async def _client_data(
     # summary row.
     result["projectsBreakdown"] = _build_projects_breakdown(rows, client_name)
 
-    # Pro-rated target — overlay on top of build_client_report's actual-hours
+    # Committed target — overlay on top of build_client_report's actual-hours
     # summary. We resolve estHrs by walking TEAM_CLIENTS for the parent team
     # and finding the entry whose name OR tsMatch keyword matches client_name.
-    # Without this, the Client view dashboard had no notion of a target — it
-    # just showed total hours logged. Penny's 2026-06-10 feedback: client view
-    # should also be pro-rated against the contracted commitment.
+    # Hybrid (user decision 2026-09-29): the full target is the client's fixed
+    # PDF figure; status is measured against it pro-rated to today, matching the
+    # team dashboard's committed / committedToDate split.
     parent_team_for_target = find_team_for_client(client_name)
     est_hrs_monthly = 0.0
     if parent_team_for_target:
@@ -9105,13 +9159,7 @@ async def _client_data(
             if ce_name == cn_low or cn_low in ce_name or ce_name in cn_low or any(t and t in cn_low for t in tsMatch):
                 est_hrs_monthly = float(ce.get("estHrs") or 0)
                 break
-    # Scale the monthly estHrs to the active period — same denominator (16h/day,
-    # 20 working days/month → estHrs spans 20 working days). For weekly, monthly,
-    # custom: target_full = estHrs × (working_days_in_period / 20).
-    target_full = 0.0
-    if est_hrs_monthly > 0:
-        wd_full = _working_days_between(full_start, full_end)
-        target_full = round(est_hrs_monthly * (wd_full / 20.0), 2)
+    target_full = _fixed_committed_for_client(est_hrs_monthly, period, full_start, full_end)
     target_prorated = _pro_rate_committed_hours(target_full, full_start, full_end, today_iso)
     actual_billable = float(result.get("summary", {}).get("totalBillable") or 0)
     target_util_pct = round(actual_billable / target_prorated * 100, 1) if target_prorated > 0 else 0.0

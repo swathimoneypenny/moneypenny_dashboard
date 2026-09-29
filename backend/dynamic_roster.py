@@ -101,33 +101,11 @@ TEAM_MEMBER_OVERRIDES: dict[str, list[dict]] = {
                        "ADMINUSERID is repointed to 372164."),
         },
     ],
-    # Team I restructure 2026-09-28: Radhika Sasikumar (372171) left and Krishna
-    # Narayanan (372179) is the new TL. Jayashree Boopathy already reports to
-    # Krishna, so she needs no override. These two still report elsewhere.
-    # TODO: once ops fixes ADMINUSERID in Timesheets.com for Shivani and Jeevitha
-    # (repoint to Krishna 372179), remove these overrides.
-    "team_i": [
-        {
-            "userid": "387214",
-            "display_name": "Shivani Mohan",
-            "match_keyword": "shivani mohan",
-            "is_tl": False,
-            "role": "preparer",
-            "reason": ("Timesheets ADMINUSERID is 372156 (Vinodhini Balaji, team_n), but "
-                       "she works Team I's Core 4 under Krishna (372179). Delete once "
-                       "ADMINUSERID is repointed to 372179."),
-        },
-        {
-            "userid": "372174",
-            "display_name": "Jeevitha Elumalai",
-            "match_keyword": "jeevitha elumalai",
-            "is_tl": False,
-            "role": "preparer",
-            "reason": ("Timesheets ADMINUSERID is 372158 (Inbamozhi Nithyanandham, "
-                       "team_f), but she works Team I's SoCo under Krishna (372179). "
-                       "Delete once ADMINUSERID is repointed to 372179."),
-        },
-    ],
+    # Team I (2026-09-29): no overrides. Jayashree Boopathy already reports to
+    # Krishna (372179) in Timesheets.com. The 2026-09-28 overrides that forced
+    # Shivani Mohan and Jeevitha Elumalai into Team I were removed — per the
+    # Whale PDF they are Team N (Core 4) and Team F (SoCo), which is also what
+    # their ADMINUSERID says.
 }
 
 
@@ -143,6 +121,9 @@ TEAM_MEMBER_EXCLUSIONS: dict[str, str] = {
     "394462": "Iirfhana Fathima — left MPLLC 2026-08; ops to set USERSTATUS=0",
     # Former Team I TL, still USERSTATUS=1 upstream at the time of writing.
     "372171": "Radhika Sasikumar — left MPLLC 2026-09; ops to set USERSTATUS=0",
+    # Removed from Team D 2026-09-29. Both still USERSTATUS=1 upstream.
+    "378596": "Sharmila Gunasekaran — removed from Team D 2026-09-29 (no hours in 30 days); ops to set USERSTATUS=0",
+    "372157": "Dharani Sekar — left Team D 2026-09-28; ops to set USERSTATUS=0",
 }
 EXCLUDED_NAMES = {"iirfhanafathima", "irfhanafathima"}
 

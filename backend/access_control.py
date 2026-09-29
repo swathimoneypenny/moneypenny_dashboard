@@ -52,7 +52,7 @@ USER_ACCESS: dict[str, dict] = {
 
     # === TEAM A ===
     "kokila_r@moneypennyllc.com":            {"role": "team_lead",   "team": "team_a", "name": "Kokila R"},
-    "umamaheshwari_e@moneypennyllc.com":     {"role": "team_member", "team": "team_a", "name": "Uma Maheshwari E"},
+    # umamaheshwari_e@ moved to Team G 2026-09-29 (reports to Hema in Timesheets).
 
     # === TEAM B ===
     "buelaangel_t@moneypennyllc.com":        {"role": "team_lead",   "team": "team_b", "name": "Buela Angel T"},
@@ -68,13 +68,13 @@ USER_ACCESS: dict[str, dict] = {
 
     # === TEAM D ===
     "chandralekha_vijay@moneypennyllc.com":  {"role": "team_lead",   "team": "team_d", "name": "Chandralekha Vijay"},
-    "sharmila_gunasekaran@moneypennyllc.com":{"role": "team_member", "team": "team_d", "name": "Sharmila Gunasekaran"},
+    # sharmila_gunasekaran@ removed 2026-09-29 — no longer on Team D.
     "swetha_sagada@moneypennyllc.com":       {"role": "team_member", "team": "team_d", "name": "Swetha Sagada"},
     "sandhiya_jothi@moneypennyllc.com":      {"role": "team_member", "team": "team_d", "name": "Sandhiya Jothi"},
     "sirisha_mallireddy@moneypennyllc.com":  {"role": "team_member", "team": "team_d", "name": "Sirisha Mallireddy"},
     "krithiga_dhandapani@moneypennyllc.com": {"role": "team_member", "team": "team_d", "name": "Krithiga Dhandapani"},
     "yamini_s@moneypennyllc.com":            {"role": "team_member", "team": "team_d", "name": "Yamini S"},
-    "dharani_s@moneypennyllc.com":           {"role": "team_member", "team": "team_d", "name": "Dharani S"},
+    # dharani_s@ removed 2026-09-29 — left Team D.
     "abirami_radha@moneypennyllc.com":       {"role": "team_member", "team": "team_d", "name": "Abirami Radha"},
 
     # === TEAM E ===
@@ -84,12 +84,17 @@ USER_ACCESS: dict[str, dict] = {
     # === TEAM F ===
     "inbamozhi_n@moneypennyllc.com":         {"role": "team_lead",   "team": "team_f", "name": "Inbamozhi N"},
     "sarika_mani@moneypennyllc.com":         {"role": "team_member", "team": "team_f", "name": "Sarika Mani"},
+    # Moved from Team I 2026-09-29 — works SoCo, a Team F client per the PDF.
+    "jeevitha_elumalai@moneypennyllc.com":   {"role": "team_member", "team": "team_f", "name": "Jeevitha Elumalai"},
     # REVOKED 2026-08-17 — Irfhana Fathima left MPLLC. Removing the entry is
     # the revocation: verify_session_token re-checks the whitelist on every
     # request, so any 30-day token she still holds stops working immediately.
     # "irfhana_fathima@moneypennyllc.com":     {"role": "team_member", "team": "team_f", "name": "Irfhana Fathima"},
 
     # === TEAM G ===
+    # Moved from Team A 2026-09-29 — Timesheets has her under Hema since
+    # 2026-09-28, and she does most of Ollin Balance (now a Team G client).
+    "umamaheshwari_e@moneypennyllc.com":     {"role": "team_member", "team": "team_g", "name": "Uma Maheshwari E"},
     "hema_n@moneypennyllc.com":              {"role": "team_lead",   "team": "team_g", "name": "Hema N"},
     "indra_v@moneypennyllc.com":             {"role": "team_member", "team": "team_g", "name": "Indra V"},
     "amalabharathi_b@moneypennyllc.com":     {"role": "team_member", "team": "team_g", "name": "Amala Bharathi B"},
@@ -105,10 +110,7 @@ USER_ACCESS: dict[str, dict] = {
     # radhika_s@ removed 2026-09-28 — left MPLLC. Krishna Narayanan is the new Team I TL.
     "krishna_narayanan@moneypennyllc.com":   {"role": "team_lead",   "team": "team_i", "name": "Krishna Narayanan"},
     "jayashree_boopathy@moneypennyllc.com":  {"role": "team_member", "team": "team_i", "name": "Jayashree Boopathy"},
-    "jeevitha_elumalai@moneypennyllc.com":   {"role": "team_member", "team": "team_i", "name": "Jeevitha Elumalai"},
-    # Granted 2026-08-17 — active Team I member, was missing from the original
-    # whitelist and so could not log in.
-    "shivani_mohan@moneypennyllc.com":       {"role": "team_member", "team": "team_i", "name": "Shivani Mohan"},
+    # Jeevitha Elumalai → Team F and Shivani Mohan → Team N, 2026-09-29 (PDF).
 
     # === TEAM J ===
     "logeshwari_b@moneypennyllc.com":        {"role": "team_lead",   "team": "team_j", "name": "Logeshwari B"},
@@ -138,6 +140,8 @@ USER_ACCESS: dict[str, dict] = {
     # === TEAM N ===
     "vinodhini@moneypennyllc.com":           {"role": "team_lead",   "team": "team_n", "name": "Vinodhini"},
     "snega_murali@moneypennyllc.com":        {"role": "team_member", "team": "team_n", "name": "Snega Murali"},
+    # Moved from Team I 2026-09-29 — works Core 4, a Team N client per the PDF.
+    "shivani_mohan@moneypennyllc.com":       {"role": "team_member", "team": "team_n", "name": "Shivani Mohan"},
 
     # === TEAM T ===
     "pragathi_s@moneypennyllc.com":          {"role": "team_lead",   "team": "team_t", "name": "Pragathi S"},

@@ -254,7 +254,7 @@ function TeamCard({ team, onClick }) {
               fontWeight: 500,
             }}
           >
-            {leadShort ? `${leadShort}'s Team` : team.name}
+            {team.onLeave ? "Team on leave" : leadShort ? `${leadShort}'s Team` : team.name}
           </div>
         </div>
         <span
@@ -270,7 +270,31 @@ function TeamCard({ team, onClick }) {
         </span>
       </div>
 
+      {/* On leave: badge + message instead of lead / member counts */}
+      {team.onLeave && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: "auto" }}>
+          <span
+            style={{
+              alignSelf: "flex-start",
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: 0.8,
+              textTransform: "uppercase",
+              color: C.yellow,
+              border: `1px solid ${C.yellow}66`,
+              background: `${C.yellow}14`,
+              borderRadius: 999,
+              padding: "3px 10px",
+            }}
+          >
+            On Leave
+          </span>
+          <div style={{ fontSize: 13, color: C.sec }}>Team on leave - back soon</div>
+        </div>
+      )}
+
       {/* Lead + member counts */}
+      {!team.onLeave && (
       <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: "auto" }}>
         <div style={{ fontSize: 12, color: C.muted, textTransform: "uppercase", letterSpacing: 0.8 }}>
           Lead
@@ -295,6 +319,7 @@ function TeamCard({ team, onClick }) {
           </span>
         </div>
       </div>
+      )}
 
       {team.missingLead && (
         <div
@@ -466,6 +491,8 @@ function TeamTab({ onSelectTeam }) {
           execCount:     t.execCount,
           hasSheet:      t.hasSheet,
           missingLead:   t.missingLead,
+          onLeave:       !!t.onLeave,
+          leaveReason:   t.leaveReason,
         }));
         if (list.length > 0) setTeams(list);
         setLastRefreshed(new Date());

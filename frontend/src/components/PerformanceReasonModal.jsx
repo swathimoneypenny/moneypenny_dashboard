@@ -16,7 +16,11 @@ export default function PerformanceReasonModal({ open, onClose, org, periodLabel
   const analysis = useMemo(() => {
     if (!org) return null;
 
-    const committed   = Number(org.committed)   || 0;
+    // committed = the fixed PDF figure for the full period (reference);
+    // committedToDate = that figure pro-rated by working days elapsed, which is
+    // what gap / efficiency / status are measured against.
+    const committedFull = Number(org.committed) || 0;
+    const committed   = Number(org.committedToDate ?? org.committed) || 0;
     const billable    = Number(org.billable)    || 0;
     const nonBillable = Number(org.nonBillable) || 0;
     // Performance is measured against BILLABLE hours only — non-billable time
@@ -78,7 +82,7 @@ export default function PerformanceReasonModal({ open, onClose, org, periodLabel
 
     return {
       status, statusColor,
-      committed, actual, totalBooked, gap, efficiency,
+      committed, committedFull, actual, totalBooked, gap, efficiency,
       billable, nonBillable, nonBillRatio,
       employeeList: activeEmployees,
       inactiveCount, expectedEmps,
@@ -158,7 +162,8 @@ export default function PerformanceReasonModal({ open, onClose, org, periodLabel
         </div>
 
         <SectionBox title="📊 Performance Gap" color={analysis.statusColor}>
-          <DataRow label="Target (pro-rated)"  value={`${analysis.committed.toFixed(2)}h`} />
+          <DataRow label="Committed (PDF, full period)" value={`${analysis.committedFull.toFixed(2)}h`} />
+          <DataRow label="Target to date (pro-rated)"  value={`${analysis.committed.toFixed(2)}h`} />
           <DataRow label="Actual Billable"     value={`${analysis.billable.toFixed(2)}h`} color="#10B981" highlight />
           <DataRow
             label="Gap"

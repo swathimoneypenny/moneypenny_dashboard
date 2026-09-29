@@ -58,6 +58,20 @@ function statusInfo(pct) {
   return { label: "EXCEEDED", color: C.purple, bg: C.statusPurple };
 }
 
+// Clients billed hourly or only in tax season have no fixed monthly commitment,
+// so committed is 0 by design and efficiency is meaningless — label them
+// instead of letting statusInfo(0) paint them CRITICAL.
+function noCommitmentStatus(o) {
+  if ((o?.committed ?? 0) > 0) return null;
+  if (o?.billing === "hourly" || o?.status === "HOURLY")
+    return { label: "HOURLY", color: C.muted, bg: "transparent" };
+  if (o?.billing === "tax" || o?.status === "TAX_SEASON")
+    return { label: "TAX SEASON", color: C.muted, bg: "transparent" };
+  if (o?.status === "PLACEHOLDER" || o?.status === "OTHER")
+    return { label: "NO COMMITMENT", color: C.muted, bg: "transparent" };
+  return null;
+}
+
 function delayColor(count) {
   if (count <= 0) return C.green;
   if (count <= 2) return C.yellow;
@@ -555,7 +569,7 @@ function PerfTable({ orgs, onRowClick }) {
               ? { label: "PLACEHOLDER", color: C.muted, bg: "transparent" }
               : isInternalOther
                 ? { label: "OTHER", color: C.muted, bg: "transparent" }
-                : statusInfo(eff);
+                : noCommitmentStatus(o) ?? statusInfo(eff);
             const baseBg = i % 2 === 0 ? "transparent" : C.surface;
             const delays = o.delays ?? 0;
             // Click is enabled whenever the org actually has timesheet rows
@@ -627,6 +641,13 @@ function PerfTable({ orgs, onRowClick }) {
                 </td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: committed > 0 ? C.blue : C.muted }}>
                   {committed > 0 ? committed.toFixed(2) : "—"}
+                  {/* Full PDF commitment above; the pro-rated share that drives
+                      efficiency / gap / status underneath. */}
+                  {committed > 0 && (o.committedToDate ?? committed) < committed && (
+                    <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>
+                      to date {(o.committedToDate ?? 0).toFixed(2)}
+                    </div>
+                  )}
                 </td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.teal }}>{(o.billable ?? 0).toFixed(2)}</td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: delayColor(delays), fontWeight: 600 }}>{delays}</td>
@@ -1055,6 +1076,48 @@ function DepartmentAccordion({ dept, teamId }) {
   );
 }
 
+function OnLeaveCard({ teamName, reason, since }) {
+  return (
+    <div
+      style={{
+        background: C.card,
+        border: `1px solid ${C.border}`,
+        borderLeft: `3px solid ${C.yellow}`,
+        borderRadius: 10,
+        padding: "32px 24px",
+        textAlign: "center",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 10,
+      }}
+    >
+      <span
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: 0.8,
+          textTransform: "uppercase",
+          color: C.yellow,
+          border: `1px solid ${C.yellow}66`,
+          borderRadius: 999,
+          padding: "3px 10px",
+        }}
+      >
+        On Leave
+      </span>
+      <div style={{ fontSize: 18, fontWeight: 700, color: C.pri }}>{teamName}</div>
+      <div style={{ fontSize: 14, color: C.sec }}>Team on leave - back soon</div>
+      {(reason || since) && (
+        <div style={{ fontSize: 12, color: C.muted }}>
+          {reason}
+          {since ? ` · since ${since}` : ""}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RosterSetupCard({ teamId, teamName }) {
   const [resp, setResp] = useState(null);
   const [loadingDetect, setLoadingDetect] = useState(false);
@@ -1416,7 +1479,7 @@ Total: Committed ${summary.totalCommitted ?? 0}h | Utilized ${summary.totalBilla
 
 ORGANIZATIONS:
 ${clients.map((o) => (
-  `• ${o.name}: ${o.committed ?? 0}h committed, ${o.billable ?? 0}h utilized, ${o.nonBillable ?? 0}h non-billable, ${o.efficiency ?? 0}% util, ${o.delays ?? 0} delays`
+  `• ${o.name}: ${o.committed ?? 0}h committed (${o.committedToDate ?? o.committed ?? 0}h to date), ${o.billable ?? 0}h utilized, ${o.nonBillable ?? 0}h non-billable, ${o.efficiency ?? 0}% util, ${o.delays ?? 0} delays`
 )).join("\n")}`;
     onContextUpdate(ctx);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1561,6 +1624,10 @@ ${clients.map((o) => (
   }, []);
 
   const displayLabel = data?.teamLabel ?? data?.team ?? teamName ?? teamId;
+  // An on-leave team (backend TEAM_ON_LEAVE) hides every section a team with
+  // no roster hides, and shows OnLeaveCard in place of the roster-setup card.
+  const onLeave = data?.status === "on_leave";
+  const teamBlocked = !!(data?.needsRosterSetup || onLeave);
   const displayLead  = data?.lead ?? data?.leadName ?? "";
   const rosterCount  = data?.rosterCount ?? 0;
   // Member count = the actual number of rows in the Team Members table (the
@@ -1655,17 +1722,17 @@ ${clients.map((o) => (
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 4, background: C.card, borderRadius: 8, padding: 3, border: `1px solid ${C.border}`, opacity: data?.unconfigured || data?.needsRosterSetup ? 0.5 : 1 }}>
+        <div style={{ display: "flex", gap: 4, background: C.card, borderRadius: 8, padding: 3, border: `1px solid ${C.border}`, opacity: data?.unconfigured || teamBlocked ? 0.5 : 1 }}>
           {PERIODS.map((p) => (
             <button
               key={p.key}
               onClick={() => setPeriod(p.key)}
-              disabled={!!(data?.unconfigured || data?.needsRosterSetup)}
+              disabled={!!(data?.unconfigured || teamBlocked)}
               style={{
                 padding: "6px 14px",
                 borderRadius: 6,
                 border: "none",
-                cursor: data?.unconfigured || data?.needsRosterSetup ? "not-allowed" : "pointer",
+                cursor: data?.unconfigured || teamBlocked ? "not-allowed" : "pointer",
                 fontSize: 12,
                 fontWeight: 600,
                 fontFamily: "'DM Sans', sans-serif",
@@ -1833,7 +1900,7 @@ ${clients.map((o) => (
                 marginTop: 2,
                 letterSpacing: 0.3,
               }}
-              title={`Targets pro-rated by working days elapsed (${data.summary.periodStart} → ${data.summary.periodEnd})`}
+              title={`Status is measured against targets pro-rated by working days elapsed (${data.summary.periodStart} → ${data.summary.periodEnd}). The Committed column shows the full PDF figure.`}
             >
               Day {data.summary.workingDaysElapsed}/{data.summary.workingDaysTotal} · pro-rated
             </div>
@@ -1844,7 +1911,7 @@ ${clients.map((o) => (
       <div style={{ padding: "24px 32px", display: "flex", flexDirection: "column", gap: 24 }}>
         {period === "review" ? (
           <>
-            {!data?.needsRosterSetup && (
+            {!teamBlocked && (
               <WeeklyChecklistSection teamId={teamId} />
             )}
           </>
@@ -1852,7 +1919,7 @@ ${clients.map((o) => (
           <BodEodReview teamId={teamId} />
         ) : (<>
         {/* Roster info banner */}
-        {!loading && data && !data.error && !data.needsRosterSetup && (
+        {!loading && data && !data.error && !teamBlocked && (
           <div
             style={{
               background: "rgba(0,200,150,0.06)",
@@ -1912,12 +1979,13 @@ ${clients.map((o) => (
         )}
 
         {/* Setup-needed message */}
-        {!loading && data?.needsRosterSetup && (
-          <RosterSetupCard teamId={teamId} teamName={displayLabel} />
+        {!loading && teamBlocked && (onLeave
+          ? <OnLeaveCard teamName={displayLabel} reason={data?.leaveReason} since={data?.leaveSince} />
+          : <RosterSetupCard teamId={teamId} teamName={displayLabel} />
         )}
 
         {/* Empty data (roster configured but no matching rows) */}
-        {!loading && data && !data.needsRosterSetup && clients.length === 0 && (
+        {!loading && data && !teamBlocked && clients.length === 0 && (
           <div style={{ textAlign: "center", padding: "40px", color: C.muted, fontSize: 13 }}>
             No timesheet data found for this period.
           </div>
@@ -1926,7 +1994,7 @@ ${clients.map((o) => (
         {/* KPIs */}
         {loading ? (
           <LoadingScreen teamName={displayLabel} />
-        ) : data?.needsRosterSetup ? null : (
+        ) : teamBlocked ? null : (
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
             <KpiCard
               label="Organizations"
@@ -1965,7 +2033,7 @@ ${clients.map((o) => (
         )}
 
         {/* Most Underutilized This Week — only shows when team has >= 3 members */}
-        {!data?.needsRosterSetup && weeklyLeaderboard && Array.isArray(weeklyLeaderboard.members) && weeklyLeaderboard.members.length >= 3 && (
+        {!teamBlocked && weeklyLeaderboard && Array.isArray(weeklyLeaderboard.members) && weeklyLeaderboard.members.length >= 3 && (
           <UnderutilizedWidget
             members={weeklyLeaderboard.members}
             onSelect={(name) => onSelectEmployee && onSelectEmployee({ teamId, employeeName: name, teamName: displayLabel })}
@@ -1973,14 +2041,14 @@ ${clients.map((o) => (
         )}
 
         {/* Currently Active — drives off lastLoggedAt / activeNow from the leaderboard */}
-        {!data?.needsRosterSetup && leaderboard && Array.isArray(leaderboard.members) && leaderboard.members.length > 0 && (
+        {!teamBlocked && leaderboard && Array.isArray(leaderboard.members) && leaderboard.members.length > 0 && (
           <CurrentlyActiveWidget
             members={leaderboard.members}
             onSelect={(name) => onSelectEmployee && onSelectEmployee({ teamId, employeeName: name, teamName: displayLabel })}
           />
         )}
 
-        {!data?.needsRosterSetup && (
+        {!teamBlocked && (
           <BillableNonBillableByClient
             clients={clients}
             periodLabel={periodLabel}
@@ -1989,7 +2057,7 @@ ${clients.map((o) => (
           />
         )}
 
-        {!data?.needsRosterSetup && (
+        {!teamBlocked && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
           {/* Hours by Organization spans both columns now that the per-month
               committed/utilized chart was removed — otherwise it would sit
@@ -2114,7 +2182,7 @@ ${clients.map((o) => (
         </div>
         )}
 
-        {!data?.needsRosterSetup && (
+        {!teamBlocked && (
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: C.sec, marginBottom: 16 }}>
             Performance by Organization
@@ -2130,14 +2198,14 @@ ${clients.map((o) => (
         </div>
         )}
 
-        {!data?.needsRosterSetup && (
+        {!teamBlocked && (
           <UserSelectorDropdown
             members={leaderboard?.members ?? null}
             onSelect={(name) => onSelectEmployee && onSelectEmployee({ teamId, employeeName: name, teamName: displayLabel })}
           />
         )}
 
-        {!data?.needsRosterSetup && (
+        {!teamBlocked && (
           <TeamMembersTable
             members={leaderboard?.members ?? null}
             committedLabel={leaderboard?.committedLabel}
