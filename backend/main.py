@@ -10398,6 +10398,12 @@ def _bod_eod_parse_rows(client_name: str, csv_text: str) -> dict:
             date_str = _bod_eod_cell(raw, 0)
             if not _bod_eod_is_data_row(date_str):
                 continue
+            # TLs pre-fill tomorrow's date row. Skip rows dated after today
+            # (IST, the TLs' day) — otherwise the "Today" view, which takes the
+            # last row, shows that blank row's zeros.
+            row_dt = _parse_eod_date(date_str)
+            if row_dt and row_dt.date() > _ist_now().date():
+                continue
             raw_rows.append([_bod_eod_cell(raw, i) for i in range(ncols)])
             committed = _bod_eod_float(raw, 1)
             booked    = _bod_eod_float(raw, 2)
