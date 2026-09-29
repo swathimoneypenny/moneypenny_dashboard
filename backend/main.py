@@ -10,6 +10,10 @@ import base64
 import hashlib
 import secrets
 import asyncio
+import contextvars
+import difflib
+import html
+from concurrent.futures import ThreadPoolExecutor
 from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -20,6 +24,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from groq import Groq
 
 # Whale (usewhale.io) SOPs API client. Reads WHALE_API_TOKEN +
@@ -90,6 +95,7 @@ async def lifespan(_app: FastAPI):
     # Schedule warmup but don't block startup
     asyncio.create_task(_run_warmup_background())
     asyncio.create_task(_roster_refresh_loop())
+    asyncio.create_task(_team_cache_refresh_loop())
     yield
 
 
@@ -101,6 +107,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Team payloads carry every time entry per client (a monthly Team T response is
+# ~4 MB of JSON). nginx doesn't compress proxied responses (gzip_proxied is
+# off), so compress here — JSON shrinks ~10x.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 @app.middleware("http")
@@ -448,7 +458,7 @@ for _tid in list(TEAM_LETTER_MAP.keys()):
 # Refresh the same way monthly, or whenever /api/roster/health reports the
 # fallback as significantly behind.
 FALLBACK_TEAM_ROSTERS: dict[str, list[str]] = {
-    # Team A is on leave (TEAM_ON_LEAVE); Kokila returns. Uma moved to Team G.
+    # Team A is rebuilding (TEAM_STATUS) — all members relieved. Uma moved to Team G.
     "team_a": ["kokila ramachandran"],
     "team_b": ["buelaangel t", "ivanjalin sofia irudhayaraj", "pavithra srinivasan", "varshini natarajan"],
     "team_c": [
@@ -553,20 +563,25 @@ TEAM_EXPECTED_COUNTS: dict[str, int] = {
     "team_n": 4,
 }
 
-# Teams temporarily without anyone working. The team card stays on the Home page
-# with an "On Leave" badge, and every team data view returns an empty on-leave
-# payload instead of members / clients. Delete the entry when the team is back;
-# the roster repopulates from Timesheets.com on its own. Logins are untouched.
-TEAM_ON_LEAVE: dict[str, dict] = {
+# Teams with no working members right now. The team card stays on the Home page
+# with a status badge, and every team data view returns an empty payload with
+# the status message instead of members / clients. Remove the entry once the
+# team has members again — the roster repopulates from Timesheets.com on its own.
+TEAM_STATUS: dict[str, dict] = {
+    # Every Team A member was relieved from MPLLC (2026-09-29); the team will be
+    # rebuilt with new members.
     "team_a": {
-        "reason": "Team on leave - Kokila returning soon",
-        "since": "2026-09-29",
+        "status":  "rebuilding",
+        "label":   "Rebuilding",
+        "reason":  "Team currently rebuilding - new members joining soon",
+        "message": "This team is being rebuilt. New members will be added shortly.",
+        "since":   "2026-09-29",
     },
 }
 
 
-def _on_leave_response(team_id: str, cfg: dict, label: str, leave: dict) -> dict:
-    """Team payload for a team in TEAM_ON_LEAVE: no roster, no clients, no error."""
+def _team_status_response(team_id: str, cfg: dict, label: str, st: dict) -> dict:
+    """Team payload for a team in TEAM_STATUS: no roster, no clients, no error."""
     team_label = cfg.get("label", team_id)
     return {
         "team":             team_label,
@@ -575,10 +590,11 @@ def _on_leave_response(team_id: str, cfg: dict, label: str, leave: dict) -> dict
         "lead":             "",
         "leadName":         "",
         "period":           label,
-        "status":           "on_leave",
-        "onLeave":          True,
-        "leaveReason":      leave.get("reason", "Team on leave"),
-        "leaveSince":       leave.get("since"),
+        "status":           st.get("status", "rebuilding"),
+        "statusLabel":      st.get("label", "Rebuilding"),
+        "statusReason":     st.get("reason", ""),
+        "statusMessage":    st.get("message", ""),
+        "statusSince":      st.get("since"),
         "roster":           [],
         "rosterCount":      0,
         "totalRows":        0,
@@ -590,9 +606,9 @@ def _on_leave_response(team_id: str, cfg: dict, label: str, leave: dict) -> dict
         "clients":          [],
         "organizations":    [],
         "summary": {
-            "totalCommitted": 0, "totalCommittedFull": 0, "totalBillable": 0,
-            "totalNonBillable": 0, "totalInternal": 0, "totalUtilized": 0,
-            "memberCount": 0, "totalDelays": 0,
+            "totalCommitted": 0, "totalCommittedFull": 0, "totalCommittedToDate": 0,
+            "totalBillable": 0, "totalNonBillable": 0, "totalInternal": 0,
+            "totalUtilized": 0, "memberCount": 0, "totalDelays": 0,
         },
     }
 
@@ -718,7 +734,7 @@ UNCATEGORIZED_CLIENTS = [
 # and never removes or rewrites a curated entry.
 FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
     "team_a": [
-        # Team A is on leave (TEAM_ON_LEAVE) and has no clients.
+        # Team A is rebuilding (TEAM_STATUS) and has no clients.
         # Ollin Balance moved to Team G 2026-09-29 — Team G does ~90% of the work.
         # Bookkeeping Doctor and 24hr Bookkeeper left MPLLC (see INACTIVE_CLIENTS).
     ],
@@ -2687,7 +2703,9 @@ DELAYS_TAB_GIDS: dict[str, dict[str, str]] = {
         "smith bookkeeping":    "1173306991",
     },
     "team_e": {
-        "acs":                  "1718260091",
+        # Key was "acs" (transposed) until 2026-09-29 — it never matched the
+        # client "ASC Custom Books", so Team E's delays never loaded.
+        "asc custom books":     "1718260091",
     },
     "team_f": {
         "scotts laws":          "1565152388",
@@ -3916,26 +3934,122 @@ def _candidate_delays_tab_names(client_name: str, aliases: list[str] | None) -> 
     return out
 
 
-def _resolve_delays_tab(team_id: str, client_name: str, aliases: list[str] | None
-                       ) -> tuple[str | None, str | None, list[str]]:
-    """Probe gviz for the client's Delays tab on the team's main sheet.
-    Returns (matched_tab_name, csv_text, candidates_tried). Each positive
-    match is cached for 1 h; negative matches are cached too (with shorter
-    effective TTL via the upstream team-response cache)."""
-    key = (team_id, (client_name or "").strip())
-    cached = _delays_tab_match_cache.get(key)
-    if cached and (datetime.now() - cached["at"]).total_seconds() < _DELAYS_TAB_MATCH_TTL:
-        return cached.get("tab_name"), cached.get("csv_text"), cached.get("candidates", [])
+def _delays_gids_for_client(team_id: str, client_name: str,
+                            aliases: list[str] | None) -> list[tuple[str, str]]:
+    """[(gid_key, gid)] of the client's Delays tab(s) in DELAYS_TAB_GIDS.
 
+    Substring match on normalized names first (every key that matches, so
+    Proper Trust also picks up its Mintage and Artesani tabs), then a fuzzy
+    match for the misspelt keys TLs use ("helvitica", "sambrono service").
+    """
+    gid_map = DELAYS_TAB_GIDS.get(team_id) or {}
+    forms = [f for f in (_normalize_for_match(x) for x in [client_name, *(aliases or [])]) if len(f) >= 3]
+    if not gid_map or not forms:
+        return []
+    hits = []
+    for key, gid in gid_map.items():
+        k = _normalize_for_match(key)
+        if len(k) >= 3 and any(k == f or k in f or f in k for f in forms):
+            hits.append((key, gid))
+    if hits:
+        return hits
+    best, best_ratio = None, 0.0
+    for key, gid in gid_map.items():
+        k = _normalize_for_match(key)
+        for f in forms:
+            r = difflib.SequenceMatcher(None, k, f).ratio()
+            if r > best_ratio:
+                best, best_ratio = (key, gid), r
+    return [best] if best and best_ratio >= 0.8 else []
+
+
+_SHEET_TABS_TTL = 6 * 3600        # tab titles change rarely
+_SHEET_TABS_EMPTY_TTL = 30 * 60   # retry a failed listing sooner
+_sheet_tabs_cache: dict[str, dict] = {}   # sheet_id -> {at, titles}
+
+
+def _sheet_tab_titles(sheet_id: str) -> list[str]:
+    """Every tab title in a team sheet, one request, cached.
+
+    Sheets API when it's enabled; otherwise the tab captions on the /edit page
+    (the /htmlview markup _list_team_sheet_tabs scrapes no longer carries tab
+    names). [] if neither works — callers fall back to guessing names.
+    """
+    cached = _sheet_tabs_cache.get(sheet_id)
+    if cached:
+        ttl = _SHEET_TABS_TTL if cached["titles"] else _SHEET_TABS_EMPTY_TTL
+        if (datetime.now() - cached["at"]).total_seconds() < ttl:
+            return cached["titles"]
+    titles: list[str] = []
+    if sheets_client.use_api():
+        titles = [t["title"] for t in sheets_client.list_tabs(sheet_id)]
+    if not titles:
+        try:
+            resp = requests.get(f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit", timeout=20)
+            if resp.status_code == 200:
+                for m in re.finditer(r'docs-sheet-tab-caption">([^<]{1,120})<', resp.text):
+                    t = html.unescape(m.group(1)).strip()
+                    if t and t not in titles:
+                        titles.append(t)
+        except Exception as e:
+            print(f"[delaysTab] tab listing failed for sheet {sheet_id[:8]}…: {e}")
+    _sheet_tabs_cache[sheet_id] = {"at": datetime.now(), "titles": titles}
+    return titles
+
+
+def _delays_titles_for_client(titles: list[str], client_name: str,
+                              aliases: list[str] | None) -> list[str]:
+    """Delays-tab titles naming this client, best (longest name match) first.
+    A title qualifies when it mentions "delay" and contains the client's name
+    or one of its aliases — e.g. "Tim Thompson TX Delays", "AIS Delayed Question"."""
+    forms = [f for f in (_normalize_for_match(x) for x in [client_name, *(aliases or [])]) if len(f) >= 3]
+    scored = []
+    for t in titles:
+        n = _normalize_for_match(t)
+        if "delay" not in n:
+            continue
+        hit = max((len(f) for f in forms if f in n), default=0)
+        if hit:
+            scored.append((hit, t))
+    return [t for _, t in sorted(scored, key=lambda x: -x[0])]
+
+
+def _delays_sources_for_client(team_id: str, client_name: str, aliases: list[str] | None
+                               ) -> tuple[list[tuple[str, str]], list[str]]:
+    """([(label, csv_text)], tried) — the client's Delays tab CSV(s).
+
+    Resolution order, cheapest and most authoritative first:
+      1. DELAYS_TAB_GIDS  — the gid(s) TLs registered; fetched by gid.
+      2. Real tab titles  — one listing per sheet; fetch the named tab.
+      3. Name guessing    — only when the sheet's tabs can't be listed.
+
+    Guessing used to be the ONLY strategy: ~5 sequential Google requests per
+    name form, most of them HTTP 400 for tabs that don't exist, which made a
+    cold team dashboard take ~25-30 s and drew thousands of HTTP 429s.
+    """
     cfg = TEAM_LETTER_MAP.get(team_id) or {}
     sheet_id = cfg.get("sheetId")
     if not sheet_id or not client_name:
-        return None, None, []
+        return [], []
 
-    candidates = _candidate_delays_tab_names(client_name, aliases)
-    matched_tab: str | None = None
-    matched_csv: str | None = None
+    sources: list[tuple[str, str]] = []
+    tried: list[str] = []
+    for key, gid in _delays_gids_for_client(team_id, client_name, aliases):
+        tried.append(f"gid:{gid} ({key})")
+        csv_text = _fetch_delays_csv(sheet_id, gid)
+        if csv_text and _csv_looks_like_delays_tab(csv_text):
+            sources.append((f"gid:{gid} ({key})", csv_text))
+    if sources:
+        return sources, tried
+
+    titles = _sheet_tab_titles(sheet_id)
+    if titles:
+        candidates = _delays_titles_for_client(titles, client_name, aliases)[:2]
+    else:
+        # Listing unavailable: guess, but only from the client's own name.
+        candidates = _candidate_delays_tab_names(client_name, None)
     for cand in candidates:
+        tried.append(cand)
         try:
             csv_text, _url = _fetch_eod_csv(sheet_id, tab=cand)
         except EodSheetError as e:
@@ -3945,22 +4059,33 @@ def _resolve_delays_tab(team_id: str, client_name: str, aliases: list[str] | Non
             print(f"[delaysTab] team={team_id} client={client_name!r} cand={cand!r} error: {e}")
             continue
         if csv_text and _csv_looks_like_delays_tab(csv_text):
-            matched_tab = cand
-            matched_csv = csv_text
-            break
-        # else: gviz silently fell back to the main tab — keep probing
+            return [(cand, csv_text)], tried
+    return [], tried
 
-    _delays_tab_match_cache[key] = {
-        "at":         datetime.now(),
-        "tab_name":   matched_tab,
-        "csv_text":   matched_csv,
-        "candidates": candidates,
-    }
-    if matched_tab:
-        print(f"[delaysTab] team={team_id} client={client_name!r} matched cand={matched_tab!r}")
+
+def _resolve_delays_tab(team_id: str, client_name: str, aliases: list[str] | None
+                       ) -> tuple[str | None, str | None, list[str]]:
+    """(first matched tab label, its csv_text, what was tried) — kept for the
+    debug endpoint. Cached 1 h, negatives included, so a client with no Delays
+    tab costs nothing on later loads. See _delays_sources_for_client."""
+    entry = _delays_sources_cached(team_id, client_name, aliases)
+    first = entry["sources"][0] if entry["sources"] else (None, None)
+    return first[0], first[1], entry["candidates"]
+
+
+def _delays_sources_cached(team_id: str, client_name: str, aliases: list[str] | None) -> dict:
+    key = (team_id, (client_name or "").strip())
+    cached = _delays_tab_match_cache.get(key)
+    if cached and (datetime.now() - cached["at"]).total_seconds() < _DELAYS_TAB_MATCH_TTL:
+        return cached
+    sources, tried = _delays_sources_for_client(team_id, client_name, aliases)
+    entry = {"at": datetime.now(), "sources": sources, "candidates": tried}
+    _delays_tab_match_cache[key] = entry
+    if sources:
+        print(f"[delaysTab] team={team_id} client={client_name!r} matched {[l for l, _ in sources]}")
     else:
-        print(f"[delaysTab] team={team_id} client={client_name!r} no tab matched (tried {len(candidates)})")
-    return matched_tab, matched_csv, candidates
+        print(f"[delaysTab] team={team_id} client={client_name!r} no Delays tab (tried {tried})")
+    return entry
 
 
 def _parse_delays_tab_csv(csv_text: str) -> tuple[list[dict], dict]:
@@ -4074,21 +4199,21 @@ def _get_team_delay_questions(team_id: str) -> list[dict]:
     if cached and (datetime.now() - cached["at"]).total_seconds() < _DELAYS_QUESTIONS_TTL:
         return cached["questions"]
 
-    clients = TEAM_CLIENTS.get(team_id) or []
+    clients = [c for c in (TEAM_CLIENTS.get(team_id) or []) if c.get("name")]
+    # Clients resolve in parallel — each is an independent Google fetch, and
+    # doing them one after another is what made cold loads slow.
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        entries = list(pool.map(
+            lambda c: _delays_sources_cached(team_id, c["name"], list(c.get("tsMatch") or [])),
+            clients))
     out: list[dict] = []
-    for c in clients:
-        name    = c.get("name") or ""
-        aliases = list(c.get("tsMatch") or [])
-        if not name:
-            continue
-        matched_tab, csv_text, _candidates = _resolve_delays_tab(team_id, name, aliases)
-        if not matched_tab or not csv_text:
-            continue
-        rows, _mapping = _parse_delays_tab_csv(csv_text)
-        for r in rows:
-            r["clientName"] = name
-            r["tabUsed"]    = matched_tab
-            out.append(r)
+    for c, entry in zip(clients, entries):
+        for label, csv_text in entry["sources"]:
+            rows, _mapping = _parse_delays_tab_csv(csv_text)
+            for r in rows:
+                r["clientName"] = c["name"]
+                r["tabUsed"]    = label
+                out.append(r)
     _team_delay_questions_cache[team_id] = {"at": datetime.now(), "questions": out}
     print(f"[delaysTab] team={team_id} aggregated {len(out)} delay questions across clients")
     return out
@@ -5128,15 +5253,17 @@ def list_teams(request: Request):
         member_count = roster_count if roster_count else t.get("memberCount", 0)
         lead_count = 1 if (t.get("leadUserId") or roster_count) else 0
         exec_count = max(member_count - lead_count, 0)
-        leave = TEAM_ON_LEAVE.get(t["id"])
-        if leave:
-            # Card only: no lead, no members until the team is back.
+        st = TEAM_STATUS.get(t["id"])
+        if st:
+            # Card only: no lead, no members until the team has members again.
             out.append({
                 "id": t["id"], "label": t["label"], "leadName": None, "leadFullName": None,
                 "memberCount": 0, "leadCount": 0, "execCount": 0, "executiveCount": 0,
                 "tlCount": 0, "hasSheet": bool(t.get("sheetId")), "missingLead": False,
-                "onLeave": True, "leaveReason": leave.get("reason", "Team on leave"),
-                "leaveSince": leave.get("since"),
+                "teamStatus": st.get("status", "rebuilding"),
+                "statusLabel": st.get("label", "Rebuilding"),
+                "statusReason": st.get("reason", ""),
+                "statusSince": st.get("since"),
             })
             continue
         out.append({
@@ -5345,9 +5472,9 @@ async def _team_response(
     cfg = TEAM_LETTER_MAP.get(team_id)
     if not cfg:
         return {"error": "Team not found", "teamId": team_id}
-    if team_id in TEAM_ON_LEAVE:
+    if team_id in TEAM_STATUS:
         label = custom_window[2] if custom_window else date_range_for_period(period)[2]
-        return _on_leave_response(team_id, cfg, label, TEAM_ON_LEAVE[team_id])
+        return _team_status_response(team_id, cfg, label, TEAM_STATUS[team_id])
 
     roster    = TEAM_ROSTERS.get(team_id, [])
     admin_id  = TEAM_ADMIN_MAP.get(team_id)
@@ -5694,7 +5821,7 @@ async def _team_response(
             "isInternalOther": org_name == "Internal / Other",
             "entries":     h["entries"],  # per-org drill-down rows
         })
-        if h["isConfig"]:
+        if h["isConfig"] and not _quiet_team_logs.get():
             print(f"[client-match] team={team_id} client={org_name!r} "
                   f"tsMatchTried={h['tsMatch']} "
                   f"customersMatched={sorted(h['matchedCustomers'])} "
@@ -5742,7 +5869,8 @@ async def _team_response(
     clients_data = [c for c in clients_data if _keep_org(c)]
     clients_data.sort(key=_sort_key)
 
-    print(f"[DEBUG] team={team_id} roster={roster} staffFound={sorted(staff_names_found)[:10]}")
+    if not _quiet_team_logs.get():
+        print(f"[DEBUG] team={team_id} roster={roster} staffFound={sorted(staff_names_found)[:10]}")
 
     # Subtract Internal-category hours so totalBillable / totalNonBillable
     # reflect ONLY client work (Penny 2026-06-15). The per-org bars in
@@ -6035,6 +6163,79 @@ def detect_roster(team_id: str):
         "totalStaff":      len(staff),
         "howToFix":        "Copy names into TEAM_ROSTERS[team_id] in backend/main.py, then restart or POST /api/clear-cache.",
     }
+
+
+# ── Team dashboard pre-warm + background refresh ───────────────────
+# A cold team dashboard costs a Timesheets report pull (~15 s, shared by every
+# team) plus that team's Google Sheets reads. Rather than let the first user
+# after a restart or a cache expiry pay for it, every team's monthly view (the
+# default) is built at startup and rebuilt on this interval, well inside
+# TEAM_CACHE_SECS, so requests always hit a warm cache.
+TEAM_CACHE_REFRESH_SECS = 300
+# The shared Timesheets rows are re-pulled at most this often — the report API
+# rate-limits (HTTP 420), so not on every refresh tick.
+ROWS_REFRESH_AFTER_SECS = 600
+
+# Set during background rebuilds to silence _team_response's per-client debug
+# prints, which would otherwise add ~100 log lines every refresh.
+_quiet_team_logs: contextvars.ContextVar[bool] = contextvars.ContextVar("quiet_team_logs", default=False)
+
+
+def _refresh_rows_cache(start: str, end: str) -> None:
+    """Re-pull the shared rows for (start, end) once they're older than
+    ROWS_REFRESH_AFTER_SECS. A failed pull keeps serving the previous rows."""
+    key = f"{start}_{end}"
+    entry = _rows_cache.get(key)
+    if entry and (datetime.now() - entry["at"]).total_seconds() < ROWS_REFRESH_AFTER_SECS:
+        return
+    t0 = time.perf_counter()
+    data = fetch_timesheet(start, end)
+    if data is None:
+        print(f"[cache-refresh] rows {key}: upstream fetch failed — keeping cached rows")
+        return
+    rows = parse_rows(data)
+    _rows_cache[key] = {"rows": rows, "at": datetime.now()}
+    print(f"[cache-refresh] rows {key}: {len(rows)} rows in {time.perf_counter()-t0:.1f}s")
+
+
+async def _rebuild_team_caches(reason: str) -> None:
+    """Build every team's monthly response and store it in _team_cache. An entry
+    is replaced only by a successful build, so a failed rebuild keeps serving
+    the last good data."""
+    _quiet_team_logs.set(True)
+    t0 = time.perf_counter()
+    start, end, _ = date_range_for_period("monthly")
+    try:
+        await asyncio.to_thread(_refresh_rows_cache, start, end)
+    except Exception as e:
+        print(f"[cache-refresh] rows refresh failed: {e}")
+    ok, failed = 0, []
+    for team_id in TEAM_ORDER:
+        try:
+            result = await _team_response(team_id, "monthly")
+            if result.get("fetchError") or result.get("error"):
+                failed.append(team_id)
+                continue
+            _team_cache[f"{team_id}_monthly"] = {"data": result, "at": datetime.now()}
+            ok += 1
+        except Exception as e:
+            failed.append(team_id)
+            print(f"[cache-refresh] {team_id}: {type(e).__name__}: {e}")
+    print(f"[cache-refresh] {reason}: {ok}/{len(TEAM_ORDER)} team monthly views cached "
+          f"in {time.perf_counter()-t0:.1f}s" + (f"; failed: {failed}" if failed else ""))
+
+
+async def _team_cache_refresh_loop() -> None:
+    """Pre-warm on startup, then keep every team's monthly view fresh."""
+    await asyncio.sleep(5)   # let _run_warmup_background start the shared rows pull
+    print("[prewarm] building every team's monthly dashboard…")
+    await _rebuild_team_caches("prewarm")
+    while True:
+        await asyncio.sleep(TEAM_CACHE_REFRESH_SECS)
+        try:
+            await _rebuild_team_caches("refresh")
+        except Exception as e:
+            print(f"[cache-refresh] tick failed: {type(e).__name__}: {e}")
 
 
 async def _run_warmup_background():

@@ -417,35 +417,45 @@ function KpiSkeleton() {
   );
 }
 
-// ── First-load progress bar ────────────────────────────────────────
+// ── Loading skeleton ───────────────────────────────────────────────
+// Team views are pre-built on the server and normally arrive in about a second,
+// so this is a placeholder in the page's real shape (KPIs, client table,
+// members) rather than a progress bar promising a long wait. The stage text
+// only advances if a load does take a while.
+const LOADING_STAGES = [
+  { after: 0,    text: "Loading roster…" },
+  { after: 2000, text: "Loading hours…" },
+  { after: 7000, text: "Building charts…" },
+];
+
+function SkeletonBlock({ height, width = "100%", radius = 8, style }) {
+  return <div className="kpi-skeleton" style={{ height, width, borderRadius: radius, ...style }} />;
+}
+
 function LoadingScreen({ teamName }) {
+  const [stage, setStage] = useState(0);
+  useEffect(() => {
+    const timers = LOADING_STAGES.slice(1).map((s, i) =>
+      setTimeout(() => setStage(i + 1), s.after));
+    return () => timers.forEach(clearTimeout);
+  }, []);
+
   return (
-    <div style={{ padding: "60px 24px", textAlign: "center" }}>
-      <div style={{ fontSize: 13, color: C.sec, marginBottom: 20, fontWeight: 600 }}>
-        Loading {teamName} data from Timesheets API...
+    <div aria-busy="true" aria-label={`Loading ${teamName}`} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <div style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>
+        {LOADING_STAGES[stage].text}
       </div>
-      <div
-        style={{
-          width: "100%",
-          maxWidth: 400,
-          margin: "0 auto",
-          height: 4,
-          background: C.card,
-          borderRadius: 2,
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            height: "100%",
-            background: `linear-gradient(90deg, ${C.teal}, ${C.blue})`,
-            borderRadius: 2,
-            animation: "progressBar 25s linear forwards",
-          }}
-        />
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+        {[1, 2, 3, 4, 5].map((i) => <KpiSkeleton key={i} />)}
       </div>
-      <div style={{ fontSize: 11, color: C.muted, marginTop: 12 }}>
-        First load: ~25 sec · Subsequent loads: instant (cached)
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16,
+                    display: "flex", flexDirection: "column", gap: 10 }}>
+        <SkeletonBlock height={14} width="30%" />
+        {[1, 2, 3, 4, 5].map((i) => <SkeletonBlock key={i} height={28} radius={6} />)}
+      </div>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+        <SkeletonBlock height={220} style={{ flex: "2 1 360px" }} />
+        <SkeletonBlock height={220} style={{ flex: "1 1 240px" }} />
       </div>
     </div>
   );
@@ -1076,13 +1086,13 @@ function DepartmentAccordion({ dept, teamId }) {
   );
 }
 
-function OnLeaveCard({ teamName, reason, since }) {
+function TeamStatusCard({ teamName, label, message, since }) {
   return (
     <div
       style={{
         background: C.card,
         border: `1px solid ${C.border}`,
-        borderLeft: `3px solid ${C.yellow}`,
+        borderLeft: `3px solid ${C.orange}`,
         borderRadius: 10,
         padding: "32px 24px",
         textAlign: "center",
@@ -1098,22 +1108,19 @@ function OnLeaveCard({ teamName, reason, since }) {
           fontWeight: 700,
           letterSpacing: 0.8,
           textTransform: "uppercase",
-          color: C.yellow,
-          border: `1px solid ${C.yellow}66`,
+          color: C.orange,
+          border: `1px solid ${C.orange}66`,
           borderRadius: 999,
           padding: "3px 10px",
         }}
       >
-        On Leave
+        {label || "Rebuilding"}
       </span>
       <div style={{ fontSize: 18, fontWeight: 700, color: C.pri }}>{teamName}</div>
-      <div style={{ fontSize: 14, color: C.sec }}>Team on leave - back soon</div>
-      {(reason || since) && (
-        <div style={{ fontSize: 12, color: C.muted }}>
-          {reason}
-          {since ? ` · since ${since}` : ""}
-        </div>
-      )}
+      <div style={{ fontSize: 14, color: C.sec }}>
+        {message || "This team is being rebuilt. New members will be added shortly."}
+      </div>
+      {since && <div style={{ fontSize: 12, color: C.muted }}>Since {since}</div>}
     </div>
   );
 }
@@ -1624,10 +1631,10 @@ ${clients.map((o) => (
   }, []);
 
   const displayLabel = data?.teamLabel ?? data?.team ?? teamName ?? teamId;
-  // An on-leave team (backend TEAM_ON_LEAVE) hides every section a team with
-  // no roster hides, and shows OnLeaveCard in place of the roster-setup card.
-  const onLeave = data?.status === "on_leave";
-  const teamBlocked = !!(data?.needsRosterSetup || onLeave);
+  // A team in backend TEAM_STATUS (e.g. rebuilding) hides every section a team
+  // with no roster hides, and shows TeamStatusCard instead of the setup card.
+  const teamStatus = data?.statusMessage ? data.status : null;
+  const teamBlocked = !!(data?.needsRosterSetup || teamStatus);
   const displayLead  = data?.lead ?? data?.leadName ?? "";
   const rosterCount  = data?.rosterCount ?? 0;
   // Member count = the actual number of rows in the Team Members table (the
@@ -1979,8 +1986,8 @@ ${clients.map((o) => (
         )}
 
         {/* Setup-needed message */}
-        {!loading && teamBlocked && (onLeave
-          ? <OnLeaveCard teamName={displayLabel} reason={data?.leaveReason} since={data?.leaveSince} />
+        {!loading && teamBlocked && (teamStatus
+          ? <TeamStatusCard teamName={displayLabel} label={data?.statusLabel} message={data?.statusMessage} since={data?.statusSince} />
           : <RosterSetupCard teamId={teamId} teamName={displayLabel} />
         )}
 

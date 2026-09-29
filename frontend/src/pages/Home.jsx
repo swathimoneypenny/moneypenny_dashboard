@@ -254,7 +254,7 @@ function TeamCard({ team, onClick }) {
               fontWeight: 500,
             }}
           >
-            {team.onLeave ? "Team on leave" : leadShort ? `${leadShort}'s Team` : team.name}
+            {team.teamStatus ? "New team forming" : leadShort ? `${leadShort}'s Team` : team.name}
           </div>
         </div>
         <span
@@ -270,8 +270,8 @@ function TeamCard({ team, onClick }) {
         </span>
       </div>
 
-      {/* On leave: badge + message instead of lead / member counts */}
-      {team.onLeave && (
+      {/* Team status (e.g. rebuilding): badge + message instead of lead / counts */}
+      {team.teamStatus && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: "auto" }}>
           <span
             style={{
@@ -280,21 +280,21 @@ function TeamCard({ team, onClick }) {
               fontWeight: 700,
               letterSpacing: 0.8,
               textTransform: "uppercase",
-              color: C.yellow,
-              border: `1px solid ${C.yellow}66`,
-              background: `${C.yellow}14`,
+              color: C.orange,
+              border: `1px solid ${C.orange}66`,
+              background: `${C.orange}14`,
               borderRadius: 999,
               padding: "3px 10px",
             }}
           >
-            On Leave
+            {team.statusLabel || "Rebuilding"}
           </span>
-          <div style={{ fontSize: 13, color: C.sec }}>Team on leave - back soon</div>
+          <div style={{ fontSize: 13, color: C.sec }}>New team members joining soon</div>
         </div>
       )}
 
       {/* Lead + member counts */}
-      {!team.onLeave && (
+      {!team.teamStatus && (
       <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: "auto" }}>
         <div style={{ fontSize: 12, color: C.muted, textTransform: "uppercase", letterSpacing: 0.8 }}>
           Lead
@@ -491,8 +491,8 @@ function TeamTab({ onSelectTeam }) {
           execCount:     t.execCount,
           hasSheet:      t.hasSheet,
           missingLead:   t.missingLead,
-          onLeave:       !!t.onLeave,
-          leaveReason:   t.leaveReason,
+          teamStatus:    t.teamStatus || null,
+          statusLabel:   t.statusLabel,
         }));
         if (list.length > 0) setTeams(list);
         setLastRefreshed(new Date());
