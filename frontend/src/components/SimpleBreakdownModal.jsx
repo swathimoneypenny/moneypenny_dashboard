@@ -8,7 +8,7 @@ import { useEffect } from "react";
 //
 // Props:
 //   open, onClose      — overlay/escape close behavior
-//   title              — "📊 Organizations"
+//   title              — "📊 Clients"
 //   subtitle           — "5 active · This Month"
 //   total              — pre-formatted string ("208.6h") or null to hide
 //   items              — [{name, value:number, color?}]

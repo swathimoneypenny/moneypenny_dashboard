@@ -546,7 +546,7 @@ function PerfTable({ orgs, onRowClick }) {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search organizations…"
+          placeholder="Search clients…"
           style={{
             width: "100%",
             background: C.surface,
@@ -565,7 +565,7 @@ function PerfTable({ orgs, onRowClick }) {
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
           <tr>
-            <th style={{ ...th, textAlign: "left" }}>Organization</th>
+            <th style={{ ...th, textAlign: "left" }}>Client</th>
             {[
               ["gap",        "Gap"],
               ["committed",  "Target"],
@@ -1337,7 +1337,7 @@ export default function TeamDashboard({ teamId, teamName, initialPeriod, onPerio
   // the team view: clicking any org bar or table row populates `org` with the
   // clicked client object and the modal lists its underlying entries.
   const [orgModal, setOrgModal] = useState({ open: false, org: null });
-  // KPI-card drill-down modal — clicking any top KPI card (Organizations,
+  // KPI-card drill-down modal — clicking any top KPI card (Clients,
   // Billable, Non-Billable, Internal, Total) opens the same BarDetailModal
   // with the matching filter applied to the aggregated entry list.
   const [kpiModal, setKpiModal] = useState({ open: false, type: null });
@@ -1345,7 +1345,7 @@ export default function TeamDashboard({ teamId, teamName, initialPeriod, onPerio
   // client opens BarDetailModal with that client's entries pre-filtered
   // by billable flag (type = "Billable" or "Non-Billable").
   const [clientBarModal, setClientBarModal] = useState({ open: false, client: null, type: null });
-  // Performance-by-Organization row click → reason modal (WHY behind target /
+  // Performance-by-Clients row click → reason modal (WHY behind target /
   // HOW to fix). Stays separate from `orgModal` (Hours-by-Org chart bar
   // click → entries table) — different surfaces, different drill-downs.
   const [perfModal, setPerfModal] = useState({ open: false, org: null });
@@ -1451,8 +1451,8 @@ export default function TeamDashboard({ teamId, teamName, initialPeriod, onPerio
   }, [teamId, period, customRange.from, customRange.to]);
 
   // Filter "Internal / Other" out at the source so it disappears from every
-  // consumer below: the Performance by Organization table + its TOTALS row,
-  // the Organizations KPI count, the Hours by Org chart, and the chatbot
+  // consumer below: the Performance by Clients table + its TOTALS row,
+  // the Clients KPI count, the Hours by Client chart, and the chatbot
   // context. Non-billable hours that used to land here are still represented
   // in the Non-Billable KPI card and per-employee Non-Billable Breakdown.
   const clients = useMemo(
@@ -1472,7 +1472,7 @@ export default function TeamDashboard({ teamId, teamName, initialPeriod, onPerio
     const ctx = `Team: ${teamName} — ${data.period ?? ""}
 Total: Committed ${summary.totalCommitted ?? 0}h | Utilized ${summary.totalBillable ?? 0}h | Non-Bill ${summary.totalNonBillable ?? 0}h | Util ${summary.overallEfficiency ?? 0}% | Delays ${summary.totalDelays ?? 0}
 
-ORGANIZATIONS:
+CLIENTS:
 ${clients.map((o) => (
   `• ${o.name}: ${o.committed ?? 0}h committed, ${o.billable ?? 0}h utilized, ${o.nonBillable ?? 0}h non-billable, ${o.efficiency ?? 0}% util, ${o.delays ?? 0} delays`
 )).join("\n")}`;
@@ -1992,7 +1992,7 @@ ${clients.map((o) => (
         ) : teamBlocked ? null : (
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
             <KpiCard
-              label="Organizations"
+              label="Clients"
               value={clients.length}
               color={C.blue}
               suffix=""
@@ -2046,16 +2046,16 @@ ${clients.map((o) => (
 
         {!teamBlocked && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-          {/* Hours by Organization spans both columns now that the per-month
+          {/* Hours by Client spans both columns now that the per-month
               committed/utilized chart was removed — otherwise it would sit
               orphaned in the left half. */}
           <div style={{ gridColumn: "1 / -1" }}>
-          <ChartCard title="Hours by Organization">
+          <ChartCard title="Hours by Client">
             {loading ? (
               <div className="kpi-skeleton" style={{ height: 260 }} />
             ) : hoursByOrg.length === 0 ? (
               <div style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13, fontStyle: "italic" }}>
-                No organization data
+                No client data
               </div>
             ) : (
               <ResponsiveContainer width="100%" height={260}>
@@ -2077,7 +2077,7 @@ ${clients.map((o) => (
                   <XAxis type="number" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} height={42}
                     label={{ value: "Hours", position: "insideBottom", offset: 0, fill: C.sec, fontSize: 11, fontWeight: 700 }} />
                   <YAxis dataKey="name" type="category" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} width={130}
-                    label={{ value: "Organization", angle: -90, position: "insideLeft", fill: C.sec, fontSize: 11, fontWeight: 700, style: { textAnchor: "middle" } }} />
+                    label={{ value: "Client", angle: -90, position: "insideLeft", fill: C.sec, fontSize: 11, fontWeight: 700, style: { textAnchor: "middle" } }} />
                   <Tooltip content={<DarkTooltip />} />
                   <Bar
                     dataKey="Hours"
@@ -2172,7 +2172,7 @@ ${clients.map((o) => (
         {!teamBlocked && (
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: C.sec, marginBottom: 16 }}>
-            Performance by Organization
+            Performance by Clients
           </div>
           {loading ? (
             <div className="kpi-skeleton" style={{ height: 240 }} />
@@ -2206,7 +2206,7 @@ ${clients.map((o) => (
         open={orgModal.open}
         onClose={() => setOrgModal({ open: false, org: null })}
         title={orgModal.org?.name || ""}
-        subtitle={`Organization · ${periodLabel}`}
+        subtitle={`Client · ${periodLabel}`}
         entries={orgModal.org?.entries || []}
         accentColor={C.orange}
         totalHours={Number(orgModal.org?.total ?? orgModal.org?.actual ?? 0)}
@@ -2290,7 +2290,7 @@ function _buildKpiModalProps({ type, periodLabel, clients, summary, allEntries, 
         .sort((a, b) => b.value - a.value);
       const sum = items.reduce((s, it) => s + it.value, 0);
       return {
-        title: "📊 Organizations",
+        title: "📊 Clients",
         subtitle: `${items.length} active · ${periodLabel}`,
         total: `${sum.toFixed(2)}h`,
         accentColor: C.blue,
@@ -2306,7 +2306,7 @@ function _buildKpiModalProps({ type, periodLabel, clients, summary, allEntries, 
         .sort((a, b) => b.value - a.value);
       return {
         title: "💰 Total Billable Breakdown",
-        subtitle: `By organization · ${periodLabel}`,
+        subtitle: `By client · ${periodLabel}`,
         total: `${(summary?.totalBillable ?? 0).toFixed(2)}h`,
         accentColor: C.teal,
         showPercentage: true,
@@ -2321,7 +2321,7 @@ function _buildKpiModalProps({ type, periodLabel, clients, summary, allEntries, 
         .sort((a, b) => b.value - a.value);
       return {
         title: "📋 Non-Billable Breakdown",
-        subtitle: `By organization (excludes Internal) · ${periodLabel}`,
+        subtitle: `By client (excludes Internal) · ${periodLabel}`,
         total: `${(summary?.totalNonBillable ?? 0).toFixed(2)}h`,
         accentColor: C.orange,
         showPercentage: true,
