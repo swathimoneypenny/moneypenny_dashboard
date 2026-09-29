@@ -5768,8 +5768,9 @@ async def _team_response(
                 if not is_member:
                     continue
                 if shared_client_blocked(shared, team_id):
+                    # Counted in the excluded total but not named: a blocked
+                    # client must not appear anywhere on this team's view.
                     excluded_other_client_hours += h
-                    excluded_other_clients.add(customer)
                     continue
                 resolved = shared
             else:
@@ -7978,6 +7979,44 @@ def _normalize_delay_status(
     return "open"
 
 
+_SHEET_FAIL_RETRY_SECS = 15
+# Last successfully read CSV per (sheet, gid). Deliberately NOT cleared by
+# /api/clear-cache, so a cache clear followed by a quota error still has data.
+_sheet_last_good: dict[tuple[str, str], str] = {}
+
+
+def _cached_sheet_csv(cache: dict, ttl: float, sheet_id: str, gid: str, tag: str) -> str:
+    """CSV for one sheet tab with a TTL cache that survives Google's quota.
+
+    The Sheets API allows 60 reads/min/user, which a restart's pre-warm can
+    exceed. A read that returns 429 is retried once after a short pause; if it
+    still fails, the LAST GOOD copy is served (TLs keep seeing their data
+    instead of an empty tab), and with no good copy the failure is retried
+    after _SHEET_FAIL_RETRY_SECS rather than cached as empty for the full TTL.
+    """
+    if not sheet_id or not gid:
+        return ""
+    key = (sheet_id, gid)
+    entry = cache.get(key)
+    now = datetime.now()
+    if entry and (now - entry["at"]).total_seconds() < entry.get("ttl", ttl):
+        return entry["csv"]
+    res = sheets_client.fetch_csv(sheet_id, gid=gid)
+    if res.status_code == 429:
+        time.sleep(3)
+        res = sheets_client.fetch_csv(sheet_id, gid=gid)
+    if res.status_code != 200:
+        last_good = _sheet_last_good.get(key, "")
+        print(f"[{tag}] fetch gid={gid} returned {res.status_code}"
+              + (" — serving last good copy" if last_good else ""))
+        cache[key] = {"at": now, "csv": last_good,
+                      "ttl": ttl if last_good else _SHEET_FAIL_RETRY_SECS}
+        return last_good
+    _sheet_last_good[key] = res.text
+    cache[key] = {"at": now, "csv": res.text, "ttl": ttl}
+    return res.text
+
+
 def _fetch_delays_csv(sheet_id: str, gid: str) -> str:
     """Cached CSV fetch for a specific Delays tab (sheet_id + gid). Returns
     the raw CSV text, or "" on any failure. 5-min cache per (sheet, gid).
@@ -7986,25 +8025,7 @@ def _fetch_delays_csv(sheet_id: str, gid: str) -> str:
     but rarely sets a charset header, so `requests` would otherwise default
     to ISO-8859-1 and mangle smart quotes / em-dashes.
     """
-    if not sheet_id or not gid:
-        return ""
-    key = (sheet_id, gid)
-    entry = _delays_csv_cache.get(key)
-    now = datetime.now()
-    if entry and (now - entry["at"]).total_seconds() < _DELAYS_CSV_TTL:
-        return entry["csv"]
-    res = sheets_client.fetch_csv(sheet_id, gid=gid)
-    if res.status_code != 200:
-        print(f"[delaysTab] fetch {gid} returned {res.status_code}")
-        _delays_csv_cache[key] = {"at": now, "csv": ""}
-        return ""
-    csv_text = res.text
-    _delays_csv_cache[key] = {"at": now, "csv": csv_text}
-    # Debug: surface the exact source + row count so a "delay popup empty"
-    # report can be traced to fetch vs. parse vs. mapping.
-    print(f"[delaysTab] fetched gid={gid} url={res.url} bytes={len(csv_text)} "
-          f"lines={csv_text.count(chr(10)) + 1 if csv_text else 0}")
-    return csv_text
+    return _cached_sheet_csv(_delays_csv_cache, _DELAYS_CSV_TTL, sheet_id, gid, "delaysTab")
 
 
 def _is_placeholder_delay_row(question: str, status_raw: str, workflow_status: str) -> bool:
@@ -10178,21 +10199,7 @@ def _fetch_bod_eod_csv(sheet_id: str, gid: str) -> str:
     """Cached CSV export for a BOD/EOD client tab. 60s TTL per (sheet, gid).
     Returns '' on any failure so downstream parsing yields an empty client
     (the endpoint still 200s with a friendly entries=[] shape)."""
-    if not sheet_id or not gid:
-        return ""
-    key = (sheet_id, gid)
-    entry = _bod_eod_csv_cache.get(key)
-    now = datetime.now()
-    if entry and (now - entry["at"]).total_seconds() < _BOD_EOD_CSV_TTL:
-        return entry["csv"]
-    res = sheets_client.fetch_csv(sheet_id, gid=gid)
-    if res.status_code != 200:
-        print(f"[bod-eod] fetch gid={gid} returned {res.status_code}")
-        _bod_eod_csv_cache[key] = {"at": now, "csv": ""}
-        return ""
-    csv_text = res.text
-    _bod_eod_csv_cache[key] = {"at": now, "csv": csv_text}
-    return csv_text
+    return _cached_sheet_csv(_bod_eod_csv_cache, _BOD_EOD_CSV_TTL, sheet_id, gid, "bod-eod")
 
 
 _BOD_EOD_DATE_RE = re.compile(r"^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$")
