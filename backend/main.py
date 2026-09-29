@@ -458,7 +458,7 @@ for _tid in list(TEAM_LETTER_MAP.keys()):
 # Refresh the same way monthly, or whenever /api/roster/health reports the
 # fallback as significantly behind.
 FALLBACK_TEAM_ROSTERS: dict[str, list[str]] = {
-    # Team A is rebuilding (TEAM_STATUS) — all members relieved. Uma moved to Team G.
+    # Team A is on hold (TEAM_STATUS) — all members relieved. Uma moved to Team G.
     "team_a": ["kokila ramachandran"],
     "team_b": ["buelaangel t", "ivanjalin sofia irudhayaraj", "pavithra srinivasan", "varshini natarajan"],
     "team_c": [
@@ -563,18 +563,17 @@ TEAM_EXPECTED_COUNTS: dict[str, int] = {
     "team_n": 4,
 }
 
-# Teams with no working members right now. The team card stays on the Home page
+# Teams with no working members right now (e.g. on hold). The team card stays on the Home page
 # with a status badge, and every team data view returns an empty payload with
 # the status message instead of members / clients. Remove the entry once the
 # team has members again — the roster repopulates from Timesheets.com on its own.
 TEAM_STATUS: dict[str, dict] = {
-    # Every Team A member was relieved from MPLLC (2026-09-29); the team will be
-    # rebuilt with new members.
+    # Every Team A member was relieved from MPLLC (2026-09-29).
     "team_a": {
-        "status":  "rebuilding",
-        "label":   "Rebuilding",
-        "reason":  "Team currently rebuilding - new members joining soon",
-        "message": "This team is being rebuilt. New members will be added shortly.",
+        "status":  "hold",
+        "label":   "HOLD",
+        "reason":  "Team on hold",
+        "message": "Team A is currently on hold.",
         "since":   "2026-09-29",
     },
 }
@@ -590,8 +589,8 @@ def _team_status_response(team_id: str, cfg: dict, label: str, st: dict) -> dict
         "lead":             "",
         "leadName":         "",
         "period":           label,
-        "status":           st.get("status", "rebuilding"),
-        "statusLabel":      st.get("label", "Rebuilding"),
+        "status":           st.get("status", "hold"),
+        "statusLabel":      st.get("label", "HOLD"),
         "statusReason":     st.get("reason", ""),
         "statusMessage":    st.get("message", ""),
         "statusSince":      st.get("since"),
@@ -734,7 +733,7 @@ UNCATEGORIZED_CLIENTS = [
 # and never removes or rewrites a curated entry.
 FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
     "team_a": [
-        # Team A is rebuilding (TEAM_STATUS) and has no clients.
+        # Team A is on hold (TEAM_STATUS) and has no clients.
         # Ollin Balance moved to Team G 2026-09-29 — Team G does ~90% of the work.
         # Bookkeeping Doctor and 24hr Bookkeeper left MPLLC (see INACTIVE_CLIENTS).
     ],
@@ -821,7 +820,10 @@ FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
         # One client, two names: timesheet rows come in as "Portrai Me"; "Shane
         # Butler" is the BOD/EOD + Delays tab naming.
         {"name": "Shane Butler",         "tsMatch": ["Shane Butler", "Portrai Me", "Portrai"],  "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting", "billing": "hourly"},
-        {"name": "Sybilline Records",    "tsMatch": ["Sybilline", "Sybylline"],                "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting", "billing": "hourly"},
+        # Was "Sybilline Records" with tsMatch ["Sybilline", "Sybylline"], which
+        # never matched the real customer "SYB-Sibylline" (Sib- vs Syb-), so the
+        # hours showed as a second, ad-hoc "SYB-Sibylline" row. One entry now.
+        {"name": "SYB-Sibylline",        "tsMatch": ["SYB-Sibylline", "Sibylline", "Sybilline Records", "Sybilline"], "estHrs": 0, "tz": "PST", "meeting": "No scheduled meeting", "billing": "hourly"},
         # Not in the PDF, kept per the user 2026-09-29 (TL's list, 2026-08-17).
         {"name": "Kacey Fitzpatrick",    "tsMatch": ["Kacey Fitzpatrick", "Kacey"],            "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting", "billing": "hourly"},
         {"name": "Malmi",                "tsMatch": ["Malmi"],                                 "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting", "billing": "hourly"},
@@ -5260,8 +5262,8 @@ def list_teams(request: Request):
                 "id": t["id"], "label": t["label"], "leadName": None, "leadFullName": None,
                 "memberCount": 0, "leadCount": 0, "execCount": 0, "executiveCount": 0,
                 "tlCount": 0, "hasSheet": bool(t.get("sheetId")), "missingLead": False,
-                "teamStatus": st.get("status", "rebuilding"),
-                "statusLabel": st.get("label", "Rebuilding"),
+                "teamStatus": st.get("status", "hold"),
+                "statusLabel": st.get("label", "HOLD"),
                 "statusReason": st.get("reason", ""),
                 "statusSince": st.get("since"),
             })
@@ -5352,7 +5354,7 @@ def _accessible_client_entries(user: dict | None) -> list[dict]:
 
     Deliberately not derived from logged hours: /api/active-clients only covers
     the last 30 days, so Team M's genuinely-quiet clients (MC Tax, SDC Group,
-    Helvetica, Shane Butler, Sybilline Records ...) would be missing from the
+    Helvetica, Shane Butler, SYB-Sibylline ...) would be missing from the
     picker even though they are permanent clients.
 
     Admins get every team's clients; everyone else gets their own team's plus

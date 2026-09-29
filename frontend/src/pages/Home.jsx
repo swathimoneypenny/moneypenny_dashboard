@@ -254,7 +254,7 @@ function TeamCard({ team, onClick }) {
               fontWeight: 500,
             }}
           >
-            {team.teamStatus ? "New team forming" : leadShort ? `${leadShort}'s Team` : team.name}
+            {team.teamStatus ? "Team on hold" : leadShort ? `${leadShort}'s Team` : team.name}
           </div>
         </div>
         <span
@@ -270,7 +270,7 @@ function TeamCard({ team, onClick }) {
         </span>
       </div>
 
-      {/* Team status (e.g. rebuilding): badge + message instead of lead / counts */}
+      {/* Team status (e.g. on hold): badge + message instead of lead / counts */}
       {team.teamStatus && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: "auto" }}>
           <span
@@ -280,16 +280,16 @@ function TeamCard({ team, onClick }) {
               fontWeight: 700,
               letterSpacing: 0.8,
               textTransform: "uppercase",
-              color: C.orange,
-              border: `1px solid ${C.orange}66`,
-              background: `${C.orange}14`,
+              color: C.sec,
+              border: `1px solid ${C.muted}`,
+              background: C.overlay,
               borderRadius: 999,
               padding: "3px 10px",
             }}
           >
-            {team.statusLabel || "Rebuilding"}
+            {team.statusLabel || "HOLD"}
           </span>
-          <div style={{ fontSize: 13, color: C.sec }}>New team members joining soon</div>
+          <div style={{ fontSize: 13, color: C.sec }}>Team on hold</div>
         </div>
       )}
 

@@ -1092,7 +1092,7 @@ function TeamStatusCard({ teamName, label, message, since }) {
       style={{
         background: C.card,
         border: `1px solid ${C.border}`,
-        borderLeft: `3px solid ${C.orange}`,
+        borderLeft: `3px solid ${C.muted}`,
         borderRadius: 10,
         padding: "32px 24px",
         textAlign: "center",
@@ -1108,17 +1108,17 @@ function TeamStatusCard({ teamName, label, message, since }) {
           fontWeight: 700,
           letterSpacing: 0.8,
           textTransform: "uppercase",
-          color: C.orange,
-          border: `1px solid ${C.orange}66`,
+          color: C.sec,
+          border: `1px solid ${C.muted}`,
           borderRadius: 999,
           padding: "3px 10px",
         }}
       >
-        {label || "Rebuilding"}
+        {label || "HOLD"}
       </span>
       <div style={{ fontSize: 18, fontWeight: 700, color: C.pri }}>{teamName}</div>
       <div style={{ fontSize: 14, color: C.sec }}>
-        {message || "This team is being rebuilt. New members will be added shortly."}
+        {message || "This team is currently on hold."}
       </div>
       {since && <div style={{ fontSize: 12, color: C.muted }}>Since {since}</div>}
     </div>
@@ -1317,10 +1317,7 @@ export default function TeamDashboard({ teamId, teamName, initialPeriod, onPerio
 
   // Leaderboard for the current period (drives "Team Members" table).
   const [leaderboard, setLeaderboard] = useState(null);
-  // Weekly leaderboard for "Most Underutilized This Week" widget.
-  const [weeklyLeaderboard, setWeeklyLeaderboard] = useState(null);
   const lbAbortRef     = useRef(null);
-  const weeklyAbortRef = useRef(null);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState(null);
@@ -1442,25 +1439,6 @@ export default function TeamDashboard({ teamId, teamName, initialPeriod, onPerio
       });
     return () => ctrl.abort();
   }, [teamId, period, customRange.from, customRange.to]);
-
-  // Weekly leaderboard for the "Most Underutilized This Week" widget.
-  useEffect(() => {
-    if (weeklyAbortRef.current) weeklyAbortRef.current.abort();
-    const ctrl = new AbortController();
-    weeklyAbortRef.current = ctrl;
-    setWeeklyLeaderboard(null);
-    authFetch(`/api/team/${teamId}/leaderboard/weekly`, { signal: ctrl.signal })
-      .then((r) => r.json())
-      .then((d) => {
-        if (ctrl.signal.aborted) return;
-        setWeeklyLeaderboard(d);
-      })
-      .catch((err) => {
-        if (err?.name === "AbortError") return;
-        setWeeklyLeaderboard({ members: [] });
-      });
-    return () => ctrl.abort();
-  }, [teamId]);
 
   // Filter "Internal / Other" out at the source so it disappears from every
   // consumer below: the Performance by Organization table + its TOTALS row,
@@ -1631,7 +1609,7 @@ ${clients.map((o) => (
   }, []);
 
   const displayLabel = data?.teamLabel ?? data?.team ?? teamName ?? teamId;
-  // A team in backend TEAM_STATUS (e.g. rebuilding) hides every section a team
+  // A team in backend TEAM_STATUS (e.g. on hold) hides every section a team
   // with no roster hides, and shows TeamStatusCard instead of the setup card.
   const teamStatus = data?.statusMessage ? data.status : null;
   const teamBlocked = !!(data?.needsRosterSetup || teamStatus);
@@ -2039,14 +2017,6 @@ ${clients.map((o) => (
           </div>
         )}
 
-        {/* Most Underutilized This Week — only shows when team has >= 3 members */}
-        {!teamBlocked && weeklyLeaderboard && Array.isArray(weeklyLeaderboard.members) && weeklyLeaderboard.members.length >= 3 && (
-          <UnderutilizedWidget
-            members={weeklyLeaderboard.members}
-            onSelect={(name) => onSelectEmployee && onSelectEmployee({ teamId, employeeName: name, teamName: displayLabel })}
-          />
-        )}
-
         {/* Currently Active — drives off lastLoggedAt / activeNow from the leaderboard */}
         {!teamBlocked && leaderboard && Array.isArray(leaderboard.members) && leaderboard.members.length > 0 && (
           <CurrentlyActiveWidget
@@ -2388,87 +2358,6 @@ function _buildKpiModalProps({ type, periodLabel, clients, summary, allEntries, 
       };
     }
   }
-}
-
-// ── Most Underutilized This Week ───────────────────────────────────
-function UnderutilizedWidget({ members, onSelect }) {
-  // Lowest util%, but exclude truly-zero rows (likely no data, not low usage).
-  const bottom = useMemo(
-    () => [...members]
-      .filter((m) => (m.utilPct ?? 0) > 0 || (m.billable ?? 0) > 0)
-      .sort((a, b) => (a.utilPct ?? 0) - (b.utilPct ?? 0))
-      .slice(0, 3),
-    [members]
-  );
-  if (bottom.length === 0) return null;
-  return (
-    <div
-      style={{
-        background: `${C.orange}10`,
-        border: `1px solid ${C.orange}30`,
-        borderLeft: `3px solid ${C.orange}`,
-        borderRadius: 8,
-        padding: "12px 16px",
-        display: "flex",
-        alignItems: "center",
-        gap: 16,
-        flexWrap: "wrap",
-      }}
-    >
-      <div style={{ fontSize: 11, color: C.orange, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, whiteSpace: "nowrap" }}>
-        ⚠ Most Underutilized This Week
-      </div>
-      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", flex: 1 }}>
-        {bottom.map((m, i) => (
-          <button
-            key={i}
-            onClick={() => onSelect && onSelect(m.name)}
-            style={{
-              background: "transparent",
-              border: `1px solid ${C.border}`,
-              borderRadius: 8,
-              padding: "6px 12px 6px 6px",
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
-              cursor: "pointer",
-              fontFamily: "'DM Sans', sans-serif",
-              color: C.pri,
-              transition: "all 0.15s",
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.borderColor = C.orange; e.currentTarget.style.background = `${C.orange}14`; }}
-            onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = "transparent"; }}
-          >
-            <div
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: 6,
-                background: gradientFor(m.name),
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 10,
-                fontWeight: 700,
-                color: "#fff",
-              }}
-            >
-              {initials(m.name)}
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 1 }}>
-              <span style={{ fontSize: 12, fontWeight: 600 }}>{m.name}</span>
-              <span style={{ fontSize: 10, color: C.teal, fontFamily: "'DM Mono', monospace" }}>
-                {(m.billable ?? 0).toFixed(2)}h billable
-                {m.trend === "up"   && <span style={{ marginLeft: 6, color: C.green }}>▲</span>}
-                {m.trend === "down" && <span style={{ marginLeft: 6, color: C.red }}>▼</span>}
-                {m.trend === "flat" && <span style={{ marginLeft: 6, color: C.muted }}>–</span>}
-              </span>
-            </div>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
 }
 
 // ── Currently Active widget ──────────────────────────────────────
