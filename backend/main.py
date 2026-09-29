@@ -6186,7 +6186,12 @@ def _refresh_rows_cache(start: str, end: str) -> None:
     ROWS_REFRESH_AFTER_SECS. A failed pull keeps serving the previous rows."""
     key = f"{start}_{end}"
     entry = _rows_cache.get(key)
-    if entry and (datetime.now() - entry["at"]).total_seconds() < ROWS_REFRESH_AFTER_SECS:
+    if entry is None:
+        # Nothing cached yet (startup): go through get_cached_rows so this joins
+        # the warmup's in-flight pull instead of starting a second one.
+        get_cached_rows(start, end)
+        return
+    if (datetime.now() - entry["at"]).total_seconds() < ROWS_REFRESH_AFTER_SECS:
         return
     t0 = time.perf_counter()
     data = fetch_timesheet(start, end)
