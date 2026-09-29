@@ -3839,7 +3839,13 @@ def _split_training_topics(raw: str) -> list[str]:
 
 
 _DELAYS_TAB_MATCH_TTL = 3600  # 1 h — resolver cache (which tab name matched)
-_DELAYS_QUESTIONS_TTL = 300   # 5 min — aggregated questions cache, matches spec
+# 15 min — per-team delay questions for the day-popup enrichment. Longer than
+# the 5-min background refresh so each refresh doesn't re-read every team's
+# Delays tabs; that burst exceeded the Sheets API's 60 reads/min quota.
+_DELAYS_QUESTIONS_TTL = 900
+# A Delays lookup that FAILED (e.g. HTTP 429) is retried after this, instead of
+# being cached as "no tab" for _DELAYS_TAB_MATCH_TTL.
+_DELAYS_FAILED_RETRY_SECS = 60
 # (team_id, client_name) -> {at, tab_name | None, csv_text | None, candidates}
 _delays_tab_match_cache: dict[tuple[str, str], dict] = {}
 # team_id -> {at, questions: list[dict]} — flattened across all configured clients
@@ -3967,6 +3973,7 @@ def _delays_gids_for_client(team_id: str, client_name: str,
 _SHEET_TABS_TTL = 6 * 3600        # tab titles change rarely
 _SHEET_TABS_EMPTY_TTL = 30 * 60   # retry a failed listing sooner
 _sheet_tabs_cache: dict[str, dict] = {}   # sheet_id -> {at, titles}
+_sheet_tabs_ok: set[str] = set()          # sheets whose last listing succeeded
 
 
 def _sheet_tab_titles(sheet_id: str) -> list[str]:
@@ -3995,6 +4002,10 @@ def _sheet_tab_titles(sheet_id: str) -> list[str]:
         except Exception as e:
             print(f"[delaysTab] tab listing failed for sheet {sheet_id[:8]}…: {e}")
     _sheet_tabs_cache[sheet_id] = {"at": datetime.now(), "titles": titles}
+    if titles:
+        _sheet_tabs_ok.add(sheet_id)
+    else:
+        _sheet_tabs_ok.discard(sheet_id)
     return titles
 
 
@@ -4037,7 +4048,9 @@ def _delays_sources_for_client(team_id: str, client_name: str, aliases: list[str
     for key, gid in _delays_gids_for_client(team_id, client_name, aliases):
         tried.append(f"gid:{gid} ({key})")
         csv_text = _fetch_delays_csv(sheet_id, gid)
-        if csv_text and _csv_looks_like_delays_tab(csv_text):
+        if not csv_text:
+            tried.append("fetch-failed")   # empty/failed read — retry soon, see caller
+        elif _csv_looks_like_delays_tab(csv_text):
             sources.append((f"gid:{gid} ({key})", csv_text))
     if sources:
         return sources, tried
@@ -4054,12 +4067,16 @@ def _delays_sources_for_client(team_id: str, client_name: str, aliases: list[str
             csv_text, _url = _fetch_eod_csv(sheet_id, tab=cand)
         except EodSheetError as e:
             print(f"[delaysTab] team={team_id} client={client_name!r} cand={cand!r} skip ({e.reason})")
+            tried.append("fetch-failed")
             continue
         except Exception as e:
             print(f"[delaysTab] team={team_id} client={client_name!r} cand={cand!r} error: {e}")
+            tried.append("fetch-failed")
             continue
         if csv_text and _csv_looks_like_delays_tab(csv_text):
             return [(cand, csv_text)], tried
+    if not titles and sheet_id not in _sheet_tabs_ok:
+        tried.append("fetch-failed")   # tab listing failed — also retry soon
     return [], tried
 
 
@@ -4076,10 +4093,15 @@ def _resolve_delays_tab(team_id: str, client_name: str, aliases: list[str] | Non
 def _delays_sources_cached(team_id: str, client_name: str, aliases: list[str] | None) -> dict:
     key = (team_id, (client_name or "").strip())
     cached = _delays_tab_match_cache.get(key)
-    if cached and (datetime.now() - cached["at"]).total_seconds() < _DELAYS_TAB_MATCH_TTL:
-        return cached
+    if cached:
+        ttl = _DELAYS_FAILED_RETRY_SECS if cached.get("failed") else _DELAYS_TAB_MATCH_TTL
+        if (datetime.now() - cached["at"]).total_seconds() < ttl:
+            return cached
     sources, tried = _delays_sources_for_client(team_id, client_name, aliases)
-    entry = {"at": datetime.now(), "sources": sources, "candidates": tried}
+    # A lookup that found nothing only because a read failed (429 etc.) must
+    # not hide the client's delays for an hour — retry it after a minute.
+    failed = not sources and "fetch-failed" in tried
+    entry = {"at": datetime.now(), "sources": sources, "candidates": tried, "failed": failed}
     _delays_tab_match_cache[key] = entry
     if sources:
         print(f"[delaysTab] team={team_id} client={client_name!r} matched {[l for l, _ in sources]}")
@@ -4202,7 +4224,9 @@ def _get_team_delay_questions(team_id: str) -> list[dict]:
     clients = [c for c in (TEAM_CLIENTS.get(team_id) or []) if c.get("name")]
     # Clients resolve in parallel — each is an independent Google fetch, and
     # doing them one after another is what made cold loads slow.
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    # 3 workers: parallel enough for a fast cold load, gentle enough for the
+    # Sheets API's 60 reads/min/user quota.
+    with ThreadPoolExecutor(max_workers=3) as pool:
         entries = list(pool.map(
             lambda c: _delays_sources_cached(team_id, c["name"], list(c.get("tsMatch") or [])),
             clients))
