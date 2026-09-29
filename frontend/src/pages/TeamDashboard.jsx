@@ -72,6 +72,20 @@ function noCommitmentStatus(o) {
   return null;
 }
 
+// Team Members status — bands on the fixed 160h monthly target, computed by the
+// backend (member_status): <100h CRITICAL · 100–130h ON TRACK · 130–160h GOOD ·
+// 160h+ EXCEEDED. Falls back to the utilisation bands if a response lacks it.
+const MEMBER_STATUS_STYLE = {
+  "CRITICAL": { label: "CRITICAL", color: C.red,    bg: C.statusRed },
+  "ON TRACK": { label: "ON TRACK", color: C.yellow, bg: "rgba(240,185,71,0.14)" },
+  "GOOD":     { label: "GOOD",     color: C.green,  bg: C.statusGreen },
+  "EXCEEDED": { label: "EXCEEDED", color: "#D4A017", bg: "rgba(212,160,23,0.16)" },
+};
+
+function memberStatusInfo(status) {
+  return MEMBER_STATUS_STYLE[status] ?? null;
+}
+
 function delayColor(count) {
   if (count <= 0) return C.green;
   if (count <= 2) return C.yellow;
@@ -2628,7 +2642,7 @@ function TeamMembersTable({ members, onSelect, committedLabel }) {
             <tbody>
               {sorted.map((m, i) => {
                 const util = m.utilPct ?? 0;
-                const st = statusInfo(util);
+                const st = memberStatusInfo(m.status) ?? statusInfo(util);
                 const inactive = m.hasActivity === false;
                 const baseBg = i % 2 === 0 ? "transparent" : C.surface;
                 const isLow = lowUtilSet.has(m.name);

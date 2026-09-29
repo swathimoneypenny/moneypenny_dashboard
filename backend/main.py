@@ -771,9 +771,12 @@ FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
     ],
     "team_g": [
         {"name": "Ez Ledger",            "tsMatch": ["Ez Ledger", "EZ Ledger", "EzLedger"],    "estHrs": 240, "tz": "EST", "meeting": "Every Friday 8:30 AM IST (11:00 PM EST Thursday)"},
-        # Proper Trust, Mintage and Artesani are all billed under Proper Trust
-        # (PDF), so they share one row and one 160h commitment.
-        {"name": "Proper Trust",         "tsMatch": ["Proper Trust", "ProperTrust", "Mintage", "Artesani"], "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
+        # Mintage Labs and LAA-Artesani are billed under Proper Trust (PDF: its
+        # 160h covers all three) but shown as their own rows (2026-09-29), so
+        # Proper Trust must NOT alias them.
+        {"name": "Proper Trust",         "tsMatch": ["Proper Trust", "ProperTrust"],           "estHrs": 160, "tz": "EST", "meeting": "No scheduled meeting"},
+        {"name": "LAA-Artesani Accounting", "tsMatch": ["LAA-Artesani", "LAA Artesani", "Artesani Accounting", "Artesani"], "estHrs": 0, "tz": "EST", "meeting": "No scheduled meeting", "billing": "hourly", "note": "Part of Proper Trust billing group"},
+        {"name": "Mintage Labs",         "tsMatch": ["Mintage Labs", "MintageLabs", "Mintage"], "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting", "billing": "hourly", "note": "Part of Proper Trust billing group"},
         {"name": "Putman Accountancy",   "tsMatch": ["Putman"],                                "estHrs": 40,  "tz": "PST", "meeting": "No scheduled meeting"},
         # Moved from Team A 2026-09-29 — Team G does ~90% of the work.
         {"name": "Ollin Balance",        "tsMatch": ["Ollin Balance", "Ollinbalance", "Ollin"], "estHrs": 160, "tz": "EST", "meeting": "4th week Tuesday 4:30pm IST"},
@@ -6789,6 +6792,26 @@ PER_PREPARER_TARGET: dict[str, float] = {
     "monthly": 160.0,
 }
 
+# Every member's MONTHLY target is a flat 160h (20 days × 8h) in every month,
+# whatever the month's working-day count (user decision 2026-09-29).
+MEMBER_MONTHLY_COMMITTED = 160.0
+
+# Member status bands on the monthly 160h target (user-defined 2026-09-29):
+#   < 100h CRITICAL · 100–130h ON TRACK · 130–160h GOOD · ≥ 160h EXCEEDED
+# For week / today / custom views the same bands apply as fractions of that
+# period's target (100/160, 130/160, 160/160).
+_MEMBER_STATUS_BANDS = ((100.0, "CRITICAL"), (130.0, "ON TRACK"), (160.0, "GOOD"))
+
+
+def member_status(hours: float, target: float) -> str:
+    if not target or target <= 0:
+        return "NO TARGET"
+    scaled = hours * MEMBER_MONTHLY_COMMITTED / target
+    for limit, label in _MEMBER_STATUS_BANDS:
+        if scaled < limit:
+            return label
+    return "EXCEEDED"
+
 
 def _full_committed_for_period(period: str) -> float:
     """Per-preparer target hours for the FULL period, before pro-rating.
@@ -6908,6 +6931,8 @@ def get_employee_committed_hours(
     team_id is accepted for signature compatibility but not used — the target
     is uniform across teams.
     """
+    if period == "monthly":
+        return MEMBER_MONTHLY_COMMITTED   # flat, never working days × 8h
     if not period_start or not period_end:
         if period == "custom":
             return 0.0
@@ -7388,7 +7413,10 @@ def _build_leaderboard(
     elif period in ("weekly", "week"):
         committed = round(_PER_PREPARER_DAILY * _working_days_between(full_start, full_end), 2)
         committed_label = f"{round(committed)}h/week target"
-    else:  # monthly / custom → every working day in the period × 8h (no pro-rating)
+    elif period == "monthly":
+        committed = MEMBER_MONTHLY_COMMITTED
+        committed_label = "160h monthly target"
+    else:  # custom → every working day in the range × 8h
         _wd_total = _working_days_between(full_start, full_end)
         committed = round(_PER_PREPARER_DAILY * _wd_total, 2)
         committed_label = f"{round(committed)}h ({_wd_total} working days × 8h)"
@@ -7459,7 +7487,10 @@ def _build_leaderboard(
             "name":             name,
             "billable":         round(v["billable"], 2),
             "committed":        round(committed, 2),
+            "target":           round(committed, 2),
             "utilPct":          util,
+            # Status on BILLABLE hours (same basis as utilPct) vs the target.
+            "status":           member_status(v["billable"], committed),
             "totalHours":       round(v["total"], 2),
             "trend":            trend,
             "lastLoggedAt":     last_changed,
@@ -7519,7 +7550,9 @@ def _build_leaderboard(
             "name":              display,
             "billable":          0.0,
             "committed":         round(committed, 2),
+            "target":            round(committed, 2),
             "utilPct":           0.0,
+            "status":            member_status(0.0, committed),
             "totalHours":        0.0,
             "trend":             "flat",
             "lastLoggedAt":      "",
@@ -10226,7 +10259,8 @@ _BOD_EOD_CATEGORY_RULES = (
     ("Not Started",      ("not yet started", "not started", "yet to start")),
     ("In Process",       ("in process", "in progress", "in-process")),
     ("Review",           ("review pending", "review")),
-    ("Posted Query",     ("posted query", "query posted", " query")),
+    # "posted qu" also catches the "Posted quey" typo on Team D's AIS tab.
+    ("Posted Query",     ("posted query", "posted qu", "query posted", " query")),
     ("Client Responded", ("client responded", "client response", "responded")),
     ("Completed",        ("completed", "done")),
     ("Est Hours",        ("est hour", "est hrs", "est. hours", "estimated hour")),
@@ -10297,6 +10331,12 @@ def _bod_eod_parse_status_block(text: str) -> dict:
         line = raw.strip()
         if not line:
             continue
+        # TLs append a "Prior Month" section (last month's leftovers). It is
+        # NOT this month's status — summing it in inflated Review / Posted
+        # Query (AIS: Review 4 + 1 shown as 5) and made the statuses add up to
+        # more than Total Files. Everything from that line on is ignored.
+        if line.lower().replace(" ", "").startswith("priormonth"):
+            break
         m = _BOD_EOD_STATUS_RE.match(line)
         if not m:
             continue
@@ -10383,6 +10423,7 @@ def _bod_eod_parse_rows(client_name: str, csv_text: str) -> dict:
     # align it. Header is taken from the first row of the tab.
     raw_headers: list[str] = []
     raw_rows: list[list[str]] = []
+    prev_row_dt: datetime | None = None   # for the backwards-year typo repair
     if csv_text:
         reader = csv.reader(io.StringIO(csv_text))
         rows = list(reader)
@@ -10398,10 +10439,23 @@ def _bod_eod_parse_rows(client_name: str, csv_text: str) -> dict:
             date_str = _bod_eod_cell(raw, 0)
             if not _bod_eod_is_data_row(date_str):
                 continue
+            row_dt = _parse_eod_date(date_str)
+            # Rows only move forward in time. A year that jumps backwards is a
+            # typo ("9/29/06" on AIS) — take the previous row's year so the row
+            # isn't filed under 2006 and dropped from this month's views.
+            if row_dt and prev_row_dt and row_dt.year < prev_row_dt.year:
+                try:
+                    fixed = row_dt.replace(year=prev_row_dt.year)
+                except ValueError:
+                    fixed = None
+                if fixed and fixed >= prev_row_dt:
+                    row_dt = fixed
+                    date_str = f"{fixed.month}/{fixed.day}/{fixed.year}"
+            if row_dt:
+                prev_row_dt = row_dt
             # TLs pre-fill tomorrow's date row. Skip rows dated after today
             # (IST, the TLs' day) — otherwise the "Today" view, which takes the
             # last row, shows that blank row's zeros.
-            row_dt = _parse_eod_date(date_str)
             if row_dt and row_dt.date() > _ist_now().date():
                 continue
             raw_rows.append([_bod_eod_cell(raw, i) for i in range(ncols)])
