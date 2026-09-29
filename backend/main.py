@@ -5662,16 +5662,49 @@ async def _team_response(
     total_internal_b  = 0.0
     total_internal_nb = 0.0
 
-    # STRICT ISOLATION (user decision 2026-09-29): the team view shows only the
-    # team's CURRENT roster working on the team's CONFIGURED clients (plus the
-    # unowned SHARED_CLIENTS and internal codes). A member's hours on another
-    # team's client, a former member's hours, and non-members' hours on this
-    # team's clients are all left out here — they are counted in full on the
-    # Client view, which reconciles with Timesheets. The excluded hours are
-    # tallied below so the gap is visible, but never shown as a client row.
-    excluded_other_client_hours = 0.0
+    # CLIENT-BASED TEAM VIEW (user decisions 2026-09-29):
+    #   * Only the team's CONFIGURED clients appear (plus SHARED_CLIENTS and
+    #     internal time) — never another team's client, never an ad-hoc row.
+    #   * A configured client's row counts EVERY preparer's hours on it, so it
+    #     reconciles with Timesheets (Kokila's SoCo hours show on Team F).
+    #   * Each time entry is credited to exactly ONE team, so clients configured
+    #     on two teams (Neve C+T, Tim Thompson N+T, Officeheads L+T, ...) are
+    #     never double counted: the preparer's own team if that team has the
+    #     client configured, otherwise the client's owning team
+    #     (find_team_for_client).
+    #   * Internal time and shared clients count only for the team's own
+    #     current members; former members count only via the owner rule.
+    # The Team Members table (leaderboard endpoint) is separate and unchanged.
+    excluded_other_client_hours = 0.0      # members' hours on other teams' clients
     excluded_other_clients: set = set()
-    included_rows: list[dict] = []   # rows this view counts — also feeds the trend
+    included_rows: list[dict] = []         # rows this view counts — also feeds the trend
+    member_team_cache: dict[str, str | None] = {}
+    credit_cache: dict[tuple, str | None] = {}
+
+    def _member_team(row: dict, fullname: str) -> str | None:
+        """The preparer's CURRENT team (former members → None)."""
+        if fullname not in member_team_cache:
+            t = assign_row_to_team(row)
+            if t and not staff_in_team(fullname, TEAM_ROSTERS.get(t) or []):
+                t = None
+            member_team_cache[fullname] = t
+        return member_team_cache[fullname]
+
+    def _credit_team(mt: str | None, customer: str) -> str | None:
+        """Which single team's view counts this client row."""
+        key = (mt, customer)
+        if key not in credit_cache:
+            credit = None
+            if mt and not is_hidden_client_for_team(mt, customer) and (
+                    _resolve_client_for_team(mt, customer)
+                    or is_override_client_for_team(mt, customer)):
+                credit = mt
+            else:
+                owner = find_team_for_client(customer)
+                if owner and not is_hidden_client_for_team(owner, customer):
+                    credit = owner
+            credit_cache[key] = credit
+        return credit_cache[key]
 
     for row in rows:
         h = float(row.get("hours", 0))
@@ -5680,13 +5713,6 @@ async def _team_response(
         total_rows += 1
 
         fullname = (row.get("name") or "").strip()
-        # Current roster only — row_belongs_to_team alone would also accept
-        # FORMER members via TEAM_ROSTERS_HISTORICAL.
-        if not row_belongs_to_team(row, team_id):
-            continue
-        if roster and not staff_in_team(fullname, roster):
-            continue
-
         billable = bool(row.get("billable"))
         customer = (row.get("customer") or "").strip()
         desc     = (row.get("desc") or "").strip()
@@ -5695,9 +5721,13 @@ async def _team_response(
         if is_inactive_client(customer):
             continue
 
-        # INTERNAL_CODES (SNMP / breaks / admin / training) are the team's own
-        # non-client time: kept, in "Internal / Other".
+        mt = _member_team(row, fullname)
+        is_member = mt == team_id
+
         if is_internal_code(customer):
+            # The team's own non-client time (SNMP / breaks / admin / training).
+            if not is_member:
+                continue
             bucket = orgs["Internal / Other"]
             resolved = None
             if billable:
@@ -5705,20 +5735,22 @@ async def _team_response(
             else:
                 total_internal_nb += h
         else:
-            resolved = None
-            if customer and not is_hidden_client_for_team(team_id, customer):
-                # Shared/unowned clients (PREFLIGHT) belong to every team.
-                resolved = resolve_shared_client(customer)
+            shared = resolve_shared_client(customer)
+            if shared:
+                # Unowned (PREFLIGHT): shown on each team for its own members.
+                if not is_member:
+                    continue
+                resolved = shared
+            else:
+                if _credit_team(mt, customer) != team_id:
+                    if is_member:
+                        excluded_other_client_hours += h
+                        excluded_other_clients.add(customer)
+                    continue
+                resolved = (_resolve_client_for_team(team_id, customer, desc)
+                            or (customer if is_override_client_for_team(team_id, customer) else None))
                 if not resolved:
-                    resolved = _resolve_client_for_team(team_id, customer, desc)
-                if not resolved and is_override_client_for_team(team_id, customer):
-                    resolved = customer   # TEAM_CLIENT_OVERRIDES: configured pin
-            if not resolved:
-                # Another team's client, or one configured nowhere — not shown.
-                excluded_other_client_hours += h
-                if customer:
-                    excluded_other_clients.add(customer)
-                continue
+                    continue
             if resolved not in orgs:
                 # Only a shared client or an override pin reaches here.
                 orgs[resolved] = {
@@ -5731,7 +5763,12 @@ async def _team_response(
 
         included_rows.append(row)
         matched_rows += 1
-        staff_names_found.add(fullname)
+        if is_member:
+            staff_names_found.add(fullname)
+        else:
+            bucket.setdefault("crossTeam", {})
+            c = bucket["crossTeam"].setdefault(fullname, {"team": mt, "hours": 0.0})
+            c["hours"] += h
         if billable:
             bucket["billable"] += h
         else:
@@ -5826,6 +5863,13 @@ async def _team_response(
             # unmapped client customers (isConfig=False but real clients) must NOT
             # be hidden by the frontend's isInternalOther filter.
             "isInternalOther": org_name == "Internal / Other",
+            # Preparers from other teams (or no current team) whose hours on
+            # this client are included in the totals above.
+            "crossTeamContributors": [
+                f"{n} ({v['team']})" if v["team"] else f"{n} (no current team)"
+                for n, v in sorted((h.get("crossTeam") or {}).items(), key=lambda kv: -kv[1]["hours"])
+            ],
+            "crossTeamHours": round(sum(v["hours"] for v in (h.get("crossTeam") or {}).values()), 2),
             "entries":     h["entries"],  # per-org drill-down rows
         })
         if h["isConfig"] and not _quiet_team_logs.get():
@@ -6007,7 +6051,7 @@ async def _team_response(
             "totalNonBillable":      total_nb,        # excludes Internal categories
             "totalInternal":         total_internal,  # SNMP / BREAKS / Training / Admin combined
             # Hours this team's members logged on clients that aren't this
-            # team's — excluded from this view (see STRICT ISOLATION above), and
+            # team's — excluded from this view (see CLIENT-BASED TEAM VIEW above), and
             # counted on those clients' Client views instead.
             "excludedOtherClientHours":   round(excluded_other_client_hours, 2),
             "excludedOtherClients":       sorted(excluded_other_clients),
