@@ -637,7 +637,11 @@ def _build_payload(users: list[dict] | None = None) -> dict:
         # they were on without them showing up as current headcount.
         "TEAM_ROSTERS_HISTORICAL": {},
         "TEAM_MEMBERS": {},
-        "TEAM_CLIENTS": clients["team_clients"],
+        # Curated clients ONLY (user decision 2026-09-29: team views are fixed to
+        # their configured clients). Activity discovery still runs, but its
+        # findings are report-only — see client_additions / /api/roster/diff.
+        "TEAM_CLIENTS": {k: [dict(e) for e in v]
+                         for k, v in (_cfg["fallback_clients"] or {}).items()},
         "TEAM_EXPECTED_COUNTS": {},
         "TEAM_ADMIN_MAP": {},
         "raw_teams": teams,

@@ -605,7 +605,7 @@ def _team_status_response(team_id: str, cfg: dict, label: str, st: dict) -> dict
         "clients":          [],
         "organizations":    [],
         "summary": {
-            "totalCommitted": 0, "totalCommittedFull": 0, "totalCommittedToDate": 0,
+            "totalCommitted": 0, "totalCommittedFull": 0,
             "totalBillable": 0, "totalNonBillable": 0, "totalInternal": 0,
             "totalUtilized": 0, "memberCount": 0, "totalDelays": 0,
         },
@@ -697,10 +697,9 @@ UNCATEGORIZED_CLIENTS = [
 
 
 # Committed hours come from each client's estHrs below, taken from the Whale
-# "Organization Structure" PDF (2026-09-29). The full figure is displayed as
-# Committed; efficiency and status use it pro-rated by working days elapsed
-# (committedToDate). The BOD/EOD "Committed Hours" column is no longer
-# consulted — see _fixed_committed_for_client.
+# "Organization Structure" PDF (2026-09-29). Committed is that FIXED figure and
+# status compares against it — no pro-rating. The BOD/EOD "Committed Hours"
+# column is no longer consulted — see _fixed_committed_for_client.
 
 
 # ── Curated team → client mapping ────────────────────────────────
@@ -3975,7 +3974,7 @@ def _sheet_tab_titles(sheet_id: str) -> list[str]:
 
     Sheets API when it's enabled; otherwise the tab captions on the /edit page
     (the /htmlview markup _list_team_sheet_tabs scrapes no longer carries tab
-    names). [] if neither works — callers fall back to guessing names.
+    names). [] if neither works.
     """
     cached = _sheet_tabs_cache.get(sheet_id)
     if cached:
@@ -4023,7 +4022,6 @@ def _delays_sources_for_client(team_id: str, client_name: str, aliases: list[str
     Resolution order, cheapest and most authoritative first:
       1. DELAYS_TAB_GIDS  — the gid(s) TLs registered; fetched by gid.
       2. Real tab titles  — one listing per sheet; fetch the named tab.
-      3. Name guessing    — only when the sheet's tabs can't be listed.
 
     Guessing used to be the ONLY strategy: ~5 sequential Google requests per
     name form, most of them HTTP 400 for tabs that don't exist, which made a
@@ -4044,12 +4042,12 @@ def _delays_sources_for_client(team_id: str, client_name: str, aliases: list[str
     if sources:
         return sources, tried
 
+    # No guessing when the listing is unavailable (e.g. rate-limited): guessed
+    # names almost never match how TLs name these tabs, and each miss is one
+    # more Google request that deepens the rate limiting. The empty listing is
+    # retried after _SHEET_TABS_EMPTY_TTL.
     titles = _sheet_tab_titles(sheet_id)
-    if titles:
-        candidates = _delays_titles_for_client(titles, client_name, aliases)[:2]
-    else:
-        # Listing unavailable: guess, but only from the client's own name.
-        candidates = _candidate_delays_tab_names(client_name, None)
+    candidates = _delays_titles_for_client(titles, client_name, aliases)[:2] if titles else []
     for cand in candidates:
         tried.append(cand)
         try:
@@ -5185,9 +5183,15 @@ def build_client_report(rows: list, client_name: str, period_label: str) -> dict
         if cn in r["customer"].lower() and not is_internal_customer(r["customer"])
     ]
 
+    # Deliberately NO team filter: the Client view counts every preparer who
+    # logged time on this client, whatever their team, so its billable /
+    # non-billable totals reconcile with Timesheets. (The Team view is the
+    # strictly-isolated one — see _team_response.)
     staff: dict = {}
+    first_row: dict = {}
     for r in client_rows:
         n = r["name"]
+        first_row.setdefault(n, r)
         if n not in staff:
             staff[n] = {"billable": 0.0, "nonBillable": 0.0, "committed": 0.0, "notes": []}
         staff[n]["committed"] += r["hours"]
@@ -5218,6 +5222,21 @@ def build_client_report(rows: list, client_name: str, period_label: str) -> dict
     total_non       = sum(s["nonBillable"] for s in staff_list)
     overall_eff     = round(total_billable / total_committed * 100, 1) if total_committed > 0 else 0
 
+    # Same people with their team, for context only (never a filter).
+    preparers = []
+    for s_ in sorted(staff_list, key=lambda x: -(x["billable"] + x["nonBillable"])):
+        tid = assign_row_to_team(first_row[s_["staff"]])
+        current = bool(tid) and staff_in_team(s_["staff"], TEAM_ROSTERS.get(tid) or [])
+        preparers.append({
+            "name":        s_["staff"],
+            "team":        tid or "",
+            "teamLabel":   (TEAM_LETTER_MAP.get(tid, {}).get("label", "") if tid else "")
+                           + ("" if current or not tid else " (former)"),
+            "billable":    s_["billable"],
+            "nonBillable": s_["nonBillable"],
+            "total":       round(s_["billable"] + s_["nonBillable"], 2),
+        })
+
     return {
         "period": period_label,
         "summary": {
@@ -5227,6 +5246,11 @@ def build_client_report(rows: list, client_name: str, period_label: str) -> dict
             "overallEfficiency": overall_eff,
         },
         "staff": staff_list,
+        "preparers": preparers,
+        "totalBillable":    round(total_billable, 2),
+        "totalNonBillable": round(total_non, 2),
+        "totalHours":       round(total_billable + total_non, 2),
+        "note": "Includes all preparers regardless of team assignment",
     }
 
 
@@ -5614,16 +5638,16 @@ async def _team_response(
     total_internal_b  = 0.0
     total_internal_nb = 0.0
 
-    # Hours this team's members logged on clients that are NOT theirs. Only
-    # populated under PERMANENT_CLIENTS_ONLY; surfaced as a summary stat so the
-    # work is visible even though it isn't broken out per client on this view.
-    cross_team_hours = 0.0
-    cross_team_clients: set = set()
-
-    # Match priority: assign_row_to_team (handles multi-team name ambiguity)
-    # → falls back to row["team"] label equality when no roster is configured.
-    def _row_matches(row) -> bool:
-        return row_belongs_to_team(row, team_id)
+    # STRICT ISOLATION (user decision 2026-09-29): the team view shows only the
+    # team's CURRENT roster working on the team's CONFIGURED clients (plus the
+    # unowned SHARED_CLIENTS and internal codes). A member's hours on another
+    # team's client, a former member's hours, and non-members' hours on this
+    # team's clients are all left out here — they are counted in full on the
+    # Client view, which reconciles with Timesheets. The excluded hours are
+    # tallied below so the gap is visible, but never shown as a client row.
+    excluded_other_client_hours = 0.0
+    excluded_other_clients: set = set()
+    included_rows: list[dict] = []   # rows this view counts — also feeds the trend
 
     for row in rows:
         h = float(row.get("hours", 0))
@@ -5632,38 +5656,24 @@ async def _team_response(
         total_rows += 1
 
         fullname = (row.get("name") or "").strip()
-        if not _row_matches(row):
+        # Current roster only — row_belongs_to_team alone would also accept
+        # FORMER members via TEAM_ROSTERS_HISTORICAL.
+        if not row_belongs_to_team(row, team_id):
+            continue
+        if roster and not staff_in_team(fullname, roster):
             continue
 
         billable = bool(row.get("billable"))
         customer = (row.get("customer") or "").strip()
         desc     = (row.get("desc") or "").strip()
 
-        # Drop churned/inactive clients (e.g. BKP Repair) entirely — they're
-        # de-configured from TEAM_CLIENTS, so without this skip any legacy row
-        # would resurface as a dynamic org bucket.
+        # Churned/inactive clients (e.g. BKP Repair) never count.
         if is_inactive_client(customer):
             continue
 
-        # Clients belonging to ANOTHER team that were logged here. They must not
-        # appear as a named org on this team's dashboard, but the hours are real:
-        # this used to `continue`, which dropped them from the team's totals
-        # outright — hiding SoCo cut Team A's billable by 22.8h. Bucketing them
-        # into Cross-Team Help keeps the team total reconciling with Timesheets
-        # while the client name stays off this team's list.
-        hidden_here = bool(customer) and is_hidden_client_for_team(team_id, customer)
-
-        # INTERNAL_CODES short-circuit: SNMP / breaks / admin / training rows
-        # never get matched against TEAM_CLIENTS — they bucket directly into
-        # "Internal / Other" so the hours are preserved (not silently dropped)
-        # but don't pollute any configured client.
-        is_internal_row = (not hidden_here) and is_internal_code(customer)
-        if hidden_here:
-            bucket = _ensure_cross_team_bucket(orgs)
-            resolved = CROSS_TEAM_BUCKET
-            cross_team_hours += h
-            cross_team_clients.add(customer)
-        elif is_internal_row:
+        # INTERNAL_CODES (SNMP / breaks / admin / training) are the team's own
+        # non-client time: kept, in "Internal / Other".
+        if is_internal_code(customer):
             bucket = orgs["Internal / Other"]
             resolved = None
             if billable:
@@ -5671,53 +5681,31 @@ async def _team_response(
             else:
                 total_internal_nb += h
         else:
-            # Resolve against TEAM_CLIENTS. A non-internal customer that matches
-            # no configured client gets its OWN org bucket (created on the fly)
-            # rather than being buried in "Internal / Other" — otherwise teams
-            # whose TEAM_CLIENTS config is incomplete (e.g. Team E/F) show "No
-            # organization data" despite real billable client work. Empty-customer
-            # rows still fall through to Internal / Other.
-            # Shared/unowned clients (PREFLIGHT) resolve for EVERY team, ahead of
-            # the permanent-clients filter, so they render as a normal entry with
-            # their own billable/non-billable split instead of being folded into
-            # Cross-Team Help. Canonicalised so every spelling shares one bucket.
-            resolved = resolve_shared_client(customer) if customer else None
+            resolved = None
+            if customer and not is_hidden_client_for_team(team_id, customer):
+                # Shared/unowned clients (PREFLIGHT) belong to every team.
+                resolved = resolve_shared_client(customer)
+                if not resolved:
+                    resolved = _resolve_client_for_team(team_id, customer, desc)
+                if not resolved and is_override_client_for_team(team_id, customer):
+                    resolved = customer   # TEAM_CLIENT_OVERRIDES: configured pin
             if not resolved:
-                resolved = _resolve_client_for_team(team_id, customer, desc)
-            if not resolved and customer and is_override_client_for_team(team_id, customer):
-                # TEAM_CLIENT_OVERRIDES wins over resolution — see its comment
-                # for why Team E needs it.
-                resolved = customer
-            if resolved:
-                if resolved not in orgs:
-                    orgs[resolved] = {
-                        "billable": 0.0, "nonBillable": 0.0, "staff": set(),
-                        "estHrs": 0, "tz": "", "meeting": "No scheduled meeting",
-                        "tsMatch": [], "matchedCustomers": set(), "rowsMatched": 0,
-                        "isConfig": False, "entries": [],
-                    }
-                bucket = orgs[resolved]
-            elif customer and _permanent_clients_only():
-                # Not one of this team's assigned clients — cross-team help.
-                # Bucketed rather than skipped so the hours still count toward
-                # the team total and reconcile against the timesheet.
-                bucket = _ensure_cross_team_bucket(orgs)
-                resolved = CROSS_TEAM_BUCKET
-                cross_team_hours += h
-                cross_team_clients.add(customer)
-            elif customer:
-                if customer not in orgs:
-                    orgs[customer] = {
-                        "billable": 0.0, "nonBillable": 0.0, "staff": set(),
-                        "estHrs": 0, "tz": "", "meeting": "No scheduled meeting",
-                        "tsMatch": [], "matchedCustomers": set(), "rowsMatched": 0,
-                        "isConfig": False, "entries": [],
-                    }
-                bucket = orgs[customer]
-                resolved = customer
-            else:
-                bucket = orgs["Internal / Other"]
+                # Another team's client, or one configured nowhere — not shown.
+                excluded_other_client_hours += h
+                if customer:
+                    excluded_other_clients.add(customer)
+                continue
+            if resolved not in orgs:
+                # Only a shared client or an override pin reaches here.
+                orgs[resolved] = {
+                    "billable": 0.0, "nonBillable": 0.0, "staff": set(),
+                    "estHrs": 0, "tz": "", "meeting": "No scheduled meeting",
+                    "tsMatch": [], "matchedCustomers": set(), "rowsMatched": 0,
+                    "isConfig": False, "entries": [],
+                }
+            bucket = orgs[resolved]
 
+        included_rows.append(row)
         matched_rows += 1
         staff_names_found.add(fullname)
         if billable:
@@ -5759,28 +5747,22 @@ async def _team_response(
         actual = h["billable"] + h["nonBillable"]
         staff_count = len(h["staff"])
         org_member_count = staff_count
-        # Hybrid (user decision 2026-09-29):
-        #   committed         = FIXED full-period figure from the PDF's EST Hrs —
-        #                       the reference number shown in the Committed column.
-        #   committed_to_date = the same figure pro-rated by working days elapsed;
-        #                       efficiency, gap and status colour use this, so a
-        #                       client isn't CRITICAL on day 2 of the month.
+        # FIXED committed hours from the PDF's EST Hrs, NOT pro-rated — status
+        # compares actual against the full figure (user decision 2026-09-29,
+        # superseding the earlier hybrid; a pro-rated toggle may come later).
         # Hourly / tax-season clients and unconfigured buckets carry estHrs 0 and
-        # so have no commitment. Replaces the BOD/EOD "Committed Hours" column
-        # and the members × per-preparer fallback.
+        # so have no commitment.
         committed = _fixed_committed_for_client(h.get("estHrs"), period, full_start, full_end)
-        committed_to_date = (committed if period == "today" else
-                             _pro_rate_committed_hours(committed, full_start, full_end, today_iso))
         committed_source = "config_fixed" if committed else "none"
         # Performance (efficiency / gap / status) is measured against BILLABLE
         # hours only — non-billable time does not count toward a client's
         # committed target. `actual`/`total` still carry billable+non-billable
         # for the stacked bar + "total booked" reference displays.
         billable_h = round(h["billable"], 2)
-        util = round(billable_h / committed_to_date * 100, 1) if committed_to_date > 0 else 0
-        gap  = round(billable_h - committed_to_date, 2) if committed_to_date > 0 else 0.0
+        util = round(billable_h / committed * 100, 1) if committed > 0 else 0
+        gap  = round(billable_h - committed, 2) if committed > 0 else 0.0
         billing = h.get("billing")
-        if committed_to_date > 0:
+        if committed > 0:
             status = target_status_label(util)
         elif billing == "hourly":
             status = "HOURLY"
@@ -5791,8 +5773,7 @@ async def _team_response(
         clients_data.append({
             "name":        org_name,
             "org":         org_name,
-            "committed":   round(committed, 2),          # full PDF figure (reference)
-            "committedToDate": round(committed_to_date, 2),  # pro-rated; drives efficiency/status
+            "committed":   round(committed, 2),   # fixed PDF figure; drives status
             "actual":      round(actual, 2),
             "billable":    round(h["billable"], 2),
             "nonBillable": round(h["nonBillable"], 2),
@@ -5911,9 +5892,7 @@ async def _team_response(
     # ── Monthly trend from timesheet rows (team-matched) ──────────
     # Always populate this so Chart 1 has data even when no EOD sheet is configured.
     monthly_buckets: dict = {}
-    for row in rows:
-        if not _row_matches(row):
-            continue
+    for row in included_rows:   # same strict filter as the client table
         d = (row.get("date") or "")[:10]
         if len(d) < 7:
             continue
@@ -5995,20 +5974,21 @@ async def _team_response(
         "organizations":    [{**c, "org": c["name"]} for c in clients_data],
         "summary": {
             # Sum of the clients' fixed PDF commitments — matches the total row
-            # of the client table — and the same pro-rated to date. The
-            # staff-capacity target (members × 8h/day) is totalTarget.
+            # of the client table. The staff-capacity target (members × 8h/day)
+            # is reported separately as totalTarget.
             "totalCommitted":        total_fixed_committed,
             "totalCommittedFull":    total_fixed_committed,
-            "totalCommittedToDate":  round(sum(c["committedToDate"] or 0 for c in clients_data), 2),
             "eodCommitted":          round(eod_committed, 2),
             "totalBillable":         total_b,         # excludes Internal categories
             "totalNonBillable":      total_nb,        # excludes Internal categories
             "totalInternal":         total_internal,  # SNMP / BREAKS / Training / Admin combined
-            # Hours this team's members logged on OTHER teams' clients. 0 unless
-            # PERMANENT_CLIENTS_ONLY is on. The per-client breakdown deliberately
-            # lives on the Client view and /api/audit/cross-team-help, not here.
-            "crossTeamHelpHours":    round(cross_team_hours, 2),
-            "crossTeamHelpClients":  len(cross_team_clients),
+            # Hours this team's members logged on clients that aren't this
+            # team's — excluded from this view (see STRICT ISOLATION above), and
+            # counted on those clients' Client views instead.
+            "excludedOtherClientHours":   round(excluded_other_client_hours, 2),
+            "excludedOtherClients":       sorted(excluded_other_clients),
+            "crossTeamHelpHours":         0,
+            "crossTeamHelpClients":       0,
             "totalUtilized":         total_b,
             "totalTarget":           team_target,
             "totalTargetFull":       team_target_full,
@@ -6790,8 +6770,7 @@ _COMMITTED_WORKING_DAYS_PER_MONTH = 20
 
 def _fixed_committed_for_client(est_hrs, period: str, full_start: str, full_end: str) -> float:
     """A client's FIXED committed hours for the whole period (user decision
-    2026-09-29). Callers pro-rate this separately for status; the fixed figure
-    is what's displayed as Committed.
+    2026-09-29). Not pro-rated: status compares actual hours against this.
 
     monthly  → estHrs exactly (the PDF's "EST Hrs").
     weekly / today / custom → that period's fixed share of the month:
@@ -9354,9 +9333,8 @@ async def _client_data(
     # Committed target — overlay on top of build_client_report's actual-hours
     # summary. We resolve estHrs by walking TEAM_CLIENTS for the parent team
     # and finding the entry whose name OR tsMatch keyword matches client_name.
-    # Hybrid (user decision 2026-09-29): the full target is the client's fixed
-    # PDF figure; status is measured against it pro-rated to today, matching the
-    # team dashboard's committed / committedToDate split.
+    # FIXED (user decision 2026-09-29): the client's PDF figure from its owning
+    # team, not pro-rated — the same number the team view shows.
     parent_team_for_target = find_team_for_client(client_name)
     est_hrs_monthly = 0.0
     if parent_team_for_target:
@@ -9368,7 +9346,7 @@ async def _client_data(
                 est_hrs_monthly = float(ce.get("estHrs") or 0)
                 break
     target_full = _fixed_committed_for_client(est_hrs_monthly, period, full_start, full_end)
-    target_prorated = _pro_rate_committed_hours(target_full, full_start, full_end, today_iso)
+    target_prorated = target_full   # name kept for the fields below; no pro-rating
     actual_billable = float(result.get("summary", {}).get("totalBillable") or 0)
     target_util_pct = round(actual_billable / target_prorated * 100, 1) if target_prorated > 0 else 0.0
     target_status   = target_status_label(target_util_pct) if target_prorated > 0 else "NO_TARGET"
@@ -9386,7 +9364,7 @@ async def _client_data(
         "asOf":                today_iso,
         "workingDaysTotal":    wd_total,
         "workingDaysElapsed":  wd_elapsed,
-        "isProrated":          (period in ("weekly", "monthly", "custom") and wd_elapsed < wd_total),
+        "isProrated":          False,   # client targets are fixed (2026-09-29)
     })
 
     # Attach the parent team's EOD sheet data so ClientDashboard can render

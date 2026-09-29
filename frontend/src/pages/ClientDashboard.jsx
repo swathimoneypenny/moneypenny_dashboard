@@ -333,7 +333,9 @@ function SortIcon({ dir }) {
   return <span style={{ marginLeft: 4, opacity: 0.5, fontSize: 10 }}>{dir === "asc" ? "▲" : "▼"}</span>;
 }
 
-function StaffTable({ staff, onRowClick }) {
+// teamOf: staff name → team label ("Team F", "Team I (former)"). Context only —
+// the Client view lists every preparer on the client whatever their team.
+function StaffTable({ staff, onRowClick, teamOf = {} }) {
   const [sort, setSort] = useState({ col: "billable", dir: "desc" });
 
   function toggle(col) {
@@ -428,7 +430,12 @@ function StaffTable({ staff, onRowClick }) {
                     >
                       {initials(s.staff)}
                     </div>
-                    <span style={{ fontWeight: 500 }}>{s.staff}</span>
+                    <div style={{ display: "flex", flexDirection: "column" }}>
+                      <span style={{ fontWeight: 500 }}>{s.staff}</span>
+                      {teamOf[s.staff] && (
+                        <span style={{ fontSize: 10, color: C.muted }}>{teamOf[s.staff]}</span>
+                      )}
+                    </div>
                   </div>
                 </td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace" }}>{(s.committed ?? 0).toFixed(2)}</td>
@@ -1424,7 +1431,7 @@ ${Object.entries(staffObj).map(([name, v]) => {
                   ? `Day ${summary.workingDaysElapsed}/${summary.workingDaysTotal} · ${(summary.targetHoursFull ?? 0).toFixed(2)}h full`
                   : (summary.targetHoursFull > 0 && summary.targetHoursFull !== summary.targetHours
                       ? `${(summary.targetHoursFull ?? 0).toFixed(2)}h full`
-                      : "pro-rated to today")
+                      : "fixed monthly commitment")
               }
               onClick={() => setKpiModal({ open: true, type: "total" })}
             />
@@ -1625,6 +1632,7 @@ ${Object.entries(staffObj).map(([name, v]) => {
           ) : (
             <StaffTable
               staff={staff}
+              teamOf={Object.fromEntries((data?.preparers ?? []).map((p) => [p.name, p.teamLabel || p.team || ""]))}
               onRowClick={(s) => setStaffModal({ open: true, staff: s })}
             />
           )}

@@ -651,13 +651,6 @@ function PerfTable({ orgs, onRowClick }) {
                 </td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: committed > 0 ? C.blue : C.muted }}>
                   {committed > 0 ? committed.toFixed(2) : "—"}
-                  {/* Full PDF commitment above; the pro-rated share that drives
-                      efficiency / gap / status underneath. */}
-                  {committed > 0 && (o.committedToDate ?? committed) < committed && (
-                    <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>
-                      to date {(o.committedToDate ?? 0).toFixed(2)}
-                    </div>
-                  )}
                 </td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.teal }}>{(o.billable ?? 0).toFixed(2)}</td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: delayColor(delays), fontWeight: 600 }}>{delays}</td>
@@ -1464,7 +1457,7 @@ Total: Committed ${summary.totalCommitted ?? 0}h | Utilized ${summary.totalBilla
 
 ORGANIZATIONS:
 ${clients.map((o) => (
-  `• ${o.name}: ${o.committed ?? 0}h committed (${o.committedToDate ?? o.committed ?? 0}h to date), ${o.billable ?? 0}h utilized, ${o.nonBillable ?? 0}h non-billable, ${o.efficiency ?? 0}% util, ${o.delays ?? 0} delays`
+  `• ${o.name}: ${o.committed ?? 0}h committed, ${o.billable ?? 0}h utilized, ${o.nonBillable ?? 0}h non-billable, ${o.efficiency ?? 0}% util, ${o.delays ?? 0} delays`
 )).join("\n")}`;
     onContextUpdate(ctx);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1885,9 +1878,9 @@ ${clients.map((o) => (
                 marginTop: 2,
                 letterSpacing: 0.3,
               }}
-              title={`Status is measured against targets pro-rated by working days elapsed (${data.summary.periodStart} → ${data.summary.periodEnd}). The Committed column shows the full PDF figure.`}
+              title={`Working days elapsed in this period (${data.summary.periodStart} → ${data.summary.periodEnd}). Client committed hours are the fixed monthly figures.`}
             >
-              Day {data.summary.workingDaysElapsed}/{data.summary.workingDaysTotal} · pro-rated
+              Day {data.summary.workingDaysElapsed}/{data.summary.workingDaysTotal} · working days
             </div>
           )}
         </div>
