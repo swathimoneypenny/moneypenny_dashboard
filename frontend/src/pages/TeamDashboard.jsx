@@ -554,7 +554,7 @@ function PerfTable({ orgs, onRowClick }) {
             <th style={{ ...th, textAlign: "left" }}>Organization</th>
             {[
               ["gap",        "Gap"],
-              ["committed",  "Committed"],
+              ["committed",  "Target"],
               ["billable",   "Billable"],
               ["delays",     "Delays"],
             ].map(([col, lbl]) => (
@@ -651,6 +651,9 @@ function PerfTable({ orgs, onRowClick }) {
                 </td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: committed > 0 ? C.blue : C.muted }}>
                   {committed > 0 ? committed.toFixed(2) : "—"}
+                  <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>
+                    {(o.actual ?? 0).toFixed(1)}h logged
+                  </div>
                 </td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: C.teal }}>{(o.billable ?? 0).toFixed(2)}</td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", color: delayColor(delays), fontWeight: 600 }}>{delays}</td>
@@ -1869,7 +1872,7 @@ ${clients.map((o) => (
           <div style={{ fontSize: 11, color: C.muted }}>
             {periodLabel} · {today}
           </div>
-          {data?.summary?.isProrated && data?.summary?.workingDaysTotal > 0 && (
+          {data?.summary?.workingDaysTotal > 0 && (
             <div
               style={{
                 fontSize: 10,
@@ -1878,7 +1881,7 @@ ${clients.map((o) => (
                 marginTop: 2,
                 letterSpacing: 0.3,
               }}
-              title={`Working days elapsed in this period (${data.summary.periodStart} → ${data.summary.periodEnd}). Client committed hours are the fixed monthly figures.`}
+              title={`Working days elapsed in this period (${data.summary.periodStart} → ${data.summary.periodEnd}). Client targets are the fixed monthly figures.`}
             >
               Day {data.summary.workingDaysElapsed}/{data.summary.workingDaysTotal} · working days
             </div>

@@ -244,7 +244,7 @@ def _dashboard_totals(client_data):
     """(billable, non_billable, efficiency%, staff_count) from a client payload.
 
     Shared by the dashboard blocks and the quick_today DM. Prefers the API's
-    own `summary` totals, which are already computed and prorated, and only
+    own `summary` totals, which are already computed, and only
     falls back to summing the staff rows when it is absent.
     """
     summary = (client_data or {}).get("summary") or {}

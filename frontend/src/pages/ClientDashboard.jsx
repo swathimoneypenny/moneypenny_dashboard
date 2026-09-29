@@ -1065,9 +1065,7 @@ export default function ClientDashboard({ clientName, initialPeriod, onPeriodCha
       };
     });
     const utilRate = summary.overallEfficiency ?? 0;
-    const targetCtx = summary.isProrated
-      ? `Target ${(summary.targetHours ?? 0).toFixed(2)}h (pro-rated · full month ${(summary.targetHoursFull ?? 0).toFixed(2)}h, day ${summary.workingDaysElapsed}/${summary.workingDaysTotal})`
-      : `Target ${(summary.targetHours ?? 0).toFixed(2)}h`;
+    const targetCtx = `Target ${(summary.targetHours ?? 0).toFixed(2)}h (fixed monthly)`;
     const ctx = `Client: ${clientName} — ${data.period ?? ""}
 Total: ${targetCtx} | Billable ${summary.totalBillable ?? 0}h | Non-Bill ${summary.totalNonBillable ?? 0}h | Util ${utilRate}%
 
@@ -1396,7 +1394,7 @@ ${Object.entries(staffObj).map(([name, v]) => {
             MoneyPenny LLC
           </div>
           <div style={{ fontSize: 11, color: C.muted }}>{periodLabel} · {today}</div>
-          {summary.isProrated && summary.workingDaysTotal > 0 && (
+          {summary.workingDaysTotal > 0 && (
             <div
               style={{
                 fontSize: 10,
@@ -1405,9 +1403,9 @@ ${Object.entries(staffObj).map(([name, v]) => {
                 marginTop: 2,
                 letterSpacing: 0.3,
               }}
-              title={`Target pro-rated by working days elapsed (${summary.periodStart} → ${summary.periodEnd})`}
+              title={`Working days elapsed in this period (${summary.periodStart} → ${summary.periodEnd}). The target is the fixed monthly figure.`}
             >
-              Day {summary.workingDaysElapsed}/{summary.workingDaysTotal} · target {(summary.targetHours ?? 0).toFixed(2)}h / {(summary.targetHoursFull ?? 0).toFixed(2)}h full
+              Day {summary.workingDaysElapsed}/{summary.workingDaysTotal} working days · target {(summary.targetHours ?? 0).toFixed(2)}h
             </div>
           )}
         </div>
@@ -1426,13 +1424,7 @@ ${Object.entries(staffObj).map(([name, v]) => {
               label="Target Hours"
               value={summary.targetHours}
               color={C.blue}
-              sublabel={
-                summary.isProrated && summary.workingDaysTotal > 0
-                  ? `Day ${summary.workingDaysElapsed}/${summary.workingDaysTotal} · ${(summary.targetHoursFull ?? 0).toFixed(2)}h full`
-                  : (summary.targetHoursFull > 0 && summary.targetHoursFull !== summary.targetHours
-                      ? `${(summary.targetHoursFull ?? 0).toFixed(2)}h full`
-                      : "fixed monthly commitment")
-              }
+              sublabel="fixed monthly target"
               onClick={() => setKpiModal({ open: true, type: "total" })}
             />
             <KpiCard

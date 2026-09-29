@@ -16,7 +16,7 @@ export default function PerformanceReasonModal({ open, onClose, org, periodLabel
   const analysis = useMemo(() => {
     if (!org) return null;
 
-    // committed = the client's fixed monthly figure (not pro-rated).
+    // committed = the client's fixed monthly target from the PDF.
     const committed   = Number(org.committed)   || 0;
     const billable    = Number(org.billable)    || 0;
     const nonBillable = Number(org.nonBillable) || 0;
@@ -159,7 +159,7 @@ export default function PerformanceReasonModal({ open, onClose, org, periodLabel
         </div>
 
         <SectionBox title="📊 Performance Gap" color={analysis.statusColor}>
-          <DataRow label="Committed (fixed)"  value={`${analysis.committed.toFixed(2)}h`} />
+          <DataRow label="Target (monthly)"  value={`${analysis.committed.toFixed(2)}h`} />
           <DataRow label="Actual Billable"     value={`${analysis.billable.toFixed(2)}h`} color="#10B981" highlight />
           <DataRow
             label="Gap"
@@ -255,8 +255,8 @@ export default function PerformanceReasonModal({ open, onClose, org, periodLabel
           <SectionBox title={analysis.status === "EXCEEDED" ? "🎉 Notes" : "✅ Notes"} color={analysis.statusColor}>
             <div style={{ color: "rgba(255,255,255,0.85)", fontSize: 12, fontWeight: 600 }}>
               {analysis.status === "EXCEEDED"
-                ? "Billable hours are significantly above the committed hours — great performance. Large positive gaps can also point to unscoped work that should be re-quoted, so verify whether scope has expanded."
-                : "Above-target performance against the committed hours — keep it up. If the team feels over-allocated to this client, confirm the scope still matches the committed hours."}
+                ? "Billable hours are significantly above the monthly target — great performance. Large positive gaps can also point to unscoped work that should be re-quoted, so verify whether scope has expanded."
+                : "Above-target performance against the monthly target — keep it up. If the team feels over-allocated to this client, confirm the scope still matches the committed hours."}
             </div>
           </SectionBox>
         )}

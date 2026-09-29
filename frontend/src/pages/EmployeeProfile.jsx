@@ -1578,7 +1578,7 @@ ${lines.join("\n")}`;
             MoneyPenny LLC
           </div>
           <div style={{ fontSize: 11, color: C.muted }}>{periodLabel} · {today}</div>
-          {data?.isProrated && data?.workingDaysTotal > 0 && (
+          {data?.workingDaysTotal > 0 && (
             <div
               style={{
                 fontSize: 10,
@@ -1587,9 +1587,9 @@ ${lines.join("\n")}`;
                 marginTop: 2,
                 letterSpacing: 0.3,
               }}
-              title={`Targets pro-rated by working days elapsed (${data.periodStart} → ${data.periodEnd})`}
+              title={`Working days elapsed in this period (${data.periodStart} → ${data.periodEnd}). The target covers the whole period.`}
             >
-              Day {data.workingDaysElapsed}/{data.workingDaysTotal} · target {(data.committedHours ?? 0).toFixed(2)}h / {(data.committedHoursFull ?? 0).toFixed(2)}h full
+              Day {data.workingDaysElapsed}/{data.workingDaysTotal} working days · target {(data.committedHours ?? 0).toFixed(2)}h
             </div>
           )}
         </div>

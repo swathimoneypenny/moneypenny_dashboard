@@ -744,7 +744,9 @@ FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
     ],
     "team_c": [
         {"name": "Stay by Rafa",         "tsMatch": ["Stay by Rafa"],                          "estHrs": 80,  "tz": "EST", "meeting": "No scheduled meeting"},
-        {"name": "Financial Synergy",    "tsMatch": ["Financial Synergy"],                     "estHrs": 120, "tz": "CST", "meeting": "No scheduled meeting"},
+        # Never add the bare code "AFA" as an alias: it is a substring of
+        # "Stay By R-afa" and would pull Stay by Rafa's hours in here.
+        {"name": "Financial Synergy",    "tsMatch": ["Financial Synergy", "AFA-Financial Synergy", "AFS-Financial Synergy"], "estHrs": 120, "tz": "CST", "meeting": "No scheduled meeting"},
         {"name": "Neve",                 "tsMatch": ["Neve"],                                  "estHrs": 40,  "tz": "EST", "meeting": "No scheduled meeting"},
         {"name": "Sambrano Services",    "tsMatch": ["Sambrano"],                              "estHrs": 60,  "tz": "PST", "meeting": "No scheduled meeting"},
         {"name": "RDG Tax Group",        "tsMatch": ["RDG"],                                   "estHrs": 60,  "tz": "CST", "meeting": "No scheduled meeting"},
@@ -841,14 +843,17 @@ FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
         # Tax side of clients another team keeps for bookkeeping. Same keywords as
         # the bookkeeping team on purpose — see the header note.
         {"name": "Neve",                 "tsMatch": ["Neve"],                                  "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting", "billing": "tax"},
-        {"name": "Financial Synergy",    "tsMatch": ["Financial Synergy"],                     "estHrs": 0,   "tz": "CST", "meeting": "Last day of the month 5pm IST", "billing": "tax"},
         {"name": "Tim Thompson",         "tsMatch": ["Tim Thompson"],                          "estHrs": 0,   "tz": "CST", "meeting": "No scheduled meeting", "billing": "tax"},
         {"name": "Joe Manzelli",         "tsMatch": ["Manzelli"],                              "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting", "billing": "tax"},
         # Officeheads: Team L bookkeeping, Team T tax filing. Named to match Team
         # T's own BOD/EOD tab ("OfficeHeads").
         {"name": "Officeheads, Inc.",    "tsMatch": ["Officeheads"],                           "estHrs": 0,   "tz": "CST", "meeting": "No scheduled meeting", "billing": "tax"},
         {"name": "MC Tax Advisors",      "tsMatch": ["MC Tax Advisors", "MCTax Advisors", "MC Tax"], "estHrs": 0, "tz": "CST", "meeting": "No scheduled meeting", "billing": "tax"},
-        {"name": "We Add Value",         "tsMatch": ["We Add Value"],                          "estHrs": 0,   "tz": "PST", "meeting": "No scheduled meeting", "billing": "hourly"},
+        # Tax side of Inspire; Team F keeps the bookkeeping (Pragathi, 2026-09-29).
+        # Aliases no longer than Team F's so Team F stays the client's owner.
+        {"name": "Inspire Advisors & CPA - Tax", "tsMatch": ["Inspire Advisors", "Inspire Advisors & CPA", "ISC-Inspire"], "estHrs": 0, "tz": "EST", "meeting": "No scheduled meeting", "billing": "tax", "note": "Tax work — bookkeeping handled by Team F"},
+        # Financial Synergy and We Add Value removed 2026-09-29 (Pragathi) —
+        # hidden below so they can't reappear; PREFLIGHT is blocked too.
         {"name": "Jim Baltimore",        "tsMatch": ["Jim Baltimore"],                         "estHrs": 0,   "tz": "MST", "meeting": "No scheduled meeting", "billing": "tax"},
         {"name": "Business Fitness",     "tsMatch": ["Business Fitness"],                      "estHrs": 0,   "tz": "AEST","meeting": "No scheduled meeting", "billing": "tax"},
         {"name": "David Beck",           "tsMatch": ["David Beck"],                            "estHrs": 0,   "tz": "EST", "meeting": "No scheduled meeting", "billing": "tax"},
@@ -943,6 +948,9 @@ TEAM_HIDDEN_CLIENTS: dict[str, set[str]] = {
     # earlier review left as shared work; the TL has since confirmed it should
     # not appear on Team I. Those hours now land in Cross-Team Help.
     "team_i": {"Fit Profit", "FitProfit"},
+    # Removed from Team T 2026-09-29 (Pragathi). PREFLIGHT is also blocked via
+    # SHARED_CLIENT_TEAM_BLOCKS, which is what the shared-client path checks.
+    "team_t": {"Financial Synergy", "We Add Value", "PREFLIGHT"},
 }
 
 
@@ -1030,6 +1038,18 @@ TEAM_CLIENT_OVERRIDES: dict[str, set[str]] = {
 SHARED_CLIENTS: dict[str, list[str]] = {
     "PREFLIGHT": ["PREFLIGHT", "Preflight", "Pre-Flight", "Pre Flight"],
 }
+
+
+# Teams that must never show a given shared client, even when their members
+# log time on it (user rule 2026-09-29). Those hours are left out of the team
+# view but still count on the client's own Client view.
+SHARED_CLIENT_TEAM_BLOCKS: dict[str, set[str]] = {
+    "PREFLIGHT": {"team_t", "team_h"},
+}
+
+
+def shared_client_blocked(shared_name: str, team_id: str) -> bool:
+    return team_id in SHARED_CLIENT_TEAM_BLOCKS.get(shared_name, set())
 
 
 def resolve_shared_client(customer: str) -> str | None:
@@ -2733,7 +2753,9 @@ DELAYS_TAB_GIDS: dict[str, dict[str, str]] = {
         "back office people":   "426401586",
     },
     "team_c": {
-        "financial synergy":    "1911560805",
+        # Was 1911560805 — that is "Sambrano Delays", so Financial Synergy showed
+        # Sambrano's delays. Its own tab is "FS Delays" (fixed 2026-09-29).
+        "financial synergy":    "1909927729",
         "neve":                 "1323234528",
         "radicle sci":          "1626887593",
         "rdg tax":              "456000129",
@@ -2753,8 +2775,9 @@ DELAYS_TAB_GIDS: dict[str, dict[str, str]] = {
     "team_f": {
         "scotts laws":          "1565152388",
         "pereira azevedo":      "2140023746",
-        # TODO(ops): add "inspire advisors": "<GID>" once the TL supplies the
-        # Delays tab gid. Until then the client shows with no delays data.
+        # "Inspire Advisors CPA- Delayed Questions" and "Soco -Delays" tabs.
+        "inspire advisors":     "433251005",
+        "soco":                 "1429130293",
     },
     "team_g": {
         "manzelli":             "1255292486",
@@ -2915,9 +2938,9 @@ BOD_EOD_TAB_GIDS: dict[str, dict[str, str]] = {
     "team_f": {
         "Scotts Laws":        "139250466",
         "Pereira Azevedo":    "609837330",
-        # TODO(ops): add "Inspire Advisors": "<GID>" once the TL supplies the
-        # BOD/EOD tab gid. Until then committed hours for this client fall back
-        # to the member x per-preparer calculation rather than the sheet.
+        # Tabs "Inspire Advisors CPA" and "Soco" in Team F's sheet (2026-09-29).
+        "Inspire Advisors & CPA": "1349859745",
+        "SoCo":               "1935170437",
     },
     "team_g": {
         "Jeo Manzelli":       "2126272770",
@@ -4695,7 +4718,7 @@ def date_range_for_period(period: str):
 def full_period_range_for_period(period: str) -> tuple[str, str]:
     """Return the FULL period bounds — UNlike date_range_for_period, the end
     is the actual end of period, not today. Used as denominator for
-    _pro_rate_committed_hours. Both bounds are ISO 'YYYY-MM-DD'.
+    committed-hours helpers. Both bounds are ISO 'YYYY-MM-DD'.
 
       today    → (today, today)
       weekly   → (Monday, Sunday)        of this week
@@ -4741,45 +4764,6 @@ def _working_days_between(start_date, end_date) -> int:
             days += 1
         cur += timedelta(days=1)
     return days
-
-
-def _pro_rate_committed_hours(
-    full_committed: float,
-    period_start: str,
-    period_end:   str,
-    as_of:        str | None = None,
-) -> float:
-    """Pro-rate a period's full committed hours by working days elapsed.
-
-    Fixes the "BELOW TARGET on June 10" bug: This Month tab used to show 30h
-    booked against the full 80h monthly target → "BELOW TARGET" — even though
-    the employee was on pace (30h after 7/22 working days ≈ 95% of pro-rated
-    25.5h target). With pro-rating, the same employee now reads ON TRACK.
-
-    Boundary behaviour:
-      - as_of < period_start  → 0  (period hasn't started yet)
-      - as_of ≥ period_end    → full_committed  (period is over, no pro-rating)
-      - otherwise             → full × elapsed_working_days / total_working_days
-    """
-    if not full_committed or full_committed <= 0:
-        return 0.0
-    if as_of is None:
-        as_of = datetime.now().strftime("%Y-%m-%d")
-    try:
-        start_d  = datetime.strptime(period_start[:10], "%Y-%m-%d").date()
-        end_d    = datetime.strptime(period_end[:10],   "%Y-%m-%d").date()
-        as_of_d  = datetime.strptime(as_of[:10],        "%Y-%m-%d").date()
-    except (ValueError, TypeError):
-        return float(full_committed)
-    if as_of_d < start_d:
-        return 0.0
-    if as_of_d >= end_d:
-        return round(float(full_committed), 2)
-    total   = _working_days_between(start_d, end_d)
-    elapsed = _working_days_between(start_d, as_of_d)
-    if total <= 0:
-        return 0.0
-    return round(float(full_committed) * (elapsed / total), 2)
 
 
 # Aliases used by the debug endpoint
@@ -5558,7 +5542,7 @@ async def _team_response(
 
     custom_window=(start, end, label) overrides date_range_for_period — used
     by the /api/team/{id}/custom endpoint. In that mode period is "custom"
-    and pro-rated targets scale to working_days_in_range × 16h.
+    and targets scale to the working days in the range.
     """
     t_total = time.perf_counter()
     cfg = TEAM_LETTER_MAP.get(team_id)
@@ -5779,8 +5763,13 @@ async def _team_response(
         else:
             shared = resolve_shared_client(customer)
             if shared:
-                # Unowned (PREFLIGHT): shown on each team for its own members.
+                # Unowned (PREFLIGHT): shown on each team for its own members,
+                # except teams in SHARED_CLIENT_TEAM_BLOCKS.
                 if not is_member:
+                    continue
+                if shared_client_blocked(shared, team_id):
+                    excluded_other_client_hours += h
+                    excluded_other_clients.add(customer)
                     continue
                 resolved = shared
             else:
@@ -5833,7 +5822,7 @@ async def _team_response(
             "desc":        (row.get("desc") or "").strip(),
         })
 
-    # Per-preparer STAFF-CAPACITY target (8h/day, pro-rated by days elapsed).
+    # Per-preparer STAFF-CAPACITY target (8h/day over the whole period).
     # Drives only the team-level totalTarget / targetUtilPct — client committed
     # hours come from _fixed_committed_for_client.
     org_per_preparer_full = (
@@ -5842,17 +5831,16 @@ async def _team_response(
         else _full_committed_for_period(period)
     )
     org_per_preparer = get_employee_committed_hours(
-        team_id, period,
-        period_start=full_start, period_end=full_end, as_of=today_iso,
+        team_id, period, period_start=full_start, period_end=full_end,
     )
     clients_data = []
     for org_name, h in orgs.items():
         actual = h["billable"] + h["nonBillable"]
         staff_count = len(h["staff"])
         org_member_count = staff_count
-        # FIXED committed hours from the PDF's EST Hrs, NOT pro-rated — status
+        # FIXED committed hours from the PDF's EST Hrs, for the whole month — status
         # compares actual against the full figure (user decision 2026-09-29,
-        # superseding the earlier hybrid; a pro-rated toggle may come later).
+        # superseding the earlier hybrid). Early-month rows read low by design.
         # Hourly / tax-season clients and unconfigured buckets carry estHrs 0 and
         # so have no commitment.
         committed = _fixed_committed_for_client(h.get("estHrs"), period, full_start, full_end)
@@ -5877,6 +5865,7 @@ async def _team_response(
             "name":        org_name,
             "org":         org_name,
             "committed":   round(committed, 2),   # fixed PDF figure; drives status
+            "target":      round(committed, 2),   # same number, named for the UI
             "actual":      round(actual, 2),
             "billable":    round(h["billable"], 2),
             "nonBillable": round(h["nonBillable"], 2),
@@ -6037,7 +6026,7 @@ async def _team_response(
     # hierarchy / roster, which inflated counts with duplicates and ex-members.
     # Only when a team has no roster configured do we fall back to the hierarchy.
     team_member_count = len(roster) if roster else max(_team_member_count(team_id), 1)
-    per_preparer_target      = org_per_preparer        # pro-rated; same value already computed above
+    per_preparer_target      = org_per_preparer        # whole period; computed above
     per_preparer_target_full = org_per_preparer_full   # full period target, for context
     team_target      = round(per_preparer_target      * team_member_count, 2)
     team_target_full = round(per_preparer_target_full * team_member_count, 2)
@@ -6046,7 +6035,7 @@ async def _team_response(
     total_fixed_committed = round(sum(c["committed"] or 0 for c in clients_data), 2)
 
     # Period-window metadata — drives the "Day 7/22 working" subhead in the
-    # dashboard header and the side-by-side "pro-rated vs full" stat card.
+    # dashboard header and the side-by-side working-days line.
     wd_total   = _working_days_between(full_start, full_end)
     wd_elapsed = _working_days_between(full_start, min(today_iso, full_end))
 
@@ -6116,7 +6105,6 @@ async def _team_response(
             "asOf":                  today_iso,
             "workingDaysTotal":      wd_total,
             "workingDaysElapsed":    wd_elapsed,
-            "isProrated":            (period in ("weekly", "monthly", "custom") and wd_elapsed < wd_total),
         },
         "monthlyTrend":       monthly_trend,
         "monthlyTrendSource": "timesheet",
@@ -6880,7 +6868,7 @@ _COMMITTED_WORKING_DAYS_PER_MONTH = 20
 
 def _fixed_committed_for_client(est_hrs, period: str, full_start: str, full_end: str) -> float:
     """A client's FIXED committed hours for the whole period (user decision
-    2026-09-29). Not pro-rated: status compares actual hours against this.
+    2026-09-29). Status compares actual hours against this full figure.
 
     monthly  → estHrs exactly (the PDF's "EST Hrs").
     weekly / today / custom → that period's fixed share of the month:
@@ -6902,32 +6890,22 @@ def get_employee_committed_hours(
     team_id: str,
     period:  str,
     *,
-    prorate:        bool = True,
     period_start:   str | None = None,
     period_end:     str | None = None,
-    as_of:          str | None = None,
     daily_rate:     float | None = None,
 ) -> float:
-    """Per-preparer target hours for the period.
+    """Per-preparer target hours for the WHOLE period — never scaled down by days
+    elapsed (user decision 2026-09-29: no pro-rating anywhere).
 
-    By default the result is **pro-rated** by elapsed working days — so on
-    day 7 of a 22-working-day month, "monthly" returns 320 × 7/22 ≈ 101.8h
-    instead of the static 320h. This is what the status badge compares booked
-    hours against. Pass prorate=False to recover the full period target.
+    For period="custom", caller must pass period_start + period_end; the target
+    is the daily rate × working days in the range.
 
-    For period="custom", caller must pass period_start + period_end. Full
-    target = 16h/working-day × working_days_in_range; pro-rated by elapsed.
-
-    daily_rate: when supplied, the full target is computed as
-    daily_rate × working_days_in_period for EVERY period (today, weekly,
-    monthly, custom) — bypassing the hard-coded 16/80/320 table. Used by
-    the Individual Employee Dashboard to apply the 8h/day employee quota
-    while team-level callers keep the 16h-derived bucket totals.
+    daily_rate: when supplied, the target is daily_rate × working days in the
+    period for EVERY period (today, weekly, monthly, custom). Used by the
+    Individual Employee Dashboard for its 8h/day quota.
 
     team_id is accepted for signature compatibility but not used — the target
     is uniform across teams.
-
-    "today" is never pro-rated (1-day period; full-day target).
     """
     if not period_start or not period_end:
         if period == "custom":
@@ -6939,24 +6917,19 @@ def get_employee_committed_hours(
         full = _PER_PREPARER_DAILY * _working_days_between(period_start, period_end)
     else:
         full = _full_committed_for_period(period)
-    if not prorate or period == "today":
-        return round(full, 2)
-    return _pro_rate_committed_hours(full, period_start, period_end, as_of)
+    return round(full, 2)
 
 
 def get_team_target_hours(
     team_id: str,
     period:  str,
     *,
-    prorate:      bool = True,
     period_start: str | None = None,
     period_end:   str | None = None,
-    as_of:        str | None = None,
 ) -> float:
-    """Team-level target = (pro-rated) per-preparer target × member count."""
+    """Team-level target = per-preparer target (whole period) × member count."""
     per_preparer = get_employee_committed_hours(
-        team_id, period,
-        prorate=prorate, period_start=period_start, period_end=period_end, as_of=as_of,
+        team_id, period, period_start=period_start, period_end=period_end,
     )
     members = max(1, _team_member_count(team_id))
     return round(per_preparer * members, 2)
@@ -7098,15 +7071,10 @@ def _build_employee_response(
     # the team-level 16h-derived bucket totals so the target reflects what
     # one person can plausibly book in a day, not the per-seat staffing model.
     committed = get_employee_committed_hours(
-        team_id, period,
-        period_start=full_start, period_end=full_end, as_of=today_iso,
+        team_id, period, period_start=full_start, period_end=full_end,
         daily_rate=_EMPLOYEE_DAILY_QUOTA,
     )
-    committed_full = get_employee_committed_hours(
-        team_id, period,
-        prorate=False, period_start=full_start, period_end=full_end,
-        daily_rate=_EMPLOYEE_DAILY_QUOTA,
-    )
+    committed_full = committed   # no pro-rating: the target IS the full period
     util_pct  = round(billable_h / committed * 100, 1) if committed > 0 else 0.0
 
     # Top clients (by hours) — resolve via TEAM_CLIENTS where possible, else raw customer name.
@@ -7284,7 +7252,7 @@ def _build_employee_response(
         "nonBillableBreakdown":  non_billable_breakdown,
         "internalBreakdown":     internal_breakdown,
         "billablePct":           bill_pct,                   # percentage — 1 dp
-        "committedHours":        round(committed, 2),         # pro-rated
+        "committedHours":        round(committed, 2),         # whole period
         "committedHoursFull":    round(committed_full, 2),    # full period target
         "utilizationPct":        util_pct,                   # percentage — 1 dp
         "topClients":            top_clients,
@@ -7305,7 +7273,6 @@ def _build_employee_response(
         "asOf":                  today_iso,
         "workingDaysTotal":      wd_total,
         "workingDaysElapsed":    wd_elapsed,
-        "isProrated":            (period in ("weekly", "monthly", "custom") and wd_elapsed < wd_total),
     }
 
 
@@ -7317,7 +7284,7 @@ async def employee_custom_range(
     to:    str | None = Query(default=None, alias="to"),
 ):
     """Per-employee custom date-range view. Mirrors /api/team/{id}/custom.
-    Pro-rated committed hours (16h/working day × range) applied via
+    Committed hours for the whole range (per working day × range) applied via
     _build_employee_response's custom_window kwarg."""
     if not from_ or not to:
         return {"error": "Both 'from' and 'to' query params are required (YYYY-MM-DD)."}
@@ -7404,14 +7371,14 @@ def _build_leaderboard(
     rows = get_cached_rows(start, end)
     team_label = cfg.get("label", team_id)
     roster     = TEAM_ROSTERS.get(team_id, [])
-    # Pro-rated per-preparer target for the active window — for custom_window
-    # this is 16h × working_days_in_range, then pro-rated by elapsed working
-    # days against today. Was previously `get_employee_committed_hours(team, period)`
+    # Per-preparer target for the active window — for custom_window
+    # this is the daily rate × working days in the range (whole range, not
+    # only the days elapsed). Was previously `get_employee_committed_hours(team, period)`
     # with no kwargs, which silently returned 0 for period='custom' (no
     # period_start/period_end) and a monthly value otherwise — driving the
     # 145.5h "monthly" committed shown in TeamMembersTable on Custom Range.
     # Per-period committed target per member = 8h × working days, computed
-    # directly (NOT the pro-rated 160×elapsed/total formula, which gave 109.8h
+    # directly (NOT the old 160×elapsed/total formula, which gave 109.8h
     # instead of the expected 15×8=120h on Jun 19). today=8h, weekly=40h (full
     # week), monthly/custom = working-days-elapsed × 8h (month/range-to-date).
     if period == "today":
@@ -7420,10 +7387,10 @@ def _build_leaderboard(
     elif period in ("weekly", "week"):
         committed = round(_PER_PREPARER_DAILY * _working_days_between(full_start, full_end), 2)
         committed_label = f"{round(committed)}h/week target"
-    else:  # monthly / custom → working days elapsed (start → today) × 8h
-        _wd_elapsed = _working_days_between(full_start, min(today_iso, full_end))
-        committed = round(_PER_PREPARER_DAILY * _wd_elapsed, 2)
-        committed_label = f"{round(committed)}h ({_wd_elapsed} working days × 8h)"
+    else:  # monthly / custom → every working day in the period × 8h (no pro-rating)
+        _wd_total = _working_days_between(full_start, full_end)
+        committed = round(_PER_PREPARER_DAILY * _wd_total, 2)
+        committed_label = f"{round(committed)}h ({_wd_total} working days × 8h)"
 
     # Same logic _team_response uses: assign_row_to_team handles multi-team ambiguity.
     def _row_matches(row) -> bool:
@@ -7602,7 +7569,7 @@ async def leaderboard_custom_range(
     """Per-member leaderboard for a user-picked date range. Drives
     TeamMembersTable when the Team Dashboard is in 📅 Custom Range mode —
     without this, the table falls back to the monthly leaderboard and shows
-    monthly pro-rated committed hours (145.5h on day 10/22) instead of the
+    monthly committed hours (145.5h on day 10/22) instead of the
     range-scaled value (e.g. 48h for a 3-day range)."""
     if not from_ or not to:
         return {"error": "Both 'from' and 'to' query params are required (YYYY-MM-DD)."}
@@ -9062,7 +9029,7 @@ async def get_team_custom_range(
     to:    str | None = Query(default=None, alias="to"),
 ):
     """Custom date-range view. Same response shape as weekly/monthly but the
-    committed/target hours are pro-rated to the user-picked range (16h/working
+    committed/target hours are scaled to the user-picked range (per working
     day × range). Penny's 2026-06-10 feedback wanted ad-hoc windows like
     "Jun 01 - 07" for spot-checks.
 
@@ -9264,7 +9231,7 @@ async def client_custom_range(
     to:    str | None = Query(default=None, alias="to"),
 ):
     """Per-client custom date-range view. Mirrors /api/team/{id}/custom.
-    Pro-rated target hours (estHrs scaled to the working days in the range)
+    Target hours (estHrs scaled to the working days in the range)
     flow through _client_data's custom_window kwarg.
     """
     if not from_ or not to:
@@ -9446,7 +9413,7 @@ async def _client_data(
     # summary. We resolve estHrs by walking TEAM_CLIENTS for the parent team
     # and finding the entry whose name OR tsMatch keyword matches client_name.
     # FIXED (user decision 2026-09-29): the client's PDF figure from its owning
-    # team, not pro-rated — the same number the team view shows.
+    # team, for the whole month — the same number the team view shows.
     parent_team_for_target = find_team_for_client(client_name)
     est_hrs_monthly = 0.0
     if parent_team_for_target:
@@ -9458,14 +9425,13 @@ async def _client_data(
                 est_hrs_monthly = float(ce.get("estHrs") or 0)
                 break
     target_full = _fixed_committed_for_client(est_hrs_monthly, period, full_start, full_end)
-    target_prorated = target_full   # name kept for the fields below; no pro-rating
     actual_billable = float(result.get("summary", {}).get("totalBillable") or 0)
-    target_util_pct = round(actual_billable / target_prorated * 100, 1) if target_prorated > 0 else 0.0
-    target_status   = target_status_label(target_util_pct) if target_prorated > 0 else "NO_TARGET"
+    target_util_pct = round(actual_billable / target_full * 100, 1) if target_full > 0 else 0.0
+    target_status   = target_status_label(target_util_pct) if target_full > 0 else "NO_TARGET"
     wd_total   = _working_days_between(full_start, full_end)
     wd_elapsed = _working_days_between(full_start, min(today_iso, full_end))
     result.setdefault("summary", {}).update({
-        "targetHours":         round(target_prorated, 2),
+        "targetHours":         round(target_full, 2),
         "targetHoursFull":     round(target_full, 2),
         "estHrsMonthly":       round(est_hrs_monthly, 2),
         "targetUtilPct":       target_util_pct,
@@ -9476,7 +9442,6 @@ async def _client_data(
         "asOf":                today_iso,
         "workingDaysTotal":    wd_total,
         "workingDaysElapsed":  wd_elapsed,
-        "isProrated":          False,   # client targets are fixed (2026-09-29)
     })
 
     # Attach the parent team's EOD sheet data so ClientDashboard can render
@@ -10448,6 +10413,14 @@ def _bod_eod_parse_rows(client_name: str, csv_text: str) -> dict:
                 "weekly_actual":        _bod_eod_parse_status_block(_bod_eod_cell(raw, 16)),
                 "special_task_actual":  _bod_eod_cell(raw, 17),
             }
+            # Some TLs keep the file counts in the DAILY column and leave Monthly
+            # as "NIL" (Team C's Financial Synergy). The dashboard's file-status
+            # row reads monthly_plan / monthly_actual, so fall back to the daily
+            # block when the monthly one carries no counts.
+            if not bod["monthly_plan"] and bod["daily_plan"]:
+                bod["monthly_plan"] = dict(bod["daily_plan"])
+            if not eod["monthly_actual"] and eod["daily_actual"]:
+                eod["monthly_actual"] = dict(eod["daily_actual"])
             efficiency = (booked / committed * 100.0) if committed > 0 else 0.0
             # Columns B/C on the sheet are CUMULATIVE running totals
             # (Day 1 = 8/X, Day 2 = 16/Y, Day 3 = 24/Z ...). We expose both
