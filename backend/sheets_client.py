@@ -36,10 +36,12 @@ to the widest row before serialising.
 
 from __future__ import annotations
 
+import collections
 import csv
 import io
 import os
 import threading
+import time
 
 import requests
 
@@ -193,6 +195,36 @@ def _quote_range(tab: str, cell_range: str | None) -> str:
     return f"'{safe}'!{cell_range}" if cell_range else f"'{safe}'"
 
 
+# ── Quota guard ───────────────────────────────────────────────────
+# The Sheets API allows 60 read requests per minute per user. Bursts (the
+# dashboard pre-warm after a restart, the BOD/EOD view fetching every client
+# tab in parallel) used to blow through that and come back HTTP 429, leaving
+# tabs empty. Every API request now waits for a slot in a rolling 60-second
+# window instead — slower under load, but it succeeds.
+_RATE_MAX_PER_MIN = 50           # headroom under Google's 60/min/user
+_rate_lock = threading.Lock()
+_rate_stamps: collections.deque = collections.deque()
+
+
+def _throttle() -> None:
+    while True:
+        with _rate_lock:
+            now = time.monotonic()
+            while _rate_stamps and now - _rate_stamps[0] >= 60:
+                _rate_stamps.popleft()
+            if len(_rate_stamps) < _RATE_MAX_PER_MIN:
+                _rate_stamps.append(now)
+                return
+            wait = 60 - (now - _rate_stamps[0]) + 0.05
+        time.sleep(max(wait, 0.05))
+
+
+# Tab metadata per sheet. fetch_csv(gid=…) needs the gid → title map before it
+# can read values, which made every read TWO quota requests; tabs rarely change.
+_TABS_TTL_SECS = 600
+_tabs_cache: dict[str, tuple[float, list[dict]]] = {}
+
+
 # ── API transport ─────────────────────────────────────────────────
 def api_get(sheet_id: str, query: str) -> tuple[int, dict | None]:
     """Authenticated GET against the Sheets v4 REST API.
@@ -210,6 +242,7 @@ def api_get(sheet_id: str, query: str) -> tuple[int, dict | None]:
     if use_api():
         try:
             session = _authorized_session()
+            _throttle()
             resp = session.get(f"{SHEETS_API_BASE}/{sheet_id}{query}", timeout=20)
             if resp.status_code != 200:
                 if resp.status_code == 400 and "Office file" in (resp.text or ""):
@@ -239,7 +272,11 @@ def _list_tabs_with_status(sheet_id: str) -> tuple[int, list[dict]]:
     """(status, [{gid, title}]). Status is kept separate from an empty list so
     callers can tell 'auth/network failed' from 'sheet genuinely has no tabs' —
     reporting the former as 404 would send an operator hunting for a missing tab
-    during Phase 3 when the real problem is the service account."""
+    during Phase 3 when the real problem is the service account.
+    Successful listings are cached for _TABS_TTL_SECS."""
+    cached = _tabs_cache.get(sheet_id)
+    if cached and time.monotonic() - cached[0] < _TABS_TTL_SECS:
+        return 200, list(cached[1])
     status, data = api_get(sheet_id, "?fields=sheets(properties(sheetId,title))")
     if status != 200 or not data:
         return status, []
@@ -249,7 +286,8 @@ def _list_tabs_with_status(sheet_id: str) -> tuple[int, list[dict]]:
         title = props.get("title")
         if title:
             out.append({"gid": str(props.get("sheetId")), "title": title})
-    return 200, out
+    _tabs_cache[sheet_id] = (time.monotonic(), out)
+    return 200, list(out)
 
 
 def list_tabs(sheet_id: str) -> list[dict]:
@@ -272,6 +310,7 @@ def _fetch_values_csv(sheet_id: str, range_a1: str, descriptor: str) -> SheetRes
     try:
         session = _authorized_session()
         url = f"{SHEETS_API_BASE}/{sheet_id}/values/{requests.utils.quote(range_a1, safe='')}"
+        _throttle()
         resp = session.get(
             url,
             params={
