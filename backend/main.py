@@ -1086,6 +1086,48 @@ def _reverse_match(customer_norm: str, kw_norm: str, min_short_len: int = 4) -> 
     return customer_norm in kw_norm
 
 
+def client_customer_matcher(client_name: str):
+    """Predicate customer -> bool: does this timesheet customer belong to the
+    client the user picked, across ALL teams' preparers?
+
+    The picker sends either a configured name ("Pereira Azevedo", "Scotts Laws")
+    or a raw Timesheets customer ("PAL-Pereira & Azevedo"). A plain substring
+    test fails the first kind — "pereira azevedo" is not inside "pal-pereira &
+    azevedo" — and showed 0 hours. So the name is resolved to its configured
+    client, and a customer matches when the SAME resolution the team view uses
+    maps it to that client. Client and team totals therefore agree by
+    construction. Unconfigured names fall back to a normalized substring test.
+    """
+    target_norm = _normalize_for_match(client_name)
+    target: tuple[str, str] | None = None
+    for team_id, clients in TEAM_CLIENTS.items():
+        for c in clients:
+            if _normalize_for_match(c.get("name", "")) == target_norm:
+                target = (team_id, c["name"])
+                break
+        if target:
+            break
+    if target is None and target_norm:
+        owner = find_team_for_client(client_name)
+        entry = _resolve_client_for_team(owner, client_name) if owner else None
+        if entry:
+            target = (owner, entry)
+
+    cache: dict[str, bool] = {}
+
+    def matches(customer: str) -> bool:
+        customer = customer or ""
+        if customer not in cache:
+            if target:
+                cache[customer] = _resolve_client_for_team(target[0], customer) == target[1]
+            else:
+                cn = _normalize_for_match(customer)
+                cache[customer] = bool(target_norm) and target_norm in cn
+        return cache[customer]
+
+    return matches
+
+
 def find_team_for_client(client_name: str) -> str | None:
     """Reverse-lookup: which team owns this client? Returns team_id or None.
 
@@ -5197,14 +5239,14 @@ def build_team_report(rows: list, period_label: str, eod_rows: list) -> dict:
 
 
 def build_client_report(rows: list, client_name: str, period_label: str) -> dict:
-    cn = client_name.lower()
+    is_client = client_customer_matcher(client_name)
     # Match on the CUSTOMER field ONLY (never the free-text desc) and drop
     # internal/S&N rows. Matching desc pulled in hours logged to "S&N" whose
     # description merely mentioned the client (e.g. Reshma's Core 4 work booked
     # to S&N showed up as Core 4 non-billable). Customer is the source of truth.
     client_rows = [
         r for r in rows
-        if cn in r["customer"].lower() and not is_internal_customer(r["customer"])
+        if is_client(r["customer"]) and not is_internal_customer(r["customer"])
     ]
 
     # Deliberately NO team filter: the Client view counts every preparer who
@@ -9267,8 +9309,10 @@ async def client_trend(client_name: str):
         s = month_start.strftime("%Y-%m-%d")
         e = month_end.strftime("%Y-%m-%d")
         rows = await asyncio.to_thread(get_cached_rows, s, e)
-        cn   = client_name.lower()
-        client_rows = [r for r in rows if cn in r["customer"].lower() or cn in r["desc"].lower()]
+        # Same customer-only matching as the client summary — the notes-text
+        # match here could count rows the summary deliberately excludes.
+        is_client   = client_customer_matcher(client_name)
+        client_rows = [r for r in rows if is_client(r["customer"])]
         # Per-month rollups that power the Monthly-Hours-Trend click-through
         # modal (Penny 2026-06-15): without these the modal would only have
         # one number to show for past months, since the dashboard's
@@ -9320,13 +9364,13 @@ def _build_projects_breakdown(rows: list[dict], client_name: str) -> list[dict]:
       date, employee, serviceCode (upstream ACCOUNTCODENAME — '000_OS_Admin',
       '888_OS_REVIEW', etc.), notes, hours, billable.
     """
-    cn = (client_name or "").lower()
+    is_client = client_customer_matcher(client_name or "")
     buckets: dict[str, dict] = {}
     for r in rows:
         # Customer-field match only + exclude internal/S&N — mirrors
         # build_client_report so the projects totals reconcile with the summary.
         customer = r.get("customer") or ""
-        if cn not in customer.lower() or is_internal_customer(customer):
+        if not is_client(customer) or is_internal_customer(customer):
             continue
         try:
             h = float(r.get("hours") or 0)
@@ -11432,10 +11476,10 @@ def _build_chat_rows_block(view_hint: dict | None) -> str:
         scope_label = f"employee {employee_name}"
     elif client_name:
         cn = client_name.lower()
+        is_client = client_customer_matcher(client_name)
         for r in rows:
-            cust = (r.get("customer") or "").lower()
             desc = (r.get("desc") or "").lower()
-            if cn in cust or cn in desc:
+            if is_client(r.get("customer") or "") or cn in desc:
                 matched.append(r)
         scope_label = f"client {client_name}"
     elif team_id:
