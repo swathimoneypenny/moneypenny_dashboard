@@ -656,7 +656,7 @@ UNCATEGORIZED_CLIENTS = [
 # and never removes or rewrites a curated entry.
 FALLBACK_TEAM_CLIENTS: dict[str, list[dict]] = {
     "team_a": [
-        {"name": "Bookkeeping Doctor",   "tsMatch": ["BKP Doctor", "Bookkeeping Doctor", "BKD", "Bkd"],         "estHrs": 80,  "tz": "EST", "meeting": "2nd & 3rd week Thursday 9am IST & every Wednesday 4:30pm IST"},
+        # Bookkeeping Doctor removed 2026-09-29 — client left MPLLC (see INACTIVE_CLIENTS).
         {"name": "Ollin Balance",        "tsMatch": ["Ollin Balance", "Ollinbalance", "Ollin"],                  "estHrs": 160, "tz": "EST", "meeting": "4th week Tuesday 4:30pm IST"},
         # 24hr Bookkeeper removed 2026-08-10 — the client left MPLLC. Also added
         # to INACTIVE_CLIENTS so lingering historical rows stop counting, and its
@@ -857,6 +857,9 @@ INACTIVE_CLIENTS = {
     "24 hrs bookkeeper",
     "24hrs bookkeeper",
     "24 hours bookkeeper",
+    # Left MPLLC 2026-09-29. No timesheet hours in the 90 days before removal.
+    "bookkeeping doctor",
+    "bookkeepingdoctor",
 }
 
 
@@ -882,7 +885,9 @@ TEAM_HIDDEN_CLIENTS: dict[str, set[str]] = {
     # "SoCo" is >=4 normalized chars so the substring rule catches the full
     # "SoCo Business Solutions, Inc"; verified it matches nothing else in the
     # config. Kokila's hours on it were cross-team help for Team I.
-    "team_a": {"Stay by Rafa", "SoCo"},               # both belong to other teams
+    # Bookkeeping Doctor left MPLLC 2026-09-29 — hidden too, so activity
+    # discovery can never re-add it even if a stray row is logged.
+    "team_a": {"Stay by Rafa", "SoCo", "Bookkeeping Doctor"},
     "team_d": {"LAH", "LAH CPA", "LAH CPAs", "L A H"}, # LAH belongs to Team L / Team T
     "team_f": {"SoCo", "Empower Accounting"},          # SoCo→Team I, Empower→Team K
     # Oh My ROI moved to Team G 2026-08-17; hidden here so activity discovery
@@ -2632,7 +2637,7 @@ DELAYS_TAB_COLUMNS = {
 
 DELAYS_TAB_GIDS: dict[str, dict[str, str]] = {
     "team_a": {
-        "bookkeeping doctor":   "1721105744",
+        # "bookkeeping doctor": "1721105744" removed 2026-09-29 — client left MPLLC.
         "ollin balance":        "213832720",
         # "24HR Bookkeeper": "1240442985" removed 2026-08-10 — client left MPLLC.
     },
@@ -2794,7 +2799,7 @@ WEEKLY_CHECKLIST_COLUMNS = {
 # now — extend per-team as the lead supplies the gids.
 BOD_EOD_TAB_GIDS: dict[str, dict[str, str]] = {
     "team_a": {
-        "Bookkeeping Doctor": "273916475",
+        # "Bookkeeping Doctor": "273916475" removed 2026-09-29 — client left MPLLC.
         "Ollinbalance":       "677777582",
         # "24 Hrs Bookkeeper": "930660300" removed 2026-08-10 — client left MPLLC.
     },
@@ -8042,8 +8047,6 @@ CLIENT_ALIASES: dict[str, str] = {
     "pokorny cpa":               "pokorny",
     "porkorny":                  "pokorny",   # legacy typo defensive entry
     "porkorny cpa":              "pokorny",
-    "bookkeeping doctor llc":    "bookkeeping doctor",
-    "bkd":                       "bookkeeping doctor",
     "ollinbalance":              "ollin balance",
     "ollin balance llc":         "ollin balance",
     "24 hrs bookkeeper":         "24hr bookkeeper",
